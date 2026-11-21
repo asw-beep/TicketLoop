@@ -1,0 +1,42 @@
+# Local stack. Two ways to use it:
+#   docker compose up --build     Postgres + the API in containers (API on localhost:8000)
+#   docker compose up -d db       Postgres only; run the API on Windows with uvicorn --reload
+# Values like ${POSTGRES_USER:-ticketloop} come from .env if it exists, else the default.
+
+name: ticketloop
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ticketloop}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ticketloop}
+      POSTGRES_DB: ${POSTGRES_DB:-ticketloop}
+    ports:
+      - "5432:5432" # host:container, so tools on Windows reach it at localhost:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data # named volume: data survives `docker compose down`
+    healthcheck:
+      # $$ stops compose from substituting; the container's shell expands the variable.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  api:
+    build: .
+    environment:
+      # Inside the compose network the database's hostname is its service name, `db`.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/${POSTGRES_DB:-ticketloop}
+      ENVIRONMENT: local
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_JSON: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy # wait for pg_isready, not just for the container to start
+
+volumes:
+  pgdata:

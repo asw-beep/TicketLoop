@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M1 Dev Skeleton</title>
+  <meta name="description" content="TicketLoop M1: what was built, the decisions behind it, and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Dev environment and skeleton</h1>
+      <p class="ticket__summary">One command starts Postgres and the API. <code>/api/v1/health</code> checks the database, every log line is JSON carrying a request ID, and every error has one shape.</p>
+      <p class="ticket__fineprint">Done when: a fresh clone, then <code>docker compose up</code>, then <code>curl localhost:8000/api/v1/health</code> returns 200 with the database status, and <code>pytest</code> and <code>ruff check</code> both pass.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M1</span>
+      <span class="ticket__days">Days 7 to 10</span>
+      <span class="stamp">Done<br>17 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">I built the skeleton every later module plugs into: a FastAPI app factory, settings from environment variables, and Postgres 17 in Docker Compose with a healthcheck.</p>
+        <p class="pitch">Every request gets an ID that comes back in <code>X-Request-ID</code> and is attached to every log line. Every error, from a bad field to an unhandled bug, returns RFC 9457 problem+json carrying that same ID. A user can quote one ID and I can find every log line for their request.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">App factory</span><span class="built__note"><code>create_app(settings)</code> wires settings, the database engine, middleware, error handlers and the router.</span><code>app/main.py</code></li>
+          <li><span class="built__what">Settings</span><span class="built__note">Read from environment variables, then <code>.env</code>, then defaults that match Compose.</span><code>app/core/config.py</code></li>
+          <li><span class="built__what">Health check</span><span class="built__note">Runs <code>SELECT 1</code>. 200 when the database answers, 503 when it does not.</span><code>app/api/health.py</code></li>
+          <li><span class="built__what">Request-ID middleware</span><span class="built__note">Keeps a safe incoming ID or makes one, adds it to the response and the logs, writes one access line per request.</span><code>app/core/middleware.py</code></li>
+          <li><span class="built__what">JSON logging</span><span class="built__note">structlog and the standard library share one formatter, so uvicorn and SQLAlchemy lines look the same as ours.</span><code>app/core/logging.py</code></li>
+          <li><span class="built__what">One error format</span><span class="built__note"><code>AppError</code> subclasses plus handlers for 404, 405, 422 and unexpected 500s.</span><code>app/core/exceptions.py</code></li>
+          <li><span class="built__what">Database engine</span><span class="built__note">One connection pool per process, lazy, pre-pinged, 3-second connect timeout.</span><code>app/infrastructure/database/engine.py</code></li>
+          <li><span class="built__what">Containers</span><span class="built__note">Postgres 17 with a named volume and <code>pg_isready</code> healthcheck; a cached, non-root API image.</span><code>docker-compose.yml</code> <code>Dockerfile</code></li>
+          <li><span class="built__what">Tests</span><span class="built__note">12 unit tests (errors, health, request IDs, JSON logs) and one integration test against live Postgres.</span><code>tests/</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">One request, start to finish</h2>
+      <div class="section__body">
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>Request arrives</strong><p>uvicorn calls the ASGI app: <code>async def app(scope, receive, send)</code>.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>Middleware tags it</strong><p>Keeps the caller's <code>X-Request-ID</code> if it is short and plain, otherwise makes one. Binds it to the log context and to <code>request.state</code>.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The route runs</strong><p><code>/api/v1/health</code> borrows a pooled connection and runs <code>SELECT 1</code>. It is a plain <code>def</code>, so it runs in the thread pool.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>Anything raised becomes problem+json</strong><p>A handler builds <code>type</code>, <code>title</code>, <code>status</code>, <code>detail</code>, <code>instance</code> and <code>request_id</code>. Business code never builds HTTP responses itself.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>Response leaves</strong><p>The middleware adds the <code>X-Request-ID</code> header and writes one access line with method, path, status and <code>duration_ms</code>.</p></div></li>
+        </ol>
+        <h3>What the two outputs look like</h3>
+<pre><code><span class="c"># one access log line (fields trimmed)</span>
+{"event": "http.request", "method": "GET", "path": "/api/v1/health",
+ "status": 200, "duration_ms": 3.1, "request_id": "9b2e41…", "level": "info"}
+
+<span class="c"># an example error body, Content-Type: application/problem+json</span>
+{"type": "urn:ticketloop:problem:validation-error",
+ "title": "Request validation failed", "status": 422,
+ "detail": "One or more fields are missing or invalid.",
+ "instance": "/api/v1/auth/register", "request_id": "9b2e41…",
+ "errors": [{"location": ["body", "email"], "message": "Field required", "type": "missing"}]}</code></pre>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+
+        <h3>Shape of the app</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>An app factory, <code>create_app(settings)</code></h4>
+            <p class="decision__over">Instead of an app built line by line at import time</p>
+            <p>Each test builds a fresh app with its own Settings, so nothing leaks between tests. uvicorn still imports <code>app.main:app</code>.</p>
+          </div>
+          <div class="decision">
+            <h4>Settings default to the Compose values</h4>
+            <p class="decision__over">Instead of required config or hard-coded values</p>
+            <p>A fresh clone runs with zero setup. Real deployments override through environment variables: env beats <code>.env</code> beats defaults. Tests pass <code>_env_file=None</code> so a developer's <code>.env</code> never changes results.</p>
+          </div>
+          <div class="decision">
+            <h4>Plain <code>def</code> routes for database work</h4>
+            <p class="decision__over">Instead of <code>async def</code></p>
+            <p>SQLAlchemy here is synchronous. A blocking call inside <code>async def</code> freezes the event loop for every request; FastAPI runs <code>def</code> routes in a thread pool instead.</p>
+          </div>
+          <div class="decision">
+            <h4>A lazy engine with <code>pool_pre_ping</code> and a 3-second timeout</h4>
+            <p class="decision__over">Instead of connecting at startup</p>
+            <p>The app boots while Postgres is down, and <code>/health</code> reports it. Pre-ping swaps out connections that died while idle. The timeout stops the health check hanging.</p>
+          </div>
+        </div>
+
+        <h3>Logs and errors</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A plain ASGI middleware</h4>
+            <p class="decision__over">Instead of Starlette's <code>BaseHTTPMiddleware</code></p>
+            <p><code>BaseHTTPMiddleware</code> wraps every response in an extra stream and stops context-variable changes from flowing back up. A plain ASGI class is a few more lines and sees the raw response-start message, which is where the header goes.</p>
+          </div>
+          <div class="decision">
+            <h4>Accept a caller's ID only if it matches <code>[A-Za-z0-9._-]{1,64}</code></h4>
+            <p class="decision__over">Instead of trusting any header value</p>
+            <p>A gateway or client can still trace a request end to end, but nobody can inject newlines or fake JSON into the logs through a header.</p>
+          </div>
+          <div class="decision">
+            <h4>structlog context variables carry the ID</h4>
+            <p class="decision__over">Instead of passing <code>request_id</code> through every function</p>
+            <p>Bind once in middleware; <code>merge_contextvars</code> adds it to every line. Context variables belong to the current task, so concurrent requests never mix IDs.</p>
+          </div>
+          <div class="decision">
+            <h4>RFC 9457 problem+json for every error</h4>
+            <p class="decision__over">Instead of FastAPI's default <code>{"detail": ...}</code></p>
+            <p>One shape everywhere. <code>type</code> is stable for client code to branch on, <code>title</code> is the same every time, <code>detail</code> explains this occurrence, and <code>request_id</code> links it to the logs.</p>
+          </div>
+          <div class="decision">
+            <h4>422 bodies leave out the rejected input</h4>
+            <p class="decision__over">Instead of FastAPI's default, which echoes it back</p>
+            <p>On <code>/auth/register</code> the rejected input contains the user's password.</p>
+          </div>
+          <div class="decision">
+            <h4>Health answers 503 when the database is down</h4>
+            <p class="decision__over">Instead of 200 with an error in the body</p>
+            <p>Docker, load balancers and uptime monitors act on the status code alone. The body is a status report, not an API error, so it is plain JSON, not problem+json.</p>
+          </div>
+        </div>
+
+        <h3>Containers</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Services in Docker, the API on Windows with <code>--reload</code></h4>
+            <p class="decision__over">Instead of running everything in containers every day</p>
+            <p>Fast reloads and easy debugging. The containerised API exists for the M8 race test and the load tests. Celery and Redis do not support Windows, so they will always live in containers.</p>
+          </div>
+          <div class="decision">
+            <h4>A cache-friendly, locked, non-root image</h4>
+            <p class="decision__over">Instead of copying everything and installing in one step</p>
+            <p><code>pyproject.toml</code> and <code>uv.lock</code> are copied before the code, so editing code does not reinstall packages. <code>uv sync --locked</code> fails on a stale lock file. The server runs as uid 10001, never root.</p>
+          </div>
+          <div class="decision">
+            <h4><code>depends_on: condition: service_healthy</code></h4>
+            <p class="decision__over">Instead of a plain <code>depends_on</code></p>
+            <p>A started container is not a database that accepts connections. The API waits for <code>pg_isready</code>.</p>
+          </div>
+          <div class="decision">
+            <h4><code>* text=auto eol=lf</code> in <code>.gitattributes</code></h4>
+            <p class="decision__over">Instead of Git's Windows default of CRLF line endings</p>
+            <p>A script saved with CRLF fails inside a Linux container with <code>$'\r': command not found</code>.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>What is the difference between an image and a container?</summary>
+          <div class="qa__a">
+            <p>An image is a read-only, layered template built from a Dockerfile. A container is one running instance of it, with its own writable layer, process and network identity. Many containers can run from one image, and deleting a container leaves the image untouched. Data that must survive a container goes in a volume, which is why Postgres writes to <code>pgdata</code>.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does the API container reach Postgres at <code>db:5432</code> while your laptop uses <code>localhost:5432</code>?</summary>
+          <div class="qa__a">
+            <p>Compose puts both services on a private network with its own DNS, so the service name <code>db</code> resolves to the database container. Inside a container, <code>localhost</code> means that container itself. The <code>"5432:5432"</code> port mapping publishes the container's port on the host, which is how tools on Windows reach it at <code>localhost</code>.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How does every log line get the request ID without passing it around?</summary>
+          <div class="qa__a">
+            <p>The middleware calls <code>bind_contextvars(request_id=...)</code> at the start of each request, after clearing the previous request's values. structlog's <code>merge_contextvars</code> processor copies whatever is bound into every event. Context variables are scoped to the current task, so two requests running at once each see only their own ID.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why is the health route <code>def</code> and not <code>async def</code>?</summary>
+          <div class="qa__a">
+            <p>It calls synchronous SQLAlchemy, which blocks while it waits for Postgres. Inside <code>async def</code> that wait would freeze the event loop that serves every other request. FastAPI runs plain <code>def</code> routes in a thread pool, so the blocking call only ties up one worker thread.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why return 503 from <code>/health</code> instead of 200 with an error message?</summary>
+          <div class="qa__a">
+            <p>Orchestrators, load balancers and monitors decide on the status code without reading the body. A 503 takes the instance out of rotation or raises an alert; a 200 would say all is well. The body still says which check failed, for humans.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What is ASGI, and why write the middleware at that level?</summary>
+          <div class="qa__a">
+            <p>ASGI is the interface between an async Python server and the app: <code>async def app(scope, receive, send)</code>. <code>scope</code> describes the request, <code>receive</code> yields the body, and <code>send</code> is called with the response start and then the body. A middleware wraps the next app; mine wraps <code>send</code> to add a header to the response-start message and record the status. Working at this level avoids <code>BaseHTTPMiddleware</code>'s extra response stream and its context-variable limitation.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What are the fields of an RFC 9457 problem, and which one should a client branch on?</summary>
+          <div class="qa__a">
+            <p><code>type</code> (a URI naming the kind of problem), <code>title</code> (short, the same for every occurrence), <code>status</code>, <code>detail</code> (this occurrence) and <code>instance</code> (the path). Clients branch on <code>type</code>, because titles and details are prose that may change. Extra members are allowed; I add <code>request_id</code>, and <code>errors</code> for 422s.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What does <code>pool_pre_ping</code> cost, and what does it buy?</summary>
+          <div class="qa__a">
+            <p>One cheap round trip each time a connection is taken from the pool. In return, a connection that died while idle (Postgres restarted, a firewall dropped it) is replaced silently instead of failing the request that happened to get it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why copy <code>pyproject.toml</code> and <code>uv.lock</code> before the code in the Dockerfile?</summary>
+          <div class="qa__a">
+            <p>Docker caches each step and reuses it until its inputs change. Dependencies change rarely and code changes constantly, so installing dependencies first means a code edit rebuilds in seconds instead of reinstalling every package.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>uvicorn brings its own log handlers.</strong> I cleared them so its lines reach the JSON handler, and disabled <code>uvicorn.access</code>, which would duplicate the middleware's access line without the request ID.</li>
+          <li><strong>Configuring logging twice printed every line twice.</strong> Our handler is named and replaced on each call, and other handlers, such as pytest's log capture, stay in place.</li>
+          <li><strong>The catch-all 500 handler runs outside the middleware.</strong> Starlette's outermost error middleware handles it, so that handler adds <code>X-Request-ID</code> to the response itself.</li>
+          <li><strong>libpq treats a <code>connect_timeout</code> below 2 seconds as 2.</strong></li>
+          <li><strong>Compose substitutes <code>$VAR</code> before the container sees it.</strong> The healthcheck uses <code>$$POSTGRES_USER</code> so the container's shell expands it instead.</li>
+          <li><strong>Error messages can leak secrets.</strong> Health logs only the first line of the driver's error, which names the host and port, never the password.</li>
+          <li><strong>Port 8000 can only have one owner.</strong> Stop the <code>api</code> container before running uvicorn on Windows.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up --build
+curl -i localhost:8000/api/v1/health
+<span class="c"># 200 {"status":"ok","checks":{"database":"ok"}}, plus an X-Request-ID header</span>
+
+docker compose stop db
+curl -i localhost:8000/api/v1/health
+<span class="c"># 503 {"status":"unavailable","checks":{"database":"unavailable"}}</span>
+
+uv run pytest            <span class="c"># 12 unit tests; the integration test needs Postgres</span>
+uv run ruff check .</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m00-foundations-and-design.html">Previous<strong>M0 Foundations and design</strong></a>
+    <span class="pager__next">Next<br><strong>M2 Database layer</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>
