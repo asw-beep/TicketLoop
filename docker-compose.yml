@@ -1,5 +1,5 @@
 # Local stack. Two ways to use it:
-#   docker compose up --build     Postgres + the API in containers (API on localhost:8000)
+#   docker compose up --build     Postgres, migrations, then the API (API on localhost:8000)
 #   docker compose up -d db       Postgres only; run the API on Windows with uvicorn --reload
 # Values like ${POSTGRES_USER:-ticketloop} come from .env if it exists, else the default.
 
@@ -24,11 +24,22 @@ services:
       retries: 10
       start_period: 10s
 
+  # A one-off job: bring the schema up to date, then exit. Kept out of the API's own startup
+  # so several API containers (the M8 race test, load tests) never race to migrate at once.
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: &database_url postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/${POSTGRES_DB:-ticketloop}
+    depends_on:
+      db:
+        condition: service_healthy
+
   api:
     build: .
     environment:
       # Inside the compose network the database's hostname is its service name, `db`.
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/${POSTGRES_DB:-ticketloop}
+      DATABASE_URL: *database_url
       ENVIRONMENT: local
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_JSON: "true"
@@ -37,6 +48,8 @@ services:
     depends_on:
       db:
         condition: service_healthy # wait for pg_isready, not just for the container to start
+      migrate:
+        condition: service_completed_successfully # start only once the schema is current
 
 volumes:
   pgdata:

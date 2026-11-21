@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M2 Database Layer</title>
+  <meta name="description" content="TicketLoop M2: what was built, the decisions behind it, and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Database layer</h1>
+      <p class="ticket__summary">Six tables built by one Alembic migration. Postgres itself enforces every rule from the M0 design. Each request gets one session, and it is committed before the response leaves.</p>
+      <p class="ticket__fineprint">Done when: <code>alembic downgrade base</code> then <code>alembic upgrade head</code> runs cleanly, and a test proves a second open listing for the same ticket raises <code>IntegrityError</code>.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M2</span>
+      <span class="ticket__days">Days 11 to 15</span>
+      <span class="stamp">Done<br>21 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">I put the business rules in the database, not only in Python. A partial unique index allows one open listing per ticket. CHECK constraints cap the resale price at what the seller paid. A trigger makes the audit log append-only. Each test checks which rule fired, by name.</p>
+        <p class="pitch">Each request runs in one transaction. <code>get_db</code> commits when the route succeeds and rolls back on any error, and it finishes before FastAPI sends the response. A commit that fails reaches the client as an error, never as a 200 for data that was never saved.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Base model</span><span class="built__note">Postgres generates every id and timestamp. <code>str</code> maps to TEXT and <code>datetime</code> to TIMESTAMPTZ. Constraint names follow pk_, uq_, ix_, ck_ and fk_.</span><code>app/infrastructure/database/base.py</code></li>
+          <li><span class="built__what">Six tables</span><span class="built__note">users, ticket_providers, events, tickets, listings and audit_logs. Each table lives in the module that owns it, and one registry imports them all for Alembic.</span><code>app/modules/*/models.py</code> <code>app/models.py</code></li>
+          <li><span class="built__what">Session per request</span><span class="built__note"><code>get_db</code> commits, rolls back or closes. A route asks for a session with <code>db: DbSession</code>.</span><code>app/infrastructure/database/session.py</code></li>
+          <li><span class="built__what">Engine</span><span class="built__note">Unchanged from M1, plus <code>-c timezone=UTC</code> on every connection.</span><code>app/infrastructure/database/engine.py</code></li>
+          <li><span class="built__what">Migrations</span><span class="built__note"><code>env.py</code> reads the URL from Settings and can reuse a connection that a test passes in. Revision files are named by date, and ruff formats each new one.</span><code>alembic.ini</code> <code>migrations/</code></li>
+          <li><span class="built__what">Migrate job</span><span class="built__note">A one-off Compose service runs <code>alembic upgrade head</code>. The API starts only after it exits successfully.</span><code>docker-compose.yml</code></li>
+          <li><span class="built__what">Tests</span><span class="built__note">21 integration tests: constraints, ids and timestamps, a full migration round trip, a check that the models and migrations agree, and the commit and rollback behaviour of <code>get_db</code>. Plus the 12 unit tests from M1.</span><code>tests/integration/</code></li>
+          <li><span class="built__what">Lock experiment</span><span class="built__note">Two sessions claim one row while a third watches the second one wait.</span><code>scripts/lock_experiment.py</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="rules">
+      <h2 id="rules">The rules Postgres enforces</h2>
+      <div class="section__body">
+        <p class="muted">The app checks these first so it can return a helpful error. The database is the backstop for a bug, or for two requests that pass the same check at the same instant.</p>
+        <ul class="built">
+          <li><span class="built__what">One open listing per ticket</span><span class="built__note">A unique index on <code>ticket_id</code>, but only over rows <code>WHERE status IN ('DRAFT', 'PENDING_VERIFICATION', 'ACTIVE', 'RESERVED')</code>. Once a listing is sold or cancelled, the ticket can be listed again.</span><code>uq_listings_one_open_per_ticket</code></li>
+          <li><span class="built__what">No markup</span><span class="built__note">The asking price is at most the original price and at least ₹1. The original price is copied onto the listing because a CHECK can only see its own row.</span><code>ck_listings_price_cap</code> <code>ck_listings_min_price</code></li>
+          <li><span class="built__what">A rejection has a reason</span><span class="built__note"><code>status &lt;&gt; 'REJECTED' OR rejection_reason IS NOT NULL</code></span><code>ck_listings_rejection_reason</code></li>
+          <li><span class="built__what">Known statuses only</span><span class="built__note">Every status column is TEXT with a CHECK that lists the allowed values.</span><code>ck_*_status</code></li>
+          <li><span class="built__what">One account per email</span><span class="built__note">Emails are unique and must be stored in lower case, so "A@x.in" and "a@x.in" cannot become two accounts.</span><code>uq_users_email</code> <code>ck_users_email_lowercase</code></li>
+          <li><span class="built__what">A real ticket is registered once</span><span class="built__note">The provider's reference is unique within an event.</span><code>uq_tickets_event_provider_reference</code></li>
+          <li><span class="built__what">History cannot be rewritten</span><span class="built__note">A <code>BEFORE UPDATE OR DELETE</code> trigger raises "audit_logs is append-only". The table has no foreign keys, so writing an audit row never fails because a reference is missing.</span><code>forbid_update_delete()</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">One request, one transaction</h2>
+      <div class="section__body">
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>FastAPI resolves <code>DbSession</code></strong><p><code>get_db</code> takes a Session from <code>app.state.session_factory</code>. No connection is opened yet.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>The route runs</strong><p>The first statement checks out a pooled connection and opens a transaction. Changes wait in the session; with <code>autoflush=False</code>, SQL goes out only on a flush, a commit or a query I run.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The route returns, <code>get_db</code> commits</strong><p>The flush sends the INSERTs and UPDATEs, then COMMIT. A constraint can still fail at this point, which is why the commit has to finish before the response goes out.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>Any error rolls everything back</strong><p>The exception goes through the M1 handlers and becomes problem+json. Nothing from the request is saved.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>The session closes, then the response is sent</strong><p>The connection goes back to the pool. Loaded objects stay readable, so FastAPI can serialise them after the session has closed.</p></div></li>
+        </ol>
+        <h3>What a commit sends</h3>
+<pre><code>BEGIN                                    <span class="c"># implicit, before the first statement</span>
+INSERT INTO listings (ticket_id, event_id, seller_id, asking_price_paise, …)
+  VALUES (…) RETURNING id, status, created_at, updated_at
+COMMIT                                   <span class="c"># or ROLLBACK, and nothing is kept</span></code></pre>
+        <p class="small muted"><code>RETURNING</code> comes from <code>eager_defaults=True</code>: the values Postgres generates come back in the same round trip.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="experiment">
+      <h2 id="experiment">The experiment: two buyers, one seat</h2>
+      <div class="section__body">
+        <p>Both sessions send <code>UPDATE seats SET status = 'RESERVED' WHERE id = 1 AND status = 'ACTIVE'</code>. A leaves its transaction open.</p>
+<pre><code> 0.16s  A: claims the seat -&gt; 1 row updated, transaction left open
+ 0.16s  B: sends the same claim
+ 1.17s  watcher: B is active, waiting on Lock/transactionid, blocked by [226]
+ 1.17s           (A is pid 226)
+ 3.19s  A: COMMIT
+ 3.19s  B: wakes up, re-checks WHERE, updates 0 rows
+ 3.19s     after waiting 3.02s
+ 3.19s  final status: RESERVED, claimed exactly once</code></pre>
+        <ul class="tight">
+          <li><strong>B waits on A's transaction, not on a query.</strong> A row lock is held until COMMIT or ROLLBACK. <code>pg_blocking_pids()</code> names who holds it.</li>
+          <li><strong>Once A commits, B reads the new row version and checks the WHERE clause again.</strong> The row is now RESERVED, so B updates 0 rows. It gets no error and no lost update.</li>
+          <li><strong>This is the M8 reservation.</strong> The WHERE clause is the availability check, and the row count says who won. A long transaction makes every other buyer wait, so the reservation transaction must stay short.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+
+        <h3>Schema</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A partial unique index for "one open listing"</h4>
+            <p class="decision__over">Instead of an <code>if</code> check in Python, or a plain <code>UNIQUE (ticket_id)</code></p>
+            <p>Two requests can both run the <code>if</code>, both see no listing, and both insert. The index is checked inside the INSERT itself, so the second insert waits for the first transaction and then fails. A plain UNIQUE would block relisting forever after a cancellation.</p>
+          </div>
+          <div class="decision">
+            <h4>Status as TEXT with a CHECK</h4>
+            <p class="decision__over">Instead of a Postgres ENUM type</p>
+            <p>Changing the allowed values is one migration that drops and re-adds the CHECK. An ENUM value can be added or renamed, but removing one means building a new type and converting the column.</p>
+          </div>
+          <div class="decision">
+            <h4>Money as BIGINT paise</h4>
+            <p class="decision__over">Instead of float or NUMERIC rupees</p>
+            <p>Integer arithmetic is exact. ₹2,500 is stored as <code>250000</code>, with no rounding and no decimal handling in Python.</p>
+          </div>
+          <div class="decision">
+            <h4>UUID ids from <code>gen_random_uuid()</code></h4>
+            <p class="decision__over">Instead of serial integers, or <code>uuid4()</code> in Python</p>
+            <p>Nobody can guess the next id or count our listings from the URLs. Because the database fills it in, a <code>psql</code> insert, a migration and a worker all get ids the same way.</p>
+          </div>
+          <div class="decision">
+            <h4>Named constraints through a naming convention</h4>
+            <p class="decision__over">Instead of names Postgres makes up</p>
+            <p>The error says <code>ck_listings_price_cap</code>, so the tests and later the API error mapping can tell which rule fired. Alembic can drop a constraint by a name it knows in advance.</p>
+          </div>
+          <div class="decision">
+            <h4>Only the tables M2 needs, no query indexes yet</h4>
+            <p class="decision__over">Instead of creating the whole M0 schema now</p>
+            <p>Each later module adds its own tables and indexes in its own migration, next to the queries that need them. That is how a real schema grows, and every index has a query that justifies it.</p>
+          </div>
+        </div>
+
+        <h3>Sessions</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>The request is the transaction</h4>
+            <p class="decision__over">Instead of services calling <code>commit()</code></p>
+            <p>A request saves all of its changes or none of them. Service code can call other services without worrying about half-finished writes.</p>
+          </div>
+          <div class="decision">
+            <h4><code>Depends(get_db, scope="function")</code></h4>
+            <p class="decision__over">Instead of FastAPI's default request scope</p>
+            <p>With the default scope, the code after <code>yield</code> runs after the response has been sent, so a failed commit would reach the client as a 200. A test proves it: remove the scope and that test fails.</p>
+          </div>
+          <div class="decision">
+            <h4><code>expire_on_commit=False</code> and <code>eager_defaults=True</code></h4>
+            <p class="decision__over">Instead of SQLAlchemy's defaults</p>
+            <p>The response is built after the session has closed. An expired attribute would try to reload from that closed session and raise <code>DetachedInstanceError</code>. RETURNING loads <code>updated_at</code> during the UPDATE itself.</p>
+          </div>
+          <div class="decision">
+            <h4><code>updated_at</code> through the model's <code>onupdate</code></h4>
+            <p class="decision__over">Instead of a trigger on every table</p>
+            <p>One rule in one place, covering every ORM and Core update. Raw SQL typed in <code>psql</code> is not covered, and that is acceptable for a timestamp.</p>
+          </div>
+        </div>
+
+        <h3>Migrations and tests</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Migrations as a separate job</h4>
+            <p class="decision__over">Instead of running <code>upgrade head</code> when the app starts</p>
+            <p>Several API containers start together for the M8 race test and the load tests. They would all try to migrate at the same moment. A single job migrates once, and every API container waits for it.</p>
+          </div>
+          <div class="decision">
+            <h4>The test schema is built by the migrations</h4>
+            <p class="decision__over">Instead of <code>metadata.create_all()</code></p>
+            <p>Tests run against exactly what production gets, trigger included. A separate test then checks that the models and migrations agree: the same comparison <code>alembic check</code> makes must find no differences.</p>
+          </div>
+          <div class="decision">
+            <h4>Each test runs inside one transaction that is rolled back</h4>
+            <p class="decision__over">Instead of truncating tables between tests</p>
+            <p>The session joins the test's transaction with <code>create_savepoint</code>, so a <code>commit()</code> in app code only releases a savepoint. Every test starts from an empty database, and a test takes milliseconds.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>What does <code>session.commit()</code> send to Postgres?</summary>
+          <div class="qa__a">
+            <p>First a flush: the INSERT, UPDATE and DELETE statements for every pending change, ordered so that foreign keys are satisfied, with RETURNING for the values the server generates. Then COMMIT. The BEGIN went out without being asked, before the first statement of the transaction. After the commit the session releases its connection, and the next statement starts a new transaction.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does a partial unique index enforce "one open listing" better than an <code>if</code> check in Python?</summary>
+          <div class="qa__a">
+            <p>The <code>if</code> is a read followed by a write, with a gap in between. Two requests can both read "no open listing" and both insert. The index check is part of the INSERT itself. If another transaction has just inserted the same key, the second insert waits for it to finish and then fails with a unique violation. The index also protects against writers that never run my Python: an admin script, a worker, a bug. Making it partial means closed listings don't count, so a ticket can be listed again.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Two transactions UPDATE the same row. What happens?</summary>
+          <div class="qa__a">
+            <p>The first one takes a row lock that it holds until it commits or rolls back. The second one blocks. In <code>pg_stat_activity</code> it shows <code>wait_event_type = Lock</code>, <code>wait_event = transactionid</code>. When the first one commits, the second one reads the new row version and checks its WHERE clause again (this is Read Committed). If the row no longer matches, it updates 0 rows. If the first one rolls back instead, the second one updates the original row.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What can Alembic autogenerate not detect?</summary>
+          <div class="qa__a">
+            <p>Anything that is not in the SQLAlchemy metadata: triggers, functions and views. Renames, which show up as a drop plus an add, so the data would be lost. A CHECK added to, removed from or changed on an existing table. It does write CHECKs and partial indexes when it creates a new table. That is why every generated migration has to be read before it runs, and why my trigger is hand-written in both <code>upgrade()</code> and <code>downgrade()</code>.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do your tests get a clean database each time without being slow?</summary>
+          <div class="qa__a">
+            <p>Once per run, the <code>ticketloop_test</code> database is dropped, created again and migrated to head. Each test then opens one connection, begins a transaction, and gives the session that connection with <code>join_transaction_mode="create_savepoint"</code>. A commit in app code releases a savepoint. At teardown the outer transaction rolls back, and everything the test wrote disappears.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does <code>get_db</code> need <code>scope="function"</code>?</summary>
+          <div class="qa__a">
+            <p>With the default scope, the code after <code>yield</code> in a dependency runs after the response has been sent. My commit is in that code. A commit that failed, say on a unique violation, would be logged, but the client would already have a 200. With <code>scope="function"</code> the dependency finishes before the response is built, so the failure becomes a 500, and later a 409. I proved it by removing the scope: the failed-commit test fails.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why turn off <code>expire_on_commit</code>? What is the risk?</summary>
+          <div class="qa__a">
+            <p>After a commit, SQLAlchemy normally expires every loaded object, so the next attribute read reloads it from the database. My response is serialised after the session has closed, so that reload would fail. The risk is reading stale values if another transaction changes the row afterwards. That doesn't matter here, because the request ends right after the commit.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why TEXT and CHECK for statuses instead of an ENUM?</summary>
+          <div class="qa__a">
+            <p>Status sets change as the product grows. Changing a CHECK means dropping it and adding the new one in a single migration. An ENUM type lets you add or rename a value, but removing one means building a new type and converting every column that uses it. TEXT costs a few more bytes per row, which doesn't matter at this scale, and the CHECK still rejects any unknown value.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why store money as BIGINT paise?</summary>
+          <div class="qa__a">
+            <p>Floats cannot represent most decimal amounts exactly (0.1 + 0.2 is not 0.3), and those errors pile up in totals and refunds. NUMERIC is exact, but every value then needs decimal handling in Python. Integer paise are exact, fast and simple. BIGINT rather than INTEGER, which tops out near ₹2.1 crore in paise.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>FastAPI's default dependency scope commits too late.</strong> The code after <code>yield</code> runs after the response has been sent. Fixed with <code>scope="function"</code>, and a test fails if the fix is removed.</li>
+          <li><strong>Reading <code>updated_at</code> after the session closed raised <code>DetachedInstanceError</code>.</strong> The UPDATE expired it. Fixed with <code>eager_defaults=True</code>, which loads it with RETURNING.</li>
+          <li><strong><code>now()</code> is the time the transaction started.</strong> Two updates inside one rolled-back test transaction get the same timestamp, so the <code>updated_at</code> test uses real commits in separate transactions and cleans up afterwards.</li>
+          <li><strong>Autogenerate cannot see triggers.</strong> I wrote the trigger and its DROP by hand. The round-trip test checks that the function is gone after <code>downgrade base</code>.</li>
+          <li><strong>The plan said autogenerate misses CHECKs and partial indexes.</strong> For a new table it writes both. What it misses is a later change to them. I corrected the plan.</li>
+          <li><strong><code>uv run python scripts/x.py</code> cannot <code>import app</code>.</strong> Python puts the script's own folder on the import path, not the repo root. Run it as a module: <code>python -m scripts.lock_experiment</code>.</li>
+          <li><strong>Postgres DDL is transactional.</strong> The whole migration runs in one <code>BEGIN … COMMIT</code>, so a migration that fails halfway leaves nothing behind. MySQL and Oracle commit each DDL statement on its own.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db
+uv run alembic upgrade head --sql       <span class="c"># read the SQL without running it</span>
+uv run alembic downgrade base
+uv run alembic upgrade head
+uv run alembic check                    <span class="c"># No new upgrade operations detected.</span>
+
+uv run pytest -m integration            <span class="c"># 21 tests against Postgres</span>
+uv run python -m scripts.lock_experiment
+
+docker compose up --build               <span class="c"># migrate runs and exits 0, then the API starts</span></code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m01-dev-environment-and-skeleton.html">Previous<strong>M1 Dev environment and skeleton</strong></a>
+    <span class="pager__next">Next<br><strong>M3 Identity and auth</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

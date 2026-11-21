@@ -1,0 +1,83 @@
+"""Build valid rows with one call, so a test only spells out the fields it is about.
+
+Each function adds the row, flushes it (so Postgres fills in ids and defaults, and checks
+constraints) and returns it. Pass keyword arguments to override any field.
+"""
+
+import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.modules.events.models import Event, TicketProvider
+from app.modules.identity.models import User
+from app.modules.listings.models import Listing
+from app.modules.tickets.models import Ticket
+
+
+def _unique() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def _save[T](session: Session, row: T) -> T:
+    session.add(row)
+    session.flush()
+    return row
+
+
+def make_user(session: Session, **fields: Any) -> User:
+    defaults: dict[str, Any] = {
+        "email": f"user-{_unique()}@example.in",
+        "password_hash": "not-a-real-hash",
+        "full_name": "Test User",
+    }
+    return _save(session, User(**(defaults | fields)))
+
+
+def make_provider(session: Session, **fields: Any) -> TicketProvider:
+    code = f"provider-{_unique()}"
+    return _save(session, TicketProvider(**({"code": code, "name": code} | fields)))
+
+
+def make_event(session: Session, **fields: Any) -> Event:
+    defaults: dict[str, Any] = {
+        "name": "Test Concert",
+        "category": "CONCERT",
+        "venue": "Test Arena",
+        "city": "Kochi",
+        "starts_at": datetime.now(UTC) + timedelta(days=30),
+        "organizer": "Test Organizer",
+    }
+    if "provider_id" not in fields:
+        defaults["provider_id"] = make_provider(session).id
+    return _save(session, Event(**(defaults | fields)))
+
+
+def make_ticket(session: Session, **fields: Any) -> Ticket:
+    defaults: dict[str, Any] = {
+        "ticket_category": "GENERAL",
+        "original_price_paise": 250_000,  # ₹2,500
+        "purchase_reference": f"purchase-{_unique()}",
+        "provider_reference": f"ref-{_unique()}",
+    }
+    if "event_id" not in fields:
+        defaults["event_id"] = make_event(session).id
+    if "original_owner_id" not in fields:
+        owner = make_user(session)
+        defaults["original_owner_id"] = owner.id
+        defaults.setdefault("current_owner_id", owner.id)
+    return _save(session, Ticket(**(defaults | fields)))
+
+
+def make_listing(session: Session, **fields: Any) -> Listing:
+    ticket = fields.pop("ticket", None) or make_ticket(session)
+    defaults: dict[str, Any] = {
+        "ticket_id": ticket.id,
+        "event_id": ticket.event_id,
+        "seller_id": ticket.current_owner_id,
+        "asking_price_paise": ticket.original_price_paise,
+        "original_price_paise": ticket.original_price_paise,
+        "expires_at": datetime.now(UTC) + timedelta(days=29),
+    }
+    return _save(session, Listing(**(defaults | fields)))

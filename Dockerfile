@@ -21,6 +21,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
 
 COPY app ./app
+# The migrate service in docker-compose.yml runs `alembic upgrade head` from this same image.
+COPY alembic.ini ./
+COPY migrations ./migrations
 
 # Never run the server as root inside the container.
 RUN useradd --create-home --uid 10001 appuser
