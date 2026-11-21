@@ -4,7 +4,7 @@ Nov 16, 2026 · @Aswin Mony
 
 ## What you are building and how to use this plan
 
-TicketLoop is a FastAPI modular monolith for fixed-price ticket resale. Its real purpose is to show that a backend stays correct under concurrent requests and partial failures. This plan splits it into 19 modules over about 100 focused sessions, built in an order where each module depends only on what came before.
+TicketLoop is a FastAPI modular monolith for fixed-price ticket resale. Its real purpose is to show that a backend stays correct under concurrent requests and partial failures. This plan splits it into 19 modules over about 110 focused sessions (101 without the optional frontend), built in an order where each module depends only on what came before.
 
 The source is `plan.md` (v1.0) in the repo. It is the only file so far; no code exists yet.
 
@@ -21,7 +21,7 @@ Most of the API is CRUD that sets these up. Spend your deepest learning time her
 
 ### Assumptions to adjust
 
-- One "day" is one focused session of 3 to 4 hours. At 5 sessions a week the plan runs about 20 weeks. With less time, stretch the days; do not skip the Learn steps.
+- One "day" is one focused session of 3 to 4 hours. At 5 sessions a week the plan runs about 22 weeks. With less time, stretch the days; do not skip the Learn steps.
 - You know Python basics (functions, classes, venv, pip) and everyday Git. If not, do the optional pre-week in M0.
 - You work on Windows 11 with a mixed setup. Your code, the API, tests and the frontend run natively on Windows; Postgres, Redis, RabbitMQ, Celery and the monitoring tools run in Docker Desktop, which uses WSL2 behind the scenes. Celery and Redis do not support Windows, which is why they always live in containers.
 - The React frontend is the last module and optional. The backend is the point of the project.
@@ -43,8 +43,8 @@ Most of the API is CRUD that sets these up. Spend your deepest learning time her
 | Package manager | uv with `pyproject.toml` | Fast, and pyproject-native as plan.md expects. Plain pip + venv also works. |
 | Money type | Integer paise in a `BIGINT` column, currency `INR` | plan.md bans floats for money; integers avoid rounding bugs entirely. |
 | Reservation expiry before Celery exists | A plain Python loop script in M8, moved to Celery beat in M11 | Keeps the expiry logic a pure function you can test, separate from the scheduler. |
-| Logging timing | JSON logs and request IDs from M1; metrics and tracing in M16 | Cheap now and makes every later bug easier to find. |
-| Load-test tool | Locust | Same language as the backend. k6 is an option if a laptop cannot generate enough load. |
+| Logging timing | JSON logs and request IDs from M1; metrics and tracing in M15 | Cheap now and makes every later bug easier to find. |
+| Load-test tool | Grafana k6, run from Docker | One laptop can generate far more load with it than with a Python tool, it has load, stress, spike and soak patterns built in, and thresholds turn each run into a pass or fail. One tool keeps every run comparable. |
 | Migrations on enums | Store status as `TEXT` with a `CHECK` constraint | Postgres enum types are awkward to change in Alembic; you will add states. |
 
 ## Architecture at a glance
@@ -105,16 +105,17 @@ Build the 19 modules strictly in this order. Each one leaves you with something 
 | M13 | Disputes and admin | Dispute flow, admin review, suspension | M12 | Disputes refer to completed or failed orders. | 5 |
 | M14 | Caching and rate limiting | Redis cache-aside for reads, rate limits on hot endpoints | M6 | plan.md says Redis only after the app works; it speeds up M6 reads. | 6 |
 | M15 | Observability | Prometheus metrics, Grafana dashboards, OpenTelemetry traces | M11 | Moved before load tests: you need p95 and queue-depth graphs to read a load test. | 7 |
-| M16 | Load and failure testing | Locust runs at 100 to 10,000 users, chaos tests, results doc | M14, M15 | Measures the finished system; numbers go on your resume. | 6 + 7 |
-| M17 | CI/CD, security, docs | Full GitHub Actions pipeline, security pass, ADRs, README | all | Hardens and explains what exists. | 7 |
+| M16 | CI/CD, security, docs | Full GitHub Actions pipeline, security pass, ADRs, README | M15 | Hardens and explains the finished backend before it is measured. | 7 |
+| M17 | Performance, concurrency and resilience testing | Fourteen kinds of test (load, stress, spike, soak, races, deadlocks, lock contention, isolation, idempotency, integrity, coordination, failure recovery, connection pool, latency) and resume numbers | M16 | Runs once the backend is finished, so every number describes the real system. | 6 + 7 |
 | M18 | Frontend (optional) | React + TypeScript client for the main flows | M12 | Only after the backend is correct. | separate |
 
-Four changes from plan.md's phase order, each on purpose:
+Five changes from plan.md's phase order, each on purpose:
 
 1. The audit-log helper arrives in M5, not at the end, so no state change ever goes unrecorded.
-2. A basic CI run (pytest on every push) starts in M3; the full pipeline stays in M17.
-3. Observability (M15) comes before load testing (M16), because load-test numbers are unreadable without dashboards.
+2. A basic CI run (pytest on every push) starts in M3; the full pipeline stays in M16.
+3. Observability (M15) comes before the testing campaign (M17), because load-test numbers are unreadable without dashboards.
 4. Reservation expiry first runs as a plain script in M8 and moves onto Celery beat in M11.
+5. Performance, concurrency and resilience testing runs as one campaign (M17) after the backend is finished, hardened and documented. Each module still ships its own correctness tests, because a module is not done without them.
 
 ## Module-by-module breakdown
 
@@ -667,39 +668,7 @@ This is the heart of the project. Take the full eight days, and do the experimen
 
 **Explain it:** Why record latency as a histogram rather than an average? Why is a user ID a terrible metric label? How does one trace continue across RabbitMQ?
 
-### M16 · Load and failure testing (Days 84 to 89)
-
-**Goal:** measured numbers for plan.md's stages (100 to 10,000 users) on documented hardware, the bottleneck found and explained, and every failure in plan.md section 12 run as a repeatable drill.
-
-**Prerequisites**
-
-- Tech: Locust (or k6), Toxiproxy, Docker Compose, the M15 dashboards.
-- Knowledge: throughput versus latency; percentiles; coordinated omission; connection pools; chaos experiments (hypothesis, blast radius, rollback).
-
-**Learn first**
-
-- Video: [An Intro to Load Testing with Locust and Python](https://pyvideo.org/pybay-2019/an-intro-to-load-testing-with-locust-and-python.html) (PyBay 2019 talk)
-- Video: re-watch [How NOT to Measure Latency](https://www.youtube.com/watch?v=lJ8ydIuPFeU) (Gil Tene)
-- Article: Locust [Quickstart](https://docs.locust.io/en/stable/quickstart.html) and [Running distributed](https://docs.locust.io/en/stable/running-distributed.html)
-- Article: [Grafana k6 docs](https://grafana.com/docs/k6/latest/), the alternative if one machine cannot generate enough load with Locust.
-- Article: [Connection Pooling](https://docs.sqlalchemy.org/en/20/core/pooling.html) (SQLAlchemy docs) and [PgBouncer](https://www.pgbouncer.org/)
-- Article: [Principles of Chaos Engineering](https://principlesofchaos.org/) and [Toxiproxy](https://github.com/Shopify/toxiproxy) (Shopify)
-
-**Build**
-
-1. Scale up the M6 seed script to realistic volumes.
-2. Locust user classes: browsers (80%: search and view), buyers (15%: interest, reserve, order, pay) and sellers (5%).
-3. A spike scenario: 1,000 users hit one hot listing at once; afterwards, query the database and assert exactly one winner.
-4. Run the stages 100, 500, 1,000, 5,000 and 10,000. Record requests per second, p50, p95, p99, error rate, database connections, CPU, memory, Redis hit ratio and queue delay, plus your hardware. A laptop will likely top out before 10,000; where and why it does is a finding, not a failure.
-5. Tune one thing at a time (pool size, uvicorn workers, an index, a TTL), re-run, and record before and after.
-6. Script every section 12 scenario: kill the API mid-order, delay and duplicate webhooks, stop RabbitMQ, kill a worker, add latency or cut the database with Toxiproxy, fail transfers. For each: hypothesis, run, what you saw, what you fixed.
-7. `docs/load-test-results.md` with the tables and Grafana screenshots.
-
-**Done when:** plan.md's Phase 6 exit holds: metrics recorded and bottlenecks documented, with a script and recorded result for every section 12 scenario.
-
-**Explain it:** Where is your bottleneck, and what is the evidence? What would you change first to handle ten times the traffic?
-
-### M17 · CI/CD, security and documentation (Days 90 to 95)
+### M16 · CI/CD, security and documentation (Days 84 to 89)
 
 **Goal:** every push runs lint, type checks and unit, integration and concurrency tests against real Postgres, Redis and RabbitMQ; `main` builds a Docker image; a security pass leaves no open high-severity findings; a stranger can run and understand the project from the README.
 
@@ -724,14 +693,106 @@ This is the heart of the project. Take the full eight days, and do the experimen
 2. A multi-stage Dockerfile running as a non-root user; build and push to GitHub Container Registry on `main`.
 3. A security pass against the OWASP API Top 10: object-level authorization (M4, M13), authentication (M3), rate limits (M14), CORS limited to your frontend's origin, request size limits, no secrets in logs, webhook verification (M10). Run Bandit, pip-audit and a ZAP baseline scan against the running stack; fix or document every finding.
 4. Secrets: `.env` never committed, GitHub Actions secrets in CI, and a note on how production would store them.
-5. Documentation: a README with a one-command start, an architecture diagram and a demo script; the notes from every module; ADRs for sync SQLAlchemy, lock strategy, idempotency, outbox relay, compensation, cache invalidation and Redis failure behaviour.
+5. Documentation: a README with a one-command start, an architecture diagram and a demo script; the notes from every module; ADRs for sync SQLAlchemy, lock strategy, idempotency, outbox relay, compensation, cache invalidation and Redis failure behaviour. Leave an empty Results section in the README for M17's numbers.
 6. A demo script that runs a full purchase and one failure drill in under 5 minutes, for interviews.
 
 **Done when:** plan.md's Phase 7 exit holds: a fresh machine runs `docker compose up`, CI is green, and a reviewer can follow any request through code, logs, metrics and traces.
 
 **Explain it:** answer plan.md section 23's eight questions out loud, without notes.
 
-### M18 · Frontend, optional (Days 96 to 104)
+### M17 · Performance, concurrency and resilience testing (Days 90 to 101)
+
+**Goal:** the finished backend goes through fourteen kinds of test, each with a written hypothesis, a repeatable script and a recorded result. Every invariant still holds afterwards, and the numbers that go on your resume are measured on documented hardware.
+
+This campaign runs once the backend is finished, so every number describes the real system. The tests each module already has (M2's IntegrityError test, M8's race test, M10's expiry race, M11's broker drill) stay where they are, because a module is not done without them. M17 repeats them at scale and adds everything else.
+
+**Prerequisites**
+
+- Tech: Grafana k6 (run from its Docker image), pytest, Hypothesis, Testcontainers, Toxiproxy, Docker Compose, and the M15 Prometheus and Grafana dashboards.
+- Knowledge: throughput versus latency; percentiles and coordinated omission; Postgres isolation levels, row locks and deadlock detection; connection pools; chaos experiments (hypothesis, blast radius, rollback).
+
+**Learn first**
+
+- Video: re-watch [How NOT to Measure Latency](https://www.youtube.com/watch?v=lJ8ydIuPFeU) (Gil Tene)
+- Article: [Grafana k6 docs](https://grafana.com/docs/k6/latest/), its [load test types](https://grafana.com/docs/k6/latest/testing-guides/test-types/) (load, stress, spike, soak), [scenarios](https://grafana.com/docs/k6/latest/using-k6/scenarios/) and [thresholds](https://grafana.com/docs/k6/latest/using-k6/thresholds/)
+- Article: [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html) and [Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html), which covers deadlocks (PostgreSQL docs)
+- Article: [Lock Monitoring](https://wiki.postgresql.org/wiki/Lock_Monitoring) (PostgreSQL wiki) and [the cumulative statistics system](https://www.postgresql.org/docs/current/monitoring-stats.html), where `pg_stat_database.deadlocks` lives
+- Article: [Hermitage](https://github.com/ept/hermitage) (Martin Kleppmann): isolation anomalies written as two-session scripts. Copy the method.
+- Article: [Stateful tests](https://hypothesis.readthedocs.io/en/latest/stateful.html) (Hypothesis docs) and [Testcontainers for Python](https://testcontainers-python.readthedocs.io/en/latest/)
+- Article: [Connection Pooling](https://docs.sqlalchemy.org/en/20/core/pooling.html) (SQLAlchemy docs) and [PgBouncer](https://www.pgbouncer.org/)
+- Article: [Principles of Chaos Engineering](https://principlesofchaos.org/) and [Toxiproxy](https://github.com/Shopify/toxiproxy) (Shopify)
+
+**The fourteen tests**
+
+| # | Test | How it runs in TicketLoop | Passes when |
+| --- | --- | --- | --- |
+| 1 | Load | k6 ramps to 100, 500 and 1,000 virtual users with a realistic mix: browsers 80% (search, view), buyers 15% (interest, reserve, order, pay), sellers 5% | Reads under 300 ms p95 and reservations under 500 ms p95 (NFR-03); error rate under 1% |
+| 2 | Stress | Keep ramping past 1,000 (toward plan.md's 10,000) until errors or p99 climb sharply | You can name the breaking point, what failed first (pool, CPU, Postgres, Redis) and the graph that shows it |
+| 3 | Spike | 0 to 1,000 users in seconds on one hot listing, then back to baseline | Exactly one reservation in the database, every other buyer a clean 409, no 5xx, latency back to baseline afterwards |
+| 4 | Soak | 2 to 4 hours at about 60% of the load-test peak | Memory, connection count, outbox backlog and queue depth stay flat; errors do not creep up |
+| 5 | Race condition | Re-run the M8 and M10 races with 4 API workers, 100 times each, plus cancel-versus-reserve and webhook-versus-reconciliation | Zero double bookings and zero released paid listings, in every run |
+| 6 | Deadlock | Provoke one on purpose (two transactions locking two rows in opposite order), then audit every multi-row transaction for a consistent lock order | Postgres detects it (SQLSTATE `40P01`), the app retries or returns a clean error, and `pg_stat_database.deadlocks` stays at 0 under normal load |
+| 7 | Lock contention | Measure waits on the hot listing with `log_lock_waits`, `pg_locks`, wait events in `pg_stat_activity` and a `lock_timeout`; compare M8's three reservation strategies under the spike | Lock-wait p95 recorded per strategy, and no wait longer than `lock_timeout` |
+| 8 | Transaction isolation | pytest with a Testcontainers Postgres and two connections, scripted in Hermitage style: dirty read, non-repeatable read, lost update and write skew, at Read Committed and Serializable | Each anomaly is either impossible or shown harmless because a conditional UPDATE or a constraint blocks it |
+| 9 | Idempotency | 50 concurrent `POST /orders` with one `Idempotency-Key`; the same key with a different body; one webhook delivered 10 times, out of order; a consumer message redelivered | One order, one payment effect and one notification; the different body gets 422 |
+| 10 | Data integrity | `scripts/check_invariants.sql` runs after every other test (no ticket in two open listings, no listing with two live reservations, every succeeded payment belongs to a paid or later order); Hypothesis stateful tests drive random sequences of transitions | The script returns zero rows, every time; Hypothesis finds no sequence that breaks a state machine |
+| 11 | Distributed coordination | Several API instances, two outbox relays and two expiry workers at once. The lock is a Postgres row or `SKIP LOCKED`, not Redis, because Postgres decides (M0). Redis rate-limit counters are checked across all instances | Each reservation expires exactly once, each event takes effect once, and rate limits hold across instances |
+| 12 | Failure recovery | Every plan.md section 12 drill: kill the API mid-order, stop RabbitMQ, kill a worker, gateway timeouts, latency and a cut database through Toxiproxy, failing transfers | Nothing lost, nothing applied twice, invariants hold, and the system recovers by itself except for documented manual-review cases |
+| 13 | Connection pool | Shrink and grow `pool_size` and `max_overflow`, push past Postgres `max_connections`, then try PgBouncer | You know the pool size that gives the best throughput, and saturation shows up as timeouts in the metrics, not as hangs |
+| 14 | Latency | p50, p95 and p99 per endpoint, from k6 and the M15 Prometheus histograms, at every load stage | Recorded for every stage, with the slowest endpoint explained |
+
+A Redis distributed lock is deliberately not part of the design: two systems that can both say "this ticket is taken" can disagree. Test 11 checks coordination where TicketLoop actually does it.
+
+**Tools**
+
+| Tool | Role here |
+| --- | --- |
+| Grafana k6 | Load, stress, spike, soak and latency runs; the one load tool, so every run is comparable |
+| pytest | Runs the isolation, race, deadlock, idempotency, integrity and recovery tests |
+| Hypothesis | Stateful property-based tests of the state machines |
+| Testcontainers | A throwaway Postgres 17 per suite, with test-only settings such as a short `deadlock_timeout` and `log_lock_waits` on |
+| PostgreSQL | The system under test, read through `pg_stat_database`, `pg_locks`, `pg_stat_activity` and `pg_stat_statements` |
+| Redis | Already in the stack (M14): rate-limit counters across instances, and behaviour when Redis is down |
+| Prometheus and Grafana | Built in M15; the source of every server-side number and graph |
+| Toxiproxy | Adds latency and cuts connections for the failure drills |
+| Docker Compose | The whole stack, reproducible, with the API scaled to several instances |
+| Locust, Apache JMeter | Not used. k6 covers both, and one load tool keeps results comparable |
+
+**Numbers for your resume**
+
+| Metric | Measured from |
+| --- | --- |
+| Maximum requests per second | k6 summary at the stress test's breaking point |
+| Maximum concurrent users | The highest k6 stage that still met the latency and error targets |
+| p50, p95 and p99 latency | k6 summary and Prometheus histograms |
+| Error rate (%) | k6 `http_req_failed` |
+| Transaction throughput | `pg_stat_database.xact_commit` per second, and completed purchases per minute |
+| Deadlock frequency | `pg_stat_database.deadlocks` before and after each run |
+| Lock wait time | `log_lock_waits` lines and `pg_stat_activity` wait events, p95 per strategy |
+| Database connection use | The M15 pool gauges against pool size, and the Postgres connection count |
+| Successful transactions under contention | Spike test: one winner, every other buyer a clean 409, zero 5xx |
+| Duplicate transactions prevented | Idempotent replays, deduplicated webhooks and skipped redeliveries, counted from `idempotency_keys`, `payment_events` and `processed_events` |
+| Overselling and data corruption incidents | `check_invariants.sql` across every run. The target, and the claim, is 0 |
+
+Every number is reported with the hardware, the data volume and the script that produced it, so you can defend it in an interview. A laptop will likely top out before 10,000 users; where and why it does is a finding, not a failure.
+
+**Build**
+
+1. `docs/test-plan.md`: for each of the fourteen tests, the hypothesis, the script, the metric and the pass line, written before running anything.
+2. Seed data at realistic volumes (extend the M6 seed script), and k6 scripts in `tests/load/` with thresholds, so each run passes or fails by itself.
+3. `scripts/check_invariants.sql`, run after every test that follows.
+4. Performance tests in this order: latency baseline, load, stress, spike, soak, connection pool. Tune one thing at a time (pool size, uvicorn workers, an index, a cache TTL), re-run, and record before and after.
+5. Concurrency tests in `tests/concurrency/` against a Testcontainers Postgres: race, deadlock, lock contention, isolation and distributed coordination.
+6. Correctness tests: idempotency storms and Hypothesis stateful tests.
+7. Failure drills in `tests/failure/`. For each: hypothesis, run, what you saw, what you fixed.
+8. `docs/test-results.md` with the tables, Grafana screenshots and hardware; copy the resume numbers into the README's Results section.
+9. Add the fast suites (isolation, idempotency, integrity, small-scale races) to the M16 CI pipeline.
+
+**Done when:** every one of the fourteen tests has a script, a recorded result, and either a pass or an explained failure; `check_invariants.sql` returned zero rows after every run; the resume table is filled from real runs; and plan.md's Phase 6 exit holds.
+
+**Explain it:** Where is your bottleneck, and what is the evidence? What does p99 tell you that an average hides? How do you produce a deadlock, and how does TicketLoop avoid one? Which anomaly does Read Committed allow, and why does it not hurt TicketLoop? How do you know you never oversold a ticket? What would you change first to handle ten times the traffic?
+
+### M18 · Frontend, optional (Days 102 to 110)
 
 **Goal:** a React and TypeScript app covering browse, search, interest, reservation with a countdown, payment through the fake gateway, orders and notifications, plus the seller listing flow and the admin queue.
 
@@ -762,7 +823,7 @@ This is the heart of the project. Take the full eight days, and do the experimen
 
 ## Day-by-day plan
 
-The plan runs 104 sessions: about 21 weeks at 5 sessions a week. Tick each day off as you finish it. A session is roughly 1 hour of learning and 2 to 3 hours of building; the links for every named video or article are in that module's section above.
+The plan runs 110 sessions: 22 weeks at 5 sessions a week, or 101 sessions without the optional frontend. Tick each day off as you finish it. A session is roughly 1 hour of learning and 2 to 3 hours of building; the links for every named video or article are in that module's section above.
 
 Three rules keep it honest:
 
@@ -898,44 +959,53 @@ Three rules keep it honest:
 - [ ] **Day 79 · M15.** Custom business metrics with low-cardinality labels; outbox backlog and connection-pool gauges.
 - [ ] **Day 80 · M15.** The Grafana dashboard (golden signals plus business panels), committed and provisioned.
 
-### Week 17 · Days 81 to 85 · Tracing and load tests (M15, M16)
+### Week 17 · Days 81 to 85 · Tracing and CI (M15, M16)
 
 - [ ] **Day 81 · M15.** Watch the first half of the freeCodeCamp OpenTelemetry course. Jaeger container; instrument FastAPI, SQLAlchemy and httpx.
 - [ ] **Day 82 · M15.** Celery instrumentation and trace context carried in outbox events, so one trace spans API to worker.
 - [ ] **Day 83 · M15 · Checkpoint.** Log context (request, correlation and order IDs), redaction, alert rules. Trace one failed purchase end to end.
-- [ ] **Day 84 · M16.** Watch the PyBay Locust talk; read the Locust quickstart. Scale up seed data and write the user classes.
-- [ ] **Day 85 · M16.** The spike test on one hot listing, asserting one winner in the database.
+- [ ] **Day 84 · M16.** Read GitHub's Python CI tutorial. The full pipeline with Postgres, Redis and RabbitMQ service containers, plus mypy.
+- [ ] **Day 85 · M16.** Multi-stage, non-root Dockerfile; build and push the image on `main`.
 
-### Week 18 · Days 86 to 90 · Load and failure drills (M16, M17)
+### Week 18 · Days 86 to 90 · Hardening, docs and the test plan (M16, M17)
 
-- [ ] **Day 86 · M16.** Read SQLAlchemy's pooling page. Run stages 100 to 1,000; record metrics and hardware.
-- [ ] **Day 87 · M16.** Push to 5,000 and 10,000 with distributed Locust or k6; find the bottleneck; tune one thing and re-run.
-- [ ] **Day 88 · M16.** Toxiproxy and scripted drills for the first half of the section 12 scenarios.
-- [ ] **Day 89 · M16 · Checkpoint.** The remaining drills; `docs/load-test-results.md`. This is plan.md's Phase 6 exit.
-- [ ] **Day 90 · M17.** Read GitHub's Python CI tutorial. The full pipeline with Postgres, Redis and RabbitMQ service containers, plus mypy.
+- [ ] **Day 86 · M16.** Read the OWASP API Security Top 10 and walk the checklist; CORS and request size limits.
+- [ ] **Day 87 · M16.** Bandit, pip-audit and a ZAP baseline scan; fix or document each finding.
+- [ ] **Day 88 · M16.** Read Nygard's ADR article and finish the ADRs; README with the architecture diagram and one-command start.
+- [ ] **Day 89 · M16 · Checkpoint.** The demo script; answer plan.md section 23's eight questions out loud and record yourself. This is plan.md's Phase 7 exit.
+- [ ] **Day 90 · M17.** Re-watch Gil Tene's latency talk; read the k6 docs and its test-types guide. Write `docs/test-plan.md` for all fourteen tests and `scripts/check_invariants.sql`.
 
-### Week 19 · Days 91 to 95 · Hardening and docs (M17)
+### Week 19 · Days 91 to 95 · Performance tests (M17)
 
-- [ ] **Day 91 · M17.** Multi-stage, non-root Dockerfile; build and push the image on `main`.
-- [ ] **Day 92 · M17.** Read the OWASP API Security Top 10 and walk the checklist; CORS and request size limits.
-- [ ] **Day 93 · M17.** Bandit, pip-audit and a ZAP baseline scan; fix or document each finding.
-- [ ] **Day 94 · M17.** Read Nygard's ADR article and finish the ADRs; README with the architecture diagram and one-command start.
-- [ ] **Day 95 · M17 · Checkpoint.** The demo script; answer plan.md section 23's eight questions out loud and record yourself. This is plan.md's Phase 7 exit.
+- [ ] **Day 91 · M17.** Scale up the seed data; k6 scripts with thresholds. Latency baseline, then the load test at 100, 500 and 1,000 users.
+- [ ] **Day 92 · M17.** Read SQLAlchemy's pooling page. Stress test to the breaking point and the connection-pool test; name the bottleneck with evidence.
+- [ ] **Day 93 · M17.** The spike test on one hot listing, asserting one winner in the database; start the soak run.
+- [ ] **Day 94 · M17.** Read the soak results. Tune one thing at a time and re-run the load test; record before and after.
+- [ ] **Day 95 · M17.** Read Postgres's isolation and explicit-locking chapters and Hermitage. Testcontainers fixture; isolation tests for dirty read, non-repeatable read, lost update and write skew.
 
-### Week 20 · Days 96 to 100 · Frontend (M18, optional)
+### Week 20 · Days 96 to 100 · Concurrency, correctness and failure tests (M17)
 
-- [ ] **Day 96 · M18.** Watch React and TypeScript in 100 Seconds; start the freeCodeCamp React course. Scaffold the Vite React-TS app.
-- [ ] **Day 97 · M18.** Continue the React course. Generate types from `/openapi.json`; an API client that refreshes once on 401.
-- [ ] **Day 98 · M18.** Read the TanStack Query overview. Search page with infinite scroll over keyset cursors.
-- [ ] **Day 99 · M18.** Listing detail, interest, and reserve with a countdown.
-- [ ] **Day 100 · M18.** Checkout through fakepay with a client-generated `Idempotency-Key`; order status polling.
+- [ ] **Day 96 · M17.** Race tests at scale, 100 runs each; provoke and handle a deadlock; audit lock order in every multi-row transaction.
+- [ ] **Day 97 · M17.** Read the Lock Monitoring wiki page. Lock contention per reservation strategy; distributed coordination with several API instances, relays and expiry workers.
+- [ ] **Day 98 · M17.** Read Hypothesis's stateful testing page. Idempotency storms; stateful property tests for the state machines.
+- [ ] **Day 99 · M17.** Read Principles of Chaos Engineering. Toxiproxy and every section 12 failure drill, with the invariants check after each.
+- [ ] **Day 100 · M17.** Fix what broke and re-run every test that failed.
 
-### Week 21 · Days 101 to 104 · Frontend finish (M18)
+### Week 21 · Days 101 to 105 · Results and frontend start (M17, M18)
 
-- [ ] **Day 101 · M18.** Notifications bell and order history.
-- [ ] **Day 102 · M18.** Seller pages: create listing and upload evidence.
-- [ ] **Day 103 · M18.** Admin pages: pending listings and disputes.
-- [ ] **Day 104 · M18 · Checkpoint.** A non-technical friend buys a ticket through the UI; fix whatever confused them.
+- [ ] **Day 101 · M17 · Checkpoint.** `docs/test-results.md`, the resume numbers and the README's Results section. This is plan.md's Phase 6 exit.
+- [ ] **Day 102 · M18.** Watch React and TypeScript in 100 Seconds; start the freeCodeCamp React course. Scaffold the Vite React-TS app.
+- [ ] **Day 103 · M18.** Continue the React course. Generate types from `/openapi.json`; an API client that refreshes once on 401.
+- [ ] **Day 104 · M18.** Read the TanStack Query overview. Search page with infinite scroll over keyset cursors.
+- [ ] **Day 105 · M18.** Listing detail, interest, and reserve with a countdown.
+
+### Week 22 · Days 106 to 110 · Frontend finish (M18)
+
+- [ ] **Day 106 · M18.** Checkout through fakepay with a client-generated `Idempotency-Key`; order status polling.
+- [ ] **Day 107 · M18.** Notifications bell and order history.
+- [ ] **Day 108 · M18.** Seller pages: create listing and upload evidence.
+- [ ] **Day 109 · M18.** Admin pages: pending listings and disputes.
+- [ ] **Day 110 · M18 · Checkpoint.** A non-technical friend buys a ticket through the UI; fix whatever confused them.
 
 ## How to avoid building blindly
 

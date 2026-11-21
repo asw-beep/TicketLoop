@@ -158,19 +158,19 @@ Postgres is the only source of truth. Each guarantee has a database backstop, no
 
 Recover from an API crash, a broker outage, slow payment responses, dropped database connections and worker crashes. The tools are short transactions, the transactional outbox, idempotent consumers, `pool_pre_ping` and reconciliation.
 
-**Test:** the M11 and M16 failure drills (stop RabbitMQ, kill a worker mid-task, restart Postgres) end with nothing lost and nothing applied twice.
+**Test:** the M11 and M17 failure drills (stop RabbitMQ, kill a worker mid-task, restart Postgres) end with nothing lost and nothing applied twice.
 
 ### NFR-03 · Performance
 
 Normal reads under 300 ms p95; reservation under 500 ms p95 under the test workload; no duplicate reservations under load; paginated queries stay fast as data grows. These are targets, measured and reported with the hardware used.
 
-**Test:** Locust runs at 100 to 10,000 users (M16), read from Grafana dashboards (M15).
+**Test:** k6 load, stress, spike and soak runs from 100 to 10,000 users in the M17 testing campaign, read from the M15 Grafana dashboards.
 
 ### NFR-04 · Security
 
 Argon2id, JWT, roles, Pydantic validation on every input, SQLAlchemy bound parameters only (no SQL built from strings), Redis rate limits on login, listing creation, reservation, payment and search, a strict CORS allow-list, private storage with presigned URLs, HMAC webhooks, secrets only from the environment, and audit logs. No card data, ever.
 
-**Test:** the auth, IDOR, webhook and rate-limit tests; a security pass in M17.
+**Test:** the auth, IDOR, webhook and rate-limit tests; a security pass in M16.
 
 ### NFR-05 · Maintainability
 
