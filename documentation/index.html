@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TicketLoop Build Log</title>
+  <meta name="description" content="One page per finished TicketLoop module: what it built, the decisions behind it, and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <h1>TicketLoop build log</h1>
+    <p>A FastAPI and Postgres backend for fixed-price ticket resale, built to stay correct when 100 buyers hit one ticket at once, when requests are retried, when webhooks arrive twice, and when the message broker goes down.</p>
+    <p>One page per finished module: what it built, the decisions behind it, and the questions an interviewer will ask.</p>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="prep">
+      <h2 id="prep">Before an interview</h2>
+      <div class="section__body">
+        <ol class="tight">
+          <li>Say the project sentence above out loud, then each finished module's 30-second answer.</li>
+          <li>Open each module's interview questions and answer before you reveal the answer.</li>
+          <li>Rehearse <a href="m00-foundations-and-design.html#problems">the six hard problems</a>. They are the part worth talking about for longest.</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="modules">
+      <h2 id="modules">Modules</h2>
+      <div class="section__body">
+        <ol class="modules">
+          <li>
+            <a class="mod mod--done" href="m00-foundations-and-design.html">
+              <span class="mod__num">M0</span>
+              <span class="mod__body"><span class="mod__title">Foundations and design</span><span class="mod__goal">Requirements, schema, state machines, API contract, the six hard problems as SQL</span></span>
+              <span class="mod__status">Done 17 Nov</span>
+            </a>
+          </li>
+          <li>
+            <div class="mod mod--next">
+              <span class="mod__num">M1</span>
+              <span class="mod__body"><span class="mod__title">Dev environment and skeleton</span><span class="mod__goal">FastAPI and Postgres in Compose, health check, JSON logs with request IDs, one error format</span></span>
+              <span class="mod__status">Up next</span>
+            </div>
+          </li>
+          <li><div class="mod mod--later"><span class="mod__num">M2</span><span class="mod__body"><span class="mod__title">Database layer</span><span class="mod__goal">SQLAlchemy models, sessions, Alembic migrations, a test database</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M3</span><span class="mod__body"><span class="mod__title">Identity and auth</span><span class="mod__goal">Register, login, JWT access and refresh rotation, roles, first CI run</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M4</span><span class="mod__body"><span class="mod__title">Events, tickets and document storage</span><span class="mod__goal">Event admin, ticket upload to object storage, ownership checks</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M5</span><span class="mod__body"><span class="mod__title">Listings, verification and audit log</span><span class="mod__goal">Listing state machine, admin review, partial unique index, audit helper</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M6</span><span class="mod__body"><span class="mod__title">Discovery</span><span class="mod__goal">Search, filters, keyset pagination, indexes checked with EXPLAIN ANALYZE</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M7</span><span class="mod__body"><span class="mod__title">Interests and allocation</span><span class="mod__goal">One active interest per buyer, three allocation strategies</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M8</span><span class="mod__body"><span class="mod__title">Reservations and concurrency</span><span class="mod__goal">Atomic reservation, the 100-buyer race test, expiry</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M9</span><span class="mod__body"><span class="mod__title">Orders and idempotency</span><span class="mod__goal">Order state machine, Idempotency-Key handling</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M10</span><span class="mod__body"><span class="mod__title">Payments</span><span class="mod__goal">Fake gateway, signed webhooks, dedupe, reconciliation, refunds</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M11</span><span class="mod__body"><span class="mod__title">Messaging</span><span class="mod__goal">RabbitMQ, Celery, transactional outbox, retries, dead-letter queue</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M12</span><span class="mod__body"><span class="mod__title">Transfers and notifications</span><span class="mod__goal">Transfer worker with a fake provider, in-app notifications</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M13</span><span class="mod__body"><span class="mod__title">Disputes and admin</span><span class="mod__goal">Dispute flow, admin review, suspension</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M14</span><span class="mod__body"><span class="mod__title">Caching and rate limiting</span><span class="mod__goal">Redis cache-aside reads, rate limits on hot endpoints</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M15</span><span class="mod__body"><span class="mod__title">Observability</span><span class="mod__goal">Prometheus metrics, Grafana dashboards, OpenTelemetry traces</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M16</span><span class="mod__body"><span class="mod__title">Load and failure testing</span><span class="mod__goal">Locust at 100 to 10,000 users, chaos tests, a results write-up</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M17</span><span class="mod__body"><span class="mod__title">CI/CD, security and documentation</span><span class="mod__goal">Full GitHub Actions pipeline, security pass, ADRs</span></span></div></li>
+          <li><div class="mod mod--later"><span class="mod__num">M18</span><span class="mod__body"><span class="mod__title">Frontend, optional</span><span class="mod__goal">React and TypeScript client for the main flows</span></span></div></li>
+        </ol>
+      </div>
+    </section>
+
+  </main>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# Store every text file with LF line endings. A shell script saved with Windows CRLF endings
+# fails inside a Linux container with "bad interpreter" or "$'\r': command not found".
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary

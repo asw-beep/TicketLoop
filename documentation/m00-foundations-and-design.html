@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M0 Foundations</title>
+  <meta name="description" content="TicketLoop M0: the design done before any code, the decisions behind it, and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Foundations and design</h1>
+      <p class="ticket__summary">The whole system on paper before any code: 24 tables, six state machines, every endpoint, and the six hard problems written as exact SQL with a crash analysis for each.</p>
+      <p class="ticket__fineprint">Done when: I can draw the reservation, order, payment and transfer flow from memory, including what every table holds at each step.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M0</span>
+      <span class="ticket__days">Days 1 to 6</span>
+      <span class="stamp">Done<br>17 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">Before writing code I designed TicketLoop end to end: a Postgres schema where the database itself enforces the critical rules, state machines for every lifecycle, and an API contract.</p>
+        <p class="pitch">Then I wrote each of the six hard problems, from double booking to lost events, as exact SQL and asked what happens if the process dies between any two statements. The central decision: one row, the listing, is the lock that decides who gets a ticket.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I produced</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Requirements</span><span class="built__note">Every FR and NFR from <code>plan.md</code> restated as a checkable rule, with the test that proves it.</span><code>docs/requirements.md</code></li>
+          <li><span class="built__what">Database design</span><span class="built__note">Three ER diagrams, which constraint enforces which rule, every index and the query it serves.</span><code>docs/database-design.md</code></li>
+          <li><span class="built__what">Target schema</span><span class="built__note">The full DDL, loading cleanly into Postgres 17, plus statements the constraints must reject.</span><code>docs/schema-draft.sql</code> <code>docs/schema-checks.sql</code></li>
+          <li><span class="built__what">State machines</span><span class="built__note">Listing, interest, reservation, order, payment and transfer, each with a table of allowed moves.</span><code>docs/state-machines.md</code></li>
+          <li><span class="built__what">API contract</span><span class="built__note">Every endpoint: who may call it, request, response and errors.</span><code>docs/api-contract.md</code></li>
+          <li><span class="built__what">The six hard problems</span><span class="built__note">Each as ordered SQL, why it is correct, and what a crash between steps leaves behind.</span><code>docs/hard-problems.md</code></li>
+          <li><span class="built__what">Purchase flow</span><span class="built__note">The end-to-end sequence and what every table holds at each step.</span><code>docs/purchase-flow.md</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="problems">
+      <h2 id="problems">The six hard problems</h2>
+      <div class="section__body">
+        <p class="muted">The reason the project exists. Most of the API is CRUD that sets these up.</p>
+        <ol class="problems">
+          <li>
+            <h4><span>1</span>Double booking</h4>
+            <p>100 buyers hit one listing at once; exactly one wins and 99 get a clean 409.</p>
+            <dl class="facts">
+              <dt>Fix</dt><dd><code>UPDATE listings … WHERE status = 'ACTIVE'</code>. The WHERE clause is the availability check.</dd>
+              <dt>Backstop</dt><dd><code>uq_reservations_one_live_per_listing</code></dd>
+              <dt>Built in</dt><dd>M8</dd>
+            </dl>
+          </li>
+          <li>
+            <h4><span>2</span>Duplicate orders</h4>
+            <p>A retried <code>POST /orders</code> must not create a second order, even when both copies arrive at once.</p>
+            <dl class="facts">
+              <dt>Fix</dt><dd>Insert the <code>Idempotency-Key</code> row in the same transaction as the order and its stored response. A duplicate waits on the key, then replays the response.</dd>
+              <dt>Backstop</dt><dd><code>uq_orders_reservation</code></dd>
+              <dt>Built in</dt><dd>M9</dd>
+            </dl>
+          </li>
+          <li>
+            <h4><span>3</span>Duplicate or forged webhooks</h4>
+            <p>The gateway sends the same event twice, or someone fakes one.</p>
+            <dl class="facts">
+              <dt>Fix</dt><dd>HMAC over the raw body plus a 5-minute timestamp window, then a dedupe insert in the same transaction as the effect. Duplicates still get 200, so the gateway stops retrying.</dd>
+              <dt>Backstop</dt><dd><code>uq_payment_events_provider_event</code></dd>
+              <dt>Built in</dt><dd>M10</dd>
+            </dl>
+          </li>
+          <li>
+            <h4><span>4</span>Lost events</h4>
+            <p>The database commits but RabbitMQ is down.</p>
+            <dl class="facts">
+              <dt>Fix</dt><dd>Transactional outbox: the event row commits with the change, a relay publishes it later, and consumers ignore redeliveries.</dd>
+              <dt>Backstop</dt><dd><code>pk_processed_events (consumer, event_id)</code></dd>
+              <dt>Built in</dt><dd>M11</dd>
+            </dl>
+          </li>
+          <li>
+            <h4><span>5</span>Expiry racing payment</h4>
+            <p>The expiry worker must never release a ticket that was just paid for.</p>
+            <dl class="facts">
+              <dt>Fix</dt><dd>Payment and expiry both update the reservation <code>WHERE status = 'CREATED'</code>, so only one wins. The gateway is called only after the reservation leaves <code>CREATED</code>. <code>PAYMENT_PENDING</code> is resolved by asking the gateway, never by the clock.</dd>
+              <dt>Backstop</dt><dd>The reservation row lock</dd>
+              <dt>Built in</dt><dd>M8 and M10</dd>
+            </dl>
+          </li>
+          <li>
+            <h4><span>6</span>Drift</h4>
+            <p>The gateway and our database disagree, usually because a webhook never arrived.</p>
+            <dl class="facts">
+              <dt>Fix</dt><dd>Reconciliation asks the gateway about unresolved payments and repairs them through the same transition functions, recording each run.</dd>
+              <dt>Backstop</dt><dd>Conditional updates make a re-run a no-op</dd>
+              <dt>Built in</dt><dd>M10</dd>
+            </dl>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">One purchase, start to finish</h2>
+      <div class="section__body">
+        <ol class="flow flow--states">
+          <li><span class="flow__n">0</span><div class="flow__text"><strong>Listing approved</strong><p>An admin approves it; buyers can now see it.</p></div><span class="flow__state" data-state="ACTIVE">ACTIVE</span></li>
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>Buyer reserves</strong><p>One conditional UPDATE wins the listing. The reservation holds it for 10 minutes.</p></div><span class="flow__state" data-state="RESERVED">RESERVED</span></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>Buyer creates the order</strong><p>Idempotency-key row, order and stored response commit together.</p></div><span class="flow__state" data-state="RESERVED" aria-hidden="true"></span></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>Buyer starts payment</strong><p>Reservation and order go to <code>PAYMENT_PENDING</code>, then the gateway intent is created.</p></div><span class="flow__state" data-state="RESERVED" aria-hidden="true"></span></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>Webhook says paid</strong><p>Verify, dedupe, payment <code>SUCCEEDED</code>, order <code>PAID</code>, outbox row: one transaction.</p></div><span class="flow__state" data-state="RESERVED" aria-hidden="true"></span></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>Relay publishes</strong><p>The outbox row goes to RabbitMQ and gets <code>published_at</code>.</p></div><span class="flow__state" data-state="RESERVED" aria-hidden="true"></span></li>
+          <li><span class="flow__n">6</span><div class="flow__text"><strong>Worker starts the transfer</strong><p><code>processed_events</code> stops a redelivery doing it twice.</p></div><span class="flow__state" data-state="RESERVED" aria-hidden="true"></span></li>
+          <li><span class="flow__n">7</span><div class="flow__text"><strong>Provider confirms</strong><p>Order <code>COMPLETED</code>, and the ticket's owner becomes the buyer, in the same transaction.</p></div><span class="flow__state" data-state="SOLD">SOLD</span></li>
+        </ol>
+        <p class="flow-caption">The right-hand strip is the listing row's status. Three things to remember:</p>
+        <ul class="tight">
+          <li>The listing stays <code>RESERVED</code> from step 1 to step 7. That one row keeps everyone else out the whole time.</li>
+          <li>The ticket row changes once, at step 7. Until the provider confirms, the seller still owns it.</li>
+          <li>Everything that leaves the API process (steps 5 and 6, and the notifications after 7) starts from an outbox row written in the same transaction as the change.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+
+        <h3>Who decides</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Postgres is the source of truth; Redis only speeds up reads</h4>
+            <p class="decision__over">Instead of keeping inventory in Redis</p>
+            <p>Money and inventory need transactions, constraints and durable writes. A cache can be lost or stale, which is fine for browsing and wrong for selling one ticket twice.</p>
+          </div>
+          <div class="decision">
+            <h4>The listing row is the lock</h4>
+            <p class="decision__over">Instead of <code>plan.md</code>'s update of <code>tickets.status</code></p>
+            <p>Two status columns that both mean "reserved" can disagree. One row decides who wins, and <code>tickets.status</code> only means valid or void.</p>
+          </div>
+          <div class="decision">
+            <h4>Check and write in one <code>UPDATE … WHERE status = :from</code></h4>
+            <p class="decision__over">Instead of reading the status in Python, then writing</p>
+            <p>Two requests can both read <code>ACTIVE</code> and both proceed. With the check inside the UPDATE, the database decides; zero rows updated means someone got there first, which becomes a 409.</p>
+          </div>
+          <div class="decision">
+            <h4>The database enforces the critical rules as well</h4>
+            <p class="decision__over">Instead of application checks alone</p>
+            <p>The app checks first, to give a helpful error. Constraints catch bugs, and two requests that pass the same check at the same instant.</p>
+          </div>
+          <div class="decision">
+            <h4>Partial unique indexes for "only one open at a time"</h4>
+            <p class="decision__over">Instead of a plain UNIQUE</p>
+            <p>A plain unique index on <code>listings(ticket_id)</code> would stop a ticket being relisted after a cancel, forever. <code>WHERE status IN (…open…)</code> limits uniqueness to open rows.</p>
+          </div>
+          <div class="decision">
+            <h4>A transactional outbox for every event</h4>
+            <p class="decision__over">Instead of "commit, then publish to RabbitMQ"</p>
+            <p>Two systems cannot be written atomically. Commit-then-publish loses the event if the process dies in between; publish-then-commit announces a change that might roll back.</p>
+          </div>
+        </div>
+
+        <h3>Data types</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Money is <code>BIGINT</code> paise, in columns ending <code>_paise</code></h4>
+            <p class="decision__over">Instead of floats or rupees</p>
+            <p>Floats cannot represent 0.1 exactly; integers never round. <code>BIGINT</code> because <code>INT</code> tops out at ₹2.1 crore. The suffix stops anyone storing rupees by mistake.</p>
+          </div>
+          <div class="decision">
+            <h4>Statuses are <code>TEXT</code> with a <code>CHECK</code></h4>
+            <p class="decision__over">Instead of a Postgres <code>ENUM</code></p>
+            <p>Adding an enum value needs <code>ALTER TYPE</code>, which is awkward in Alembic. Changing a CHECK is one constraint swap, and states will be added.</p>
+          </div>
+          <div class="decision">
+            <h4>UUID keys generated by Postgres; <code>TIMESTAMPTZ</code> in UTC</h4>
+            <p class="decision__over">Instead of serial integers and zone-less timestamps</p>
+            <p>IDs appear in URLs, and sequential ones let anyone count orders or guess the next. A timestamp without a zone silently drops the offset, and <code>expires_at &lt; now()</code> must be unambiguous.</p>
+          </div>
+        </div>
+
+        <h3>API and history</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>404, not 403, for someone else's resource</h4>
+            <p class="decision__over">Instead of saying "this exists but is not yours"</p>
+            <p>Nobody can probe which IDs exist. 403 is kept for "I know who you are and this action is not allowed".</p>
+          </div>
+          <div class="decision">
+            <h4>No hard deletes; an append-only audit log without foreign keys</h4>
+            <p class="decision__over">Instead of deleting rows and linking audit rows by FK</p>
+            <p>Orders, payments and audit rows must outlive what they point at. An audit insert must never fail because of an FK, and a trigger forbids UPDATE and DELETE on it.</p>
+          </div>
+          <div class="decision">
+            <h4>Sync SQLAlchemy 2.0 with psycopg 3</h4>
+            <p class="decision__over">Instead of async SQLAlchemy</p>
+            <p>One session model shared by FastAPI and the Celery workers, and fewer concepts at once. Load tests in M16 can prove otherwise.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>Why is PostgreSQL, not Redis, the source of truth for inventory?</summary>
+          <div class="qa__a">
+            <p>Selling a ticket changes several rows that must all change or none: listing, reservation, audit row, outbox row. Postgres gives one ACID transaction across them, constraints that reject impossible states, and durable commits. Redis is fast but a cache can be evicted, lost on failover or stale. That is acceptable for search results, not for deciding who owns a ticket.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>100 buyers press "reserve" on one ticket at the same moment. How exactly does one win?</summary>
+          <div class="qa__a">
+            <p>Each runs <code>UPDATE listings SET status = 'RESERVED' WHERE id = :id AND status = 'ACTIVE'</code>. The first takes the row lock; the other 99 wait. Under Read Committed, when the first commits each waiter re-checks its WHERE clause against the new row, finds <code>RESERVED</code>, and updates zero rows, which becomes a 409. No Python reads the status first, so there is no gap between check and write. If a code path ever skipped this, the partial unique index on live reservations would reject the second one.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What state is a listing in while payment is pending, and what can move it out?</summary>
+          <div class="qa__a">
+            <p><code>RESERVED</code>, from the moment it is reserved until the transfer completes. Out of it:</p>
+            <ul class="tight">
+              <li>transfer completes: <code>SOLD</code></li>
+              <li>reservation expires, is cancelled or its payment fails: back to <code>ACTIVE</code>, or <code>EXPIRED</code> if the listing's own expiry passed meanwhile</li>
+              <li>transfer fails for good and an admin abandons it: <code>CANCELLED</code>, with a refund in the same transaction</li>
+            </ul>
+            <p>The seller cannot cancel a <code>RESERVED</code> listing, because a buyer may be paying.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does a partial unique index enforce "one open listing per ticket" better than an <code>if</code> in Python?</summary>
+          <div class="qa__a">
+            <p>Two requests can run the <code>if</code> at the same instant, both see no open listing, and both insert. The index is checked by the database inside the insert itself, so the second one fails with an IntegrityError no matter how the timing falls. It is partial so that cancelled or sold listings do not count and the ticket can be listed again.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What is the dual-write problem, and how does the outbox solve it?</summary>
+          <div class="qa__a">
+            <p>You cannot commit to Postgres and publish to RabbitMQ atomically, so one can happen without the other. The outbox writes the event as a row in the same transaction as the change: the event exists exactly when the change does. A relay publishes unpublished rows and marks them, which can deliver the same message twice, so each consumer records <code>(consumer, event_id)</code> and skips anything it has seen. At-least-once delivery plus idempotent consumers gives effectively-once processing.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>A client retries <code>POST /orders</code> because the response timed out. Why is there still one order?</summary>
+          <div class="qa__a">
+            <p>The first request inserted its <code>Idempotency-Key</code> row, the order and the stored 201 response in one transaction. A retry with the same key conflicts on that row and gets the stored response replayed. If both arrive at once, the second insert waits for the first transaction to finish. The same key with a different body is a 422. <code>uq_orders_reservation</code> is the second wall.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you stop a forged or duplicated payment webhook from changing anything?</summary>
+          <div class="qa__a">
+            <p>Forged: verify an HMAC-SHA256 of the timestamp and the raw body with <code>compare_digest</code>, and reject timestamps older than 5 minutes, before parsing anything. Duplicated: insert into <code>payment_events</code> with <code>ON CONFLICT DO NOTHING</code> in the same transaction as the effect. Zero rows inserted means already applied, so answer 200 and touch nothing; an error status would make the gateway retry forever.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What happens if the process dies between two SQL statements?</summary>
+          <div class="qa__a">
+            <p>Inside one transaction: nothing persists. Postgres never commits a half-finished transaction; the dropped connection rolls it back. Between two transactions, such as committing <code>PAYMENT_PENDING</code> and then calling the gateway, the saved state says exactly where it stopped, and reconciliation finishes the job using the same idempotency key. That is why each hard problem was written as SQL with a "dies after" table.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="gaps">
+      <h2 id="gaps">Gaps fixed in plan.md</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>Two status columns for one fact.</strong> Reservation moved to the listing row; <code>tickets.status</code> now only means valid or void. For the same reason <code>listings.verification_status</code> was dropped: <code>PENDING_VERIFICATION</code> and <code>REJECTED</code> already say it.</li>
+          <li><strong>An index on a column that did not exist.</strong> <code>plan.md</code> indexes <code>listings(event_id, status)</code> but listings had no <code>event_id</code>. Copied it over, which is safe because a ticket never changes event.</li>
+          <li><strong>Columns the requirements list but the schema lacked:</strong> <code>orders.listing_id</code>, <code>payments.idempotency_key</code> and <code>provider_response</code>, <code>listings.original_price_paise</code> (the price cap needs both prices in one row).</li>
+          <li><strong>Eleven missing tables,</strong> including <code>refresh_tokens</code>, <code>idempotency_keys</code>, <code>refunds</code>, <code>reconciliation_runs</code>, <code>processed_events</code> and <code>disputes</code>.</li>
+          <li><strong>A reserved name.</strong> SQLAlchemy's declarative base owns the attribute <code>metadata</code>, so <code>audit_logs.metadata</code> became <code>details</code>.</li>
+          <li><strong>A clock that does not move.</strong> <code>now()</code> is the transaction's start time, so transactions must stay short or expiry checks compare against a stale clock.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+        <p>The draft schema loads cleanly, and every statement in the checks file is rejected by the constraint it names.</p>
+<pre><code>docker compose up -d db
+docker compose exec -T db createdb -U ticketloop schema_check
+docker compose exec -T db psql -U ticketloop -d schema_check -v ON_ERROR_STOP=1 -q -f - &lt; docs/schema-draft.sql
+docker compose exec -T db psql -U ticketloop -d schema_check -q -f - &lt; docs/schema-checks.sql
+docker compose exec -T db dropdb -U ticketloop schema_check</code></pre>
+        <p>Then the real test: close this page and draw the purchase flow on paper, with the listing, reservation, order and payment states at every step.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <span>First module</span>
+    <span class="pager__next">Next<br><strong>M1 Dev environment and skeleton</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

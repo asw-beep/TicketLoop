@@ -1,0 +1,886 @@
+/* TicketLoop build log: shared styles for every page in documentation/.
+   Each module page opens with a ticket (the one loud element); everything below it is quiet. */
+
+:root {
+  --paper: #e8ecf1;
+  --surface: #f8fafc;
+  --ink: #17203a;
+  --ink-soft: #4b5571;
+  --ink-faint: #6f7891;
+  --rule: #cdd3dd;
+  --accent: #2c44c4;
+  --accent-soft: #dde3fa;
+  --ticket: #2c44c4;
+  --ticket-ink: #ffffff;
+  --stub: #f8fafc;
+  --stub-ink: #2c44c4;
+  --code-bg: #dfe4ec;
+  --font-body: "Archivo", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
+  --measure: 42rem;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #10141f;
+    --surface: #171c2a;
+    --ink: #e5e9f2;
+    --ink-soft: #a9b1c5;
+    --ink-faint: #7f889e;
+    --rule: #2a3246;
+    --accent: #a3b0ff;
+    --accent-soft: #232c4c;
+    --ticket: #2b3da8;
+    --ticket-ink: #ffffff;
+    --stub: #1d2333;
+    --stub-ink: #a3b0ff;
+    --code-bg: #20263a;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #10141f;
+  --surface: #171c2a;
+  --ink: #e5e9f2;
+  --ink-soft: #a9b1c5;
+  --ink-faint: #7f889e;
+  --rule: #2a3246;
+  --accent: #a3b0ff;
+  --accent-soft: #232c4c;
+  --ticket: #2b3da8;
+  --ticket-ink: #ffffff;
+  --stub: #1d2333;
+  --stub-ink: #a3b0ff;
+  --code-bg: #20263a;
+  color-scheme: dark;
+}
+
+/* ---------- Base ---------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  font-stretch: 100%;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+p,
+ul,
+ol,
+dl,
+pre {
+  margin: 0 0 1rem;
+}
+
+strong {
+  font-weight: 650;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--code-bg);
+  padding: 0.08em 0.35em;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+pre {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+  overflow-wrap: normal;
+}
+
+pre .c {
+  color: var(--ink-faint);
+}
+
+.page {
+  max-width: 66rem;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 4rem;
+}
+
+@media (min-width: 48rem) {
+  .page {
+    padding: 2rem 2rem 5rem;
+  }
+}
+
+.crumbs {
+  font-size: 0.9375rem;
+  margin-bottom: 1.25rem;
+}
+
+/* ---------- The ticket (module page header) ---------- */
+
+.ticket {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8.5rem;
+  background: var(--ticket);
+  color: var(--ticket-ink);
+  border-radius: 14px;
+  margin: 0 0 2.5rem;
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.08), 0 14px 32px -18px rgb(23 32 58 / 0.55);
+}
+
+.ticket__main {
+  padding: 1.6rem 1.75rem 1.4rem;
+  min-width: 0;
+}
+
+.ticket__series {
+  margin: 0 0 0.35rem;
+  font-size: 0.9375rem;
+  opacity: 0.82;
+}
+
+.ticket__title {
+  margin: 0 0 0.75rem;
+  font-size: clamp(2.3rem, 7vw, 4.25rem);
+  line-height: 0.95;
+  font-weight: 800;
+  font-stretch: 62.5%;
+  letter-spacing: -0.005em;
+  hyphens: auto;
+  overflow-wrap: break-word;
+}
+
+.ticket__summary {
+  margin: 0 0 1.1rem;
+  max-width: 38rem;
+  font-size: 1.0625rem;
+  line-height: 1.5;
+}
+
+.ticket__fineprint {
+  margin: 0;
+  padding-top: 0.8rem;
+  border-top: 1px dashed rgb(255 255 255 / 0.4);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  opacity: 0.9;
+  max-width: 40rem;
+}
+
+.ticket__fineprint code {
+  background: rgb(255 255 255 / 0.16);
+  color: inherit;
+}
+
+.ticket__stub {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 1.25rem 0.5rem;
+  background: var(--stub);
+  color: var(--stub-ink);
+  border-radius: 0 14px 14px 0;
+  border-left: 4px dotted var(--paper);
+  text-align: center;
+}
+
+/* The two half-circle notches where a real ticket tears. */
+.ticket__stub::before,
+.ticket__stub::after {
+  content: "";
+  position: absolute;
+  left: -14px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--paper);
+}
+
+.ticket__stub::before {
+  top: -12px;
+}
+
+.ticket__stub::after {
+  bottom: -12px;
+}
+
+.ticket__number {
+  font-size: 3.6rem;
+  line-height: 0.9;
+  font-weight: 800;
+  font-stretch: 62.5%;
+}
+
+.ticket__days {
+  font-size: 0.875rem;
+  color: var(--ink-soft);
+}
+
+.stamp {
+  display: inline-block;
+  margin-top: 0.5rem;
+  padding: 0.2rem 0.5rem 0.25rem;
+  border: 2px solid currentColor;
+  border-radius: 5px;
+  font-size: 0.8125rem;
+  font-weight: 750;
+  font-stretch: 75%;
+  line-height: 1.15;
+  transform: rotate(-9deg);
+  opacity: 0.9;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ticket .stamp {
+    animation: stamp-down 520ms cubic-bezier(0.2, 0.9, 0.3, 1.2) 250ms both;
+  }
+}
+
+@keyframes stamp-down {
+  from {
+    transform: rotate(-20deg) scale(1.9);
+    opacity: 0;
+  }
+  to {
+    transform: rotate(-9deg) scale(1);
+    opacity: 0.9;
+  }
+}
+
+@media (max-width: 34rem) {
+  .ticket {
+    grid-template-columns: minmax(0, 1fr) 5.75rem;
+  }
+  .ticket__main {
+    padding: 1.25rem 1.1rem 1.1rem;
+  }
+  .ticket__number {
+    font-size: 2.6rem;
+  }
+  .ticket__summary {
+    font-size: 1rem;
+  }
+}
+
+/* ---------- Sections: heading in a left rail, content in a reading column ---------- */
+
+.section {
+  display: grid;
+  gap: 0.6rem 2.5rem;
+  padding: 2rem 0;
+  border-top: 1px solid var(--rule);
+}
+
+.section > h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  line-height: 1.3;
+  font-weight: 750;
+  font-stretch: 87.5%;
+}
+
+.section__body {
+  min-width: 0;
+  max-width: var(--measure);
+}
+
+.section__body > :last-child {
+  margin-bottom: 0;
+}
+
+@media (min-width: 54rem) {
+  .section {
+    grid-template-columns: 12.5rem minmax(0, var(--measure));
+  }
+  .section > h2 {
+    position: sticky;
+    top: 1.5rem;
+    align-self: start;
+  }
+}
+
+.section__body h3 {
+  margin: 1.75rem 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.section__body > h3:first-child {
+  margin-top: 0;
+}
+
+/* The 30-second answer: what you would say out loud. */
+.pitch {
+  font-size: 1.25rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.pitch + .pitch {
+  margin-top: 0.9rem;
+}
+
+@media (max-width: 34rem) {
+  .pitch {
+    font-size: 1.125rem;
+  }
+}
+
+.muted {
+  color: var(--ink-soft);
+}
+
+.small {
+  font-size: 0.9375rem;
+}
+
+/* ---------- What I built ---------- */
+
+.built {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.built li {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.built__what {
+  font-weight: 650;
+}
+
+.built__note {
+  color: var(--ink-soft);
+}
+
+.built code {
+  justify-self: start;
+  font-size: 0.8rem;
+}
+
+/* ---------- Decisions ---------- */
+
+.decisions {
+  display: grid;
+  gap: 1.35rem;
+}
+
+.decision {
+  padding-left: 1rem;
+  border-left: 3px solid var(--accent-soft);
+}
+
+.decision h4 {
+  margin: 0;
+  font-size: 1.0625rem;
+  line-height: 1.4;
+  font-weight: 700;
+}
+
+.decision__over {
+  margin: 0.1rem 0 0.35rem;
+  font-size: 0.9375rem;
+  color: var(--ink-faint);
+}
+
+.decision p:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- Ordered flows (a request, a purchase) ---------- */
+
+.flow {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+  counter-reset: none;
+}
+
+.flow li {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr);
+  column-gap: 0.9rem;
+}
+
+.flow--states li {
+  grid-template-columns: 2rem minmax(0, 1fr) 6.25rem;
+}
+
+.flow__n {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  margin-top: 0.7rem;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  color: var(--accent);
+  font-weight: 750;
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.flow__text {
+  padding: 0.75rem 0 0.85rem;
+  border-bottom: 1px solid var(--rule);
+  min-width: 0;
+}
+
+.flow li:last-child .flow__text {
+  border-bottom: 0;
+}
+
+.flow__text strong {
+  display: block;
+}
+
+.flow__text p {
+  margin: 0.1rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.9688rem;
+}
+
+/* Right-hand bar: the listing row's status, drawn as one continuous strip per status. */
+.flow__state {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 0.95rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.flow__state[data-state="ACTIVE"] {
+  background: transparent;
+  color: var(--ink-soft);
+  box-shadow: inset 0 0 0 1px var(--rule);
+}
+
+.flow__state[data-state="SOLD"] {
+  background: var(--ticket);
+  color: var(--ticket-ink);
+}
+
+.flow li:first-child .flow__state {
+  border-radius: 8px 8px 0 0;
+}
+
+.flow li:last-child .flow__state {
+  border-radius: 0 0 8px 8px;
+}
+
+.flow-caption {
+  font-size: 0.9375rem;
+  color: var(--ink-soft);
+}
+
+@media (max-width: 34rem) {
+  .flow--states li {
+    grid-template-columns: 1.75rem minmax(0, 1fr) 4.6rem;
+    column-gap: 0.6rem;
+  }
+  .flow__n {
+    width: 1.75rem;
+    height: 1.75rem;
+    font-size: 0.8125rem;
+  }
+  .flow__state {
+    font-size: 0.62rem;
+  }
+}
+
+/* ---------- The six hard problems ---------- */
+
+.problems {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 1.5rem;
+}
+
+.problems h4 {
+  margin: 0 0 0.15rem;
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.problems h4 span {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.4rem;
+}
+
+.problems p {
+  margin: 0 0 0.4rem;
+  color: var(--ink-soft);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 0.25rem 0.9rem;
+  margin: 0;
+  font-size: 0.9688rem;
+}
+
+.facts dt {
+  color: var(--ink-faint);
+}
+
+.facts dd {
+  margin: 0;
+  min-width: 0;
+}
+
+/* ---------- Interview questions ---------- */
+
+.qa-tools {
+  margin-bottom: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+}
+
+.qa-tools p {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--ink-soft);
+}
+
+.button {
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--accent);
+  background: transparent;
+  border: 1.5px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.3rem 0.95rem;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--accent-soft);
+}
+
+.qa {
+  border-bottom: 1px solid var(--rule);
+}
+
+.qa:first-of-type {
+  border-top: 1px solid var(--rule);
+}
+
+.qa summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1.25rem;
+  gap: 1rem;
+  padding: 0.85rem 0;
+  font-weight: 620;
+  cursor: pointer;
+  list-style: none;
+}
+
+.qa summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A plus that turns into a minus when the answer is open. */
+.qa summary::after {
+  content: "";
+  align-self: center;
+  width: 0.85rem;
+  height: 0.85rem;
+  justify-self: end;
+  background:
+    linear-gradient(currentColor, currentColor) center / 100% 2px no-repeat,
+    linear-gradient(currentColor, currentColor) center / 2px 100% no-repeat;
+  color: var(--ink-faint);
+}
+
+.qa[open] summary::after {
+  background: linear-gradient(currentColor, currentColor) center / 100% 2px no-repeat;
+  color: var(--accent);
+}
+
+.qa[open] summary {
+  color: var(--accent);
+}
+
+.qa__a {
+  padding: 0 0 1rem;
+}
+
+.qa__a p:last-child,
+.qa__a ul:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- Plain lists ---------- */
+
+.tight {
+  padding-left: 1.2rem;
+}
+
+.tight li + li {
+  margin-top: 0.5rem;
+}
+
+/* ---------- Prev / next ---------- */
+
+.pager {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 2.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.9375rem;
+}
+
+.pager a,
+.pager span {
+  display: block;
+  color: var(--ink-soft);
+}
+
+.pager a strong {
+  display: block;
+  color: var(--accent);
+  font-size: 1.0625rem;
+}
+
+.pager__next {
+  text-align: right;
+}
+
+/* ---------- Index page ---------- */
+
+.masthead {
+  padding: 1.5rem 0 2rem;
+}
+
+.masthead h1 {
+  margin: 0 0 0.9rem;
+  font-size: clamp(3rem, 11vw, 6.5rem);
+  line-height: 0.88;
+  font-weight: 800;
+  font-stretch: 62.5%;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+}
+
+.masthead p {
+  max-width: 40rem;
+  margin: 0;
+  font-size: 1.1875rem;
+  line-height: 1.5;
+}
+
+.masthead p + p {
+  margin-top: 0.75rem;
+  font-size: 1rem;
+  color: var(--ink-soft);
+}
+
+.modules {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.mod {
+  display: grid;
+  grid-template-columns: 4.75rem minmax(0, 1fr) auto;
+  align-items: stretch;
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.mod__num {
+  display: grid;
+  place-items: center;
+  font-size: 1.9rem;
+  font-weight: 800;
+  font-stretch: 62.5%;
+  border-radius: 10px 0 0 10px;
+  border-right: 3px dotted var(--paper);
+}
+
+.mod__body {
+  padding: 0.8rem 1rem;
+  min-width: 0;
+}
+
+.mod__title {
+  display: block;
+  font-weight: 700;
+  font-size: 1.0625rem;
+  line-height: 1.35;
+}
+
+.mod__goal {
+  display: block;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  margin-top: 0.15rem;
+}
+
+.mod__status {
+  align-self: center;
+  padding: 0 1rem 0 0.25rem;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+/* Finished: an issued ticket you can open. */
+.mod--done {
+  background: var(--ticket);
+  color: var(--ticket-ink);
+}
+
+.mod--done .mod__num {
+  background: var(--stub);
+  color: var(--stub-ink);
+}
+
+.mod--done .mod__goal {
+  opacity: 0.88;
+}
+
+a.mod--done:hover .mod__title {
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+/* Next and later: not issued yet, drawn as an outline. */
+.mod--next,
+.mod--later {
+  border: 1.5px dashed var(--rule);
+  color: var(--ink-soft);
+}
+
+.mod--next {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.mod--next .mod__num {
+  color: var(--accent);
+  border-right-color: var(--rule);
+}
+
+.mod--next .mod__status {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.mod--later .mod__num {
+  color: var(--ink-faint);
+  border-right: 1.5px dashed var(--rule);
+}
+
+.mod--later .mod__title {
+  font-weight: 600;
+}
+
+@media (max-width: 34rem) {
+  .mod {
+    grid-template-columns: 3.6rem minmax(0, 1fr);
+  }
+  .mod__num {
+    font-size: 1.5rem;
+  }
+  .mod__status {
+    grid-column: 2;
+    padding: 0 1rem 0.75rem;
+    margin-top: -0.4rem;
+    align-self: start;
+  }
+}
+
+/* ---------- Print: white paper, every answer visible ---------- */
+
+@media print {
+  :root {
+    --paper: #ffffff;
+  }
+  body {
+    font-size: 11pt;
+  }
+  .crumbs,
+  .qa-tools,
+  .pager {
+    display: none;
+  }
+  .ticket,
+  .mod--done,
+  .flow__state {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    box-shadow: none;
+  }
+  .section {
+    break-inside: avoid-page;
+  }
+  .section > h2 {
+    position: static;
+  }
+}
