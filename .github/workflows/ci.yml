@@ -46,7 +46,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv publishes exact tags only (no floating v10), so pin a release.
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           version: "0.11.2" # the same uv as the Dockerfile
           enable-cache: true # keyed on uv.lock, so dependencies download once
