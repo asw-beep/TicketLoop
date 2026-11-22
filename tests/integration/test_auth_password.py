@@ -70,6 +70,22 @@ def test_changing_the_password_replaces_it_and_ends_every_session(
     assert can_log_in(api, user["email"], NEW_PASSWORD)
 
 
+def test_changing_the_password_clears_this_browsers_refresh_cookie(api: TestClient) -> None:
+    # Its token was just revoked. Left in place, the next page load would send it to
+    # /auth/refresh, where a revoked token reads as a stolen one and logs a false alarm.
+    _, tokens = registered_and_logged_in(api)
+
+    response = api.post(
+        CHANGE,
+        headers=bearer(tokens["access_token"]),
+        json={"current_password": PASSWORD, "new_password": NEW_PASSWORD},
+    )
+
+    set_cookie = response.headers.get("set-cookie", "")
+    assert set_cookie.startswith('refresh_token=""') and "Max-Age=0" in set_cookie
+    assert "Path=/api/v1/auth" in set_cookie
+
+
 def test_a_wrong_current_password_gives_401_and_changes_nothing(
     api: TestClient, db_session: Session
 ) -> None:
@@ -126,6 +142,20 @@ def test_a_reset_request_emails_a_token_and_stores_only_its_hash(
     assert row.expires_at - row.created_at == pytest.approx(
         timedelta(minutes=30), abs=timedelta(seconds=5)
     )
+
+
+def test_the_reset_email_links_to_the_frontend_with_the_token_in_the_fragment(
+    api: TestClient, mailbox: InMemoryEmailSender
+) -> None:
+    # After "#" the token stays in the browser: it is not sent to any server, so it does
+    # not reach access logs or a Referer header.
+    user = register(api)
+
+    api.post(RESET_REQUEST, json={"email": user["email"]})
+
+    [message] = mailbox.sent
+    token = token_in(message.body)
+    assert f"http://localhost:5173/reset-password#token={token}" in message.body
 
 
 def test_a_reset_request_for_an_unknown_email_looks_exactly_the_same(

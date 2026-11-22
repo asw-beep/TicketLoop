@@ -1,4 +1,7 @@
-# Runs on every push and pull request: lint, then every test against a real Postgres 17.
+# Runs on every push and pull request, three jobs side by side:
+#   test       the backend: lint, migrations, every test against a real Postgres 17
+#   frontend   the React app: format, lint, types, unit tests, build, and API types in sync
+#   e2e        the browser tests: Chrome clicking through Vite, the API, Postgres and Mailpit
 # M16 grows this into the full pipeline (type checks, Redis, RabbitMQ, concurrency tests).
 name: CI
 
@@ -68,3 +71,117 @@ jobs:
 
       - name: Tests
         run: uv run pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24 # the LTS line; package.json asks for >=24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # For the API-types check below, which exports the OpenAPI description with Python.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.2"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: npm ci # exactly package-lock.json, and fails if it disagrees with package.json
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # Regenerate openapi.json and schema.d.ts from the backend. A difference means someone
+      # changed the API without regenerating, and the frontend's types would be lying.
+      - name: API types match the backend
+        run: |
+          npm run api:types
+          git diff --exit-code -- openapi.json src/api/schema.d.ts
+
+      - name: Build
+        run: npm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ticketloop
+          POSTGRES_PASSWORD: ticketloop
+          POSTGRES_DB: ticketloop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ticketloop -d ticketloop"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      # Catches the reset emails; the tests read them through its API.
+      mailpit:
+        image: axllent/mailpit:v1.33.1
+        ports:
+          - 1025:1025
+          - 8025:8025
+
+    env:
+      DATABASE_URL: postgresql+psycopg://ticketloop:ticketloop@localhost:5432/ticketloop
+      ENVIRONMENT: local # as on a laptop: email goes to Mailpit on localhost:1025
+      LOG_JSON: "false"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.2"
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          uv sync --locked
+          npm ci --prefix frontend
+
+      - name: Migrate
+        run: uv run alembic upgrade head
+
+      # Playwright starts the API and the dev server itself (playwright.config.ts).
+      - name: Browser tests
+        working-directory: frontend
+        run: npx playwright test
+
+      - name: Keep the report and traces of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          retention-days: 7

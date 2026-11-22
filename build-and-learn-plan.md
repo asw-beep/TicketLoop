@@ -4,7 +4,7 @@ Nov 16, 2026 · @Aswin Mony
 
 ## What you are building and how to use this plan
 
-TicketLoop is a FastAPI modular monolith for fixed-price ticket resale. Its real purpose is to show that a backend stays correct under concurrent requests and partial failures. This plan splits it into 19 modules over about 110 focused sessions (101 without the optional frontend), built in an order where each module depends only on what came before.
+TicketLoop is a FastAPI modular monolith for fixed-price ticket resale. Its real purpose is to show that a backend stays correct under concurrent requests and partial failures. This plan splits it into 19 modules over about 110 focused sessions, built in an order where each module depends only on what came before.
 
 The source is `plan.md` (v1.0) in the repo. It is the only file so far; no code exists yet.
 
@@ -24,7 +24,7 @@ Most of the API is CRUD that sets these up. Spend your deepest learning time her
 - One "day" is one focused session of 3 to 4 hours. At 5 sessions a week the plan runs about 22 weeks. With less time, stretch the days; do not skip the Learn steps.
 - You know Python basics (functions, classes, venv, pip) and everyday Git. If not, do the optional pre-week in M0.
 - You work on Windows 11 with a mixed setup. Your code, the API, tests and the frontend run natively on Windows; Postgres, Redis, RabbitMQ, Celery and the monitoring tools run in Docker Desktop, which uses WSL2 behind the scenes. Celery and Redis do not support Windows, which is why they always live in containers.
-- The React frontend is the last module and optional. The backend is the point of the project.
+- The React frontend grows a slice at a time. From M3 on, each module adds the screens for what it builds, so you test every feature by hand in a browser the day it lands, not at the end. M18 is a polish pass over screens that already work. The backend is still the point of the project: a module's screens are thin and never hold business rules.
 
 ### How each module is laid out
 
@@ -51,7 +51,7 @@ Most of the API is CRUD that sets these up. Spend your deepest learning time her
 
 ```mermaid
 flowchart TB
-    client["Browser or React client<br/>M18, optional; curl works too"]
+    client["React client in frontend/<br/>a slice per module from M3; curl works too"]
     api["FastAPI app (modular monolith)<br/>M3 to M14 modules<br/>Rule: state change + outbox row in one transaction"]
     gw["Fake payment gateway · M10<br/>payment intents, HMAC-signed webhooks"]
     redis["Redis · M14<br/>cache-aside reads, rate-limit counters"]
@@ -92,7 +92,7 @@ Build the 19 modules strictly in this order. Each one leaves you with something 
 | M0 | Foundations and design | Requirements, ERD, state diagrams, API contract in `docs/` | nothing | You cannot reason about races in tables you have not designed. | 0 |
 | M1 | Dev environment and skeleton | FastAPI app + Postgres in Docker Compose, config, JSON logs, pytest running | M0 | Every later module plugs into this shape. | 1 |
 | M2 | Database layer | SQLAlchemy models, sessions, Alembic migrations, test database | M1 | All state lives in Postgres; learn transactions here before you need them. | 1 |
-| M3 | Identity and auth | Register, login, JWT access + refresh rotation, roles, first CI run | M2 | Every protected endpoint after this needs a current user. | 1 |
+| M3 | Identity and auth | Register, login, JWT access + refresh rotation, roles, first CI run, first screens | M2 | Every protected endpoint after this needs a current user. | 1 |
 | M4 | Events, tickets, document storage | Event CRUD (admin), ticket upload to MinIO, ownership checks | M3 | Listings point at tickets; tickets point at events and owners. | 1 |
 | M5 | Listings, verification, audit log | Listing state machine, admin approve/reject, partial unique index, audit helper | M4 | First real state machine; audit starts now because every later state change must write it. | 2 |
 | M6 | Discovery | Search, filters, keyset pagination, indexes checked with `EXPLAIN ANALYZE` | M5 | Needs active listings to search. | 2 |
@@ -107,7 +107,7 @@ Build the 19 modules strictly in this order. Each one leaves you with something 
 | M15 | Observability | Prometheus metrics, Grafana dashboards, OpenTelemetry traces | M11 | Moved before load tests: you need p95 and queue-depth graphs to read a load test. | 7 |
 | M16 | CI/CD, security, docs | Full GitHub Actions pipeline, security pass, ADRs, README | M15 | Hardens and explains the finished backend before it is measured. | 7 |
 | M17 | Performance, concurrency and resilience testing | Fourteen kinds of test (load, stress, spike, soak, races, deadlocks, lock contention, isolation, idempotency, integrity, coordination, failure recovery, connection pool, latency) and resume numbers | M16 | Runs once the backend is finished, so every number describes the real system. | 6 + 7 |
-| M18 | Frontend (optional) | React + TypeScript client for the main flows | M12 | Only after the backend is correct. | separate |
+| M18 | Frontend polish | A design, accessibility and states pass over the screens each module added | M17 | The screens exist from M3 on, so every module is tested by hand as it lands; this module makes them good. | separate |
 
 Five changes from plan.md's phase order, each on purpose:
 
@@ -116,6 +116,7 @@ Five changes from plan.md's phase order, each on purpose:
 3. Observability (M15) comes before the testing campaign (M17), because load-test numbers are unreadable without dashboards.
 4. Reservation expiry first runs as a plain script in M8 and moves onto Celery beat in M11.
 5. Performance, concurrency and resilience testing runs as one campaign (M17) after the backend is finished, hardened and documented. Each module still ships its own correctness tests, because a module is not done without them.
+6. The frontend arrives a slice per module from M3, not whole in M18, so every feature can be tried in a browser as soon as it exists. Each module's **Screens** paragraph lists its slice; M18 polishes the result.
 
 ## Module-by-module breakdown
 
@@ -258,20 +259,25 @@ Each module lists what to know before you start, what to watch and read, what to
 - Article: [Refresh Token Rotation](https://auth0.com/docs/secure/tokens/refresh-tokens/refresh-token-rotation) (Auth0). Read for the reuse-detection idea, then build it yourself.
 - Article: [PyJWT documentation](https://pyjwt.readthedocs.io/en/stable/)
 - Article: [Create PostgreSQL service containers](https://docs.github.com/en/actions/tutorials/use-containerized-services/create-postgresql-service-containers) (GitHub docs)
+- Video: [React in 100 Seconds](https://www.youtube.com/watch?v=Tn6-PIqc4UM) and [TypeScript in 100 Seconds](https://www.youtube.com/watch?v=zQnBQ4tB3ZA) (Fireship), for the first screens
+- Article: [react.dev Learn](https://react.dev/learn) up to "Managing State", and the [Vite guide](https://vite.dev/guide/)
 
 **Build**
 
 1. `users` migration: unique email (store lowercased), `role` (USER or ADMIN), `account_status`. A seller is any user who owns a verified ticket, so it needs no role.
 2. Argon2id hashing. Never log a password, even on failure.
-3. `POST /auth/register` and `POST /auth/login`, returning a 15-minute access token and a 7-day refresh token.
+3. `POST /auth/register` and `POST /auth/login`, returning a 15-minute access token in the body and a 7-day refresh token in an HttpOnly, SameSite=Strict cookie scoped to `/api/v1/auth`, so page scripts never touch it.
 4. A `refresh_tokens` table that stores a hash of each token plus `family_id`, `revoked_at` and `replaced_by`. On refresh, issue a new pair and revoke the old one. If a revoked token is used again, revoke the whole family: someone stole it.
-5. `POST /auth/logout` revokes the current refresh token.
+5. `POST /auth/logout` revokes the session the cookie belongs to and clears the cookie.
 6. Dependencies: `get_current_user` (decode, check expiry, load the user, reject SUSPENDED) and `require_admin`.
 7. `GET /users/me` and `PATCH /users/me`; `POST /users/me/password` and the password reset (request and confirm) from FR-01, each of which revokes every refresh token the user holds.
 8. Tests for wrong password, expired token, tampered token, reused refresh token, suspended user and a normal user calling an admin route.
 9. `.github/workflows/ci.yml` running ruff and pytest against a Postgres service container.
+10. The first screens, in `frontend/` (Vite, React, TypeScript, types generated from `/openapi.json`): register, log in, your account (edit your name, change your password), forgot and reset password. Mailpit in Docker catches the reset email at `localhost:8025`. Browser tests click through all of it in CI.
 
-**Done when:** all auth tests pass in CI, and replaying a used refresh token logs out every session in that family.
+**Screens:** the list in item 10. The access token stays in memory, the browser holds the refresh cookie, and refreshes never overlap, even across tabs.
+
+**Done when:** all auth tests pass in CI, replaying a used refresh token logs out every session in that family, and you can register, reset a forgotten password from the emailed link, and log out everywhere, all in the browser.
 
 **Explain it:** Why can you not truly log out a JWT access token, and how do short expiry plus refresh revocation work around it? Why store a hash of the refresh token instead of the token?
 
@@ -301,6 +307,8 @@ Each module lists what to know before you start, what to watch and read, what to
 4. Evidence upload: check content type and size, and store the file under a random key, never the user's filename.
 5. Ticket verification: an admin moves PENDING to VERIFIED or REJECTED. plan.md is clear that a screenshot proves nothing; real verification needs a provider API later.
 6. Tests: user B gets 404 for user A's ticket; an anonymous upload is rejected; an oversized file is rejected.
+
+**Screens:** an admin events page (create, edit, list); a seller's **My tickets** page to register a ticket and upload purchase evidence, then open it through its presigned link. Someone else's ticket address shows the not-found page.
 
 **Done when:** an IDOR test proves no cross-user access on every ticket endpoint.
 
@@ -332,6 +340,8 @@ Each module lists what to know before you start, what to watch and read, what to
 6. Endpoints: create (DRAFT to PENDING\_VERIFICATION), PATCH price only in allowed states, DELETE cancels only from ACTIVE, plus admin pending, approve and reject.
 7. Listing expiry from ACTIVE to EXPIRED as a plain query for now; it gets a schedule in M11.
 8. Tests: every illegal transition fails; a seller cannot list someone else's ticket; a second open listing for one ticket fails; the audit row rolls back together with a failed change.
+
+**Screens:** **List this ticket** with a price, and each listing's status; an admin queue of pending listings with approve and reject; a listing's status history read from the audit log.
 
 **Done when:** a table-driven test tries every (from, to) pair and only the allowed ones succeed.
 
@@ -365,6 +375,8 @@ Each module lists what to know before you start, what to watch and read, what to
 5. `GET /events/{id}/listings`.
 6. Response models that expose public fields only: no seller email, no ticket documents.
 
+**Screens:** the public search page: filters, results with infinite scroll over keyset cursors, and a listing detail page.
+
 **Done when:** page 500 loads as fast as page 1, and no common filter does a Seq Scan on `listings` at 100,000 rows.
 
 **Explain it:** Why does `OFFSET 10000` get slower as the offset grows? Why does the order of columns in a composite index matter?
@@ -394,6 +406,8 @@ Each module lists what to know before you start, what to watch and read, what to
 5. Three allocation strategies behind one interface: FCFS (`ORDER BY created_at, id`), random (`secrets.SystemRandom`, with the candidate list and choice written to the audit log) and seller-selected (validate that the chosen interest is ACTIVE).
 6. The winning interest becomes SELECTED; the rest stay ACTIVE as fallbacks if the reservation later expires. Record this choice in an ADR.
 7. Tests: duplicate interest, seller interest, FCFS picks the earliest, and random picks spread roughly evenly over 1,000 runs.
+
+**Screens:** an **I'm interested** button on a listing and a **My interests** page with withdraw; the seller sees the interested buyers and picks a winner.
 
 **Done when:** each strategy has tests, and the audit log alone is enough to explain any past pick.
 
@@ -435,6 +449,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 8. `app/workers/expire_reservations.py`, a loop every 30 seconds: claim expired CREATED reservations with `FOR UPDATE SKIP LOCKED`, mark them EXPIRED and release each listing with a conditional UPDATE. It leaves PAYMENT\_PENDING alone until M10 makes that safe.
 9. Run two expiry workers together and assert each reservation expired exactly once, by counting audit rows.
 
+**Screens:** **Reserve** on a listing, a countdown from `expires_at`, and a plain message when someone else got there first or the hold ran out. Open two browsers and race them.
+
 **Done when:** plan.md's Phase 3 exit test passes 20 runs in a row: 100 concurrent buyers, exactly one reservation.
 
 **Explain it:** Under READ COMMITTED, what does the second UPDATE do while the first is uncommitted, and what does it see afterwards? When would you choose `SELECT ... FOR UPDATE` over a conditional UPDATE? Why can FastAPI's `TestClient` never prove concurrency safety?
@@ -467,6 +483,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 5. Checks: the reservation must be the buyer's own, unexpired and CREATED.
 6. `GET /orders/{id}` for the buyer or seller, and `GET /orders/me` with keyset pagination.
 7. Tests: 50 concurrent requests with the same key (plan.md concurrency test 2); same key with a different body; an expired reservation; another user's reservation.
+
+**Screens:** checkout from a reservation into an order. The page makes one `Idempotency-Key` per checkout click and reuses it on retries: the browser's half of idempotency. A **My orders** page with each order's status.
 
 **Done when:** 50 concurrent requests sharing one `Idempotency-Key` create exactly one order, and all 50 receive the same response body.
 
@@ -501,6 +519,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 6. A reconciliation script (it moves to Celery beat in M11): find payments PENDING for more than N minutes, ask the gateway, and fix local state through the same transition functions. Each run writes a `reconciliation_runs` row listing every fix; a second run changes nothing.
 7. Refunds: PAID to REFUND\_PENDING to REFUNDED through a gateway refund and a refund webhook, deduplicated the same way.
 8. Tests for plan.md's list: a webhook delivered 10 times changes state once; a forged signature returns 401 and changes nothing; a late webhook after reconciliation already fixed things is a no-op; expiry racing payment success, run 50 times, never releases a paid listing; a payment timeout leaves a recoverable order.
+
+**Screens:** payment through fakepay's own page with its success, failure and delay choices; the order page polls until the payment settles.
 
 **Done when:** plan.md's Phase 4 exit test holds: delayed, duplicated and failed payment events all recover correctly, each with an automated test.
 
@@ -537,6 +557,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 6. Move reservation expiry, listing expiry and reconciliation onto Celery beat.
 7. Failure drills: stop RabbitMQ while making payments and watch outbox rows wait, then start it and see them all published; `docker kill` a worker mid-task and see the message redelivered and ignored the second time; send a poison message and find it in the DLQ.
 
+**Screens:** none new. The pages from M8 to M10 keep working while the work moves onto workers; RabbitMQ's management page at `localhost:15672` shows the queues.
+
 **Done when:** plan.md's Phase 5 exit test holds: events survive a broker outage and worker crashes with nothing lost and nothing applied twice.
 
 **Explain it:** Why not simply publish to RabbitMQ right after the commit? Exactly-once delivery is impossible, so how do you still get an exactly-once effect? What does `acks_late` fix, and what new risk does it add?
@@ -568,6 +590,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 7. `GET /notifications` (own only, paginated) and `PATCH /notifications/{id}/read`.
 8. Tests: a paid order is never COMPLETED before the transfer succeeds (FR-10); a duplicate payment event creates one transfer; a permanent failure ends in manual review plus refund.
 
+**Screens:** a notifications bell with an unread count; the order page shows transfer progress, retries and refunds; the buyer's **My tickets** shows the transferred ticket.
+
 **Done when:** one integration test runs the whole happy path (reserve, order, pay, transfer, notify), and another runs the failed-transfer path to a refund.
 
 **Explain it:** Why is an order not COMPLETED at PAID? Why is a refund after a failed transfer a compensation and not a rollback?
@@ -595,6 +619,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 4. Admin suspension: revoke the user's refresh tokens (M3) and cancel their active listings through the state machine.
 5. `GET /users/me/history`: orders, payments and transfers merged into one paginated timeline.
 6. A test that lists every `/admin` route from the app's router and proves a normal user gets 403 on each.
+
+**Screens:** **Open a dispute** with evidence from an order; an admin dispute queue with resolve, refund and suspend; a **History** page listing every transaction; the message a suspended account sees.
 
 **Done when:** that route-enumerating test passes, so no admin route can be added later without protection.
 
@@ -628,6 +654,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 5. A rate-limit dependency (sliding-window counter, or token bucket in a Lua script) keyed on user or IP, with per-endpoint limits. Login is keyed on email plus IP.
 6. Decide per endpoint what happens when Redis is down: the cache fails open (read from Postgres); record your rate-limiter choice in an ADR.
 7. Tests: second call is a cache hit; a reservation attempt on a listing shown in a stale cached search still gets 409 from Postgres; the sixth login in a minute gets 429.
+
+**Screens:** the 429 message with a countdown from `Retry-After` on login, search and reserve.
 
 **Done when:** with Redis stopped, the app still gives correct answers, only slower, and the cache hit ratio is measurable.
 
@@ -664,6 +692,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 6. Commit the Grafana dashboard JSON and provision it automatically.
 7. Define alert rules: outbox backlog above a threshold for 5 minutes, error rate above 1%, webhook failures.
 
+**Screens:** none in the app; Grafana is this module's screen. Error messages show the response's request ID, so a screenshot from a user leads straight to the trace.
+
 **Done when:** you can take one failed purchase, find it in the logs by order ID, open its trace and point at the step that failed and how long each step took.
 
 **Explain it:** Why record latency as a histogram rather than an average? Why is a user ID a terrible metric label? How does one trace continue across RabbitMQ?
@@ -695,6 +725,8 @@ This is the heart of the project. Take the full eight days, and do the experimen
 4. Secrets: `.env` never committed, GitHub Actions secrets in CI, and a note on how production would store them.
 5. Documentation: a README with a one-command start, an architecture diagram and a demo script; the notes from every module; ADRs for sync SQLAlchemy, lock strategy, idempotency, outbox relay, compensation, cache invalidation and Redis failure behaviour. Leave an empty Results section in the README for M17's numbers.
 6. A demo script that runs a full purchase and one failure drill in under 5 minutes, for interviews.
+
+**Screens:** the frontend joins the security pass (`npm audit`, a Content Security Policy) and the README's quick start runs both halves.
 
 **Done when:** plan.md's Phase 7 exit holds: a fresh machine runs `docker compose up`, CI is green, and a reviewer can follow any request through code, logs, metrics and traces.
 
@@ -788,38 +820,39 @@ Every number is reported with the hardware, the data volume and the script that 
 8. `docs/test-results.md` with the tables, Grafana screenshots and hardware; copy the resume numbers into the README's Results section.
 9. Add the fast suites (isolation, idempotency, integrity, small-scale races) to the M16 CI pipeline.
 
+**Screens:** none; the load tests call the API directly. The browser tests run once more against the tuned stack as a smoke check.
+
 **Done when:** every one of the fourteen tests has a script, a recorded result, and either a pass or an explained failure; `check_invariants.sql` returned zero rows after every run; the resume table is filled from real runs; and plan.md's Phase 6 exit holds.
 
 **Explain it:** Where is your bottleneck, and what is the evidence? What does p99 tell you that an average hides? How do you produce a deadlock, and how does TicketLoop avoid one? Which anomaly does Read Committed allow, and why does it not hurt TicketLoop? How do you know you never oversold a ticket? What would you change first to handle ten times the traffic?
 
-### M18 · Frontend, optional (Days 102 to 110)
+### M18 · Frontend polish (Days 102 to 110)
 
-**Goal:** a React and TypeScript app covering browse, search, interest, reservation with a countdown, payment through the fake gateway, orders and notifications, plus the seller listing flow and the admin queue.
+**Goal:** every screen built since M3 gets a design and accessibility pass and consistent loading, empty and error states, and works on a phone; a non-technical friend can buy a ticket through it.
 
 **Prerequisites**
 
-- Tech: Node LTS, Vite, React, TypeScript, TanStack Query, openapi-typescript.
-- Knowledge: modern JavaScript (modules, async/await, fetch); React components, props, state and effects; TypeScript basics; CORS; the trade-offs of keeping tokens in memory versus cookies.
+- Tech: the `frontend/` app as it stands, Playwright, axe.
+- Knowledge: the React and TanStack Query you used module by module; the trade-offs of keeping tokens in memory versus cookies; CORS and Content Security Policy.
 
 **Learn first**
 
-- Video: [React in 100 Seconds](https://www.youtube.com/watch?v=Tn6-PIqc4UM) and [TypeScript in 100 Seconds](https://www.youtube.com/watch?v=zQnBQ4tB3ZA) (Fireship)
-- Video: [React Course, Beginner's Tutorial for React](https://www.youtube.com/watch?v=bMknfKXIFA8) (freeCodeCamp, 2022). The core concepts have not changed.
-- Article: [react.dev Learn](https://react.dev/learn), [TypeScript Handbook](https://www.typescriptlang.org/docs/handbook/intro.html), [Vite guide](https://vite.dev/guide/)
-- Article: [TanStack Query overview](https://tanstack.com/query/latest/docs/framework/react/overview) and [openapi-typescript](https://openapi-ts.dev/)
+- Article: [TanStack Query overview](https://tanstack.com/query/latest/docs/framework/react/overview), on caching and background refetching
+- Article: [web.dev Learn Accessibility](https://web.dev/learn/accessibility) and the [Playwright accessibility testing guide](https://playwright.dev/docs/accessibility-testing)
+- Article: [Web Locks API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API) and [BroadcastChannel](https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel) (MDN)
 
 **Build**
 
-1. A Vite React-TS app in `frontend/`, separate from the backend as plan.md asks.
-2. TypeScript types generated from FastAPI's `/openapi.json`, so the backend contract drives the frontend.
-3. Pages: search with infinite scroll over keyset cursors, listing detail, reserve with a countdown from `expires_at`, checkout through fakepay, order status polling, a notifications bell.
-4. Auth: access token in memory; on a 401, refresh once and retry.
-5. The client generates an `Idempotency-Key` per checkout click and reuses it on retries: the browser's half of idempotency.
-6. Seller pages (create listing, upload evidence) and admin pages (pending listings, disputes).
+1. One layout, type scale and spacing across every screen; list what confused you on each while building the modules, and fix it.
+2. Loading, empty and error states on every page, so nothing ever shows a blank wait or a raw status code.
+3. An axe check inside the Playwright tests, and a keyboard-only walk through the whole purchase.
+4. Session polish: logging out in one tab logs out the others at once (BroadcastChannel), and the access token refreshes shortly before it expires instead of after a 401.
+5. Route-level code splitting and a bundle size budget.
+6. A production build served from the API's origin, or behind one reverse proxy; if the two ever split, CORS allows only the frontend's origin.
 
-**Done when:** a non-technical friend can buy a ticket through the UI on your local stack.
+**Done when:** a non-technical friend can buy a ticket through the UI on your local stack, and the browser tests with the axe check pass in CI.
 
-**Explain it:** where does the browser get the `Idempotency-Key`, and when must it change?
+**Explain it:** why must two tabs never refresh at the same moment, and how does a Web Lock prevent it without any server change?
 
 ## Day-by-day plan
 
@@ -861,7 +894,7 @@ Three rules keep it honest:
 - [ ] **Day 17 · M3.** Read the FastAPI OAuth2 and JWT tutorial. Login issuing access and refresh tokens; `get_current_user`.
 - [ ] **Day 18 · M3.** Read Auth0's rotation page. `refresh_tokens` table, rotation, family revocation on reuse, logout.
 - [ ] **Day 19 · M3.** `require_admin`, the suspension check, `GET` and `PATCH /users/me`; tests for every auth failure case.
-- [ ] **Day 20 · M3.** Watch Nana's GitHub Actions tutorial. CI workflow with ruff, pytest and a Postgres service container.
+- [ ] **Day 20 · M3.** Watch Nana's GitHub Actions tutorial. CI workflow with ruff, pytest and a Postgres service container. Watch React and TypeScript in 100 Seconds; the first screens in `frontend/`, with Mailpit for the reset email.
 
 ### Week 5 · Days 21 to 25 · Identity finish, events and tickets (M3, M4)
 
@@ -991,20 +1024,20 @@ Three rules keep it honest:
 - [ ] **Day 99 · M17.** Read Principles of Chaos Engineering. Toxiproxy and every section 12 failure drill, with the invariants check after each.
 - [ ] **Day 100 · M17.** Fix what broke and re-run every test that failed.
 
-### Week 21 · Days 101 to 105 · Results and frontend start (M17, M18)
+### Week 21 · Days 101 to 105 · Results and frontend polish (M17, M18)
 
 - [ ] **Day 101 · M17 · Checkpoint.** `docs/test-results.md`, the resume numbers and the README's Results section. This is plan.md's Phase 6 exit.
-- [ ] **Day 102 · M18.** Watch React and TypeScript in 100 Seconds; start the freeCodeCamp React course. Scaffold the Vite React-TS app.
-- [ ] **Day 103 · M18.** Continue the React course. Generate types from `/openapi.json`; an API client that refreshes once on 401.
-- [ ] **Day 104 · M18.** Read the TanStack Query overview. Search page with infinite scroll over keyset cursors.
-- [ ] **Day 105 · M18.** Listing detail, interest, and reserve with a countdown.
+- [ ] **Day 102 · M18.** List every screen and what confused you on it; one layout, type scale and spacing for all of them.
+- [ ] **Day 103 · M18.** Loading, empty and error states on every page.
+- [ ] **Day 104 · M18.** Read web.dev's accessibility course. An axe check in the Playwright tests; a keyboard-only walk through the purchase.
+- [ ] **Day 105 · M18.** Read MDN on Web Locks and BroadcastChannel. Cross-tab logout, and refresh shortly before expiry.
 
-### Week 22 · Days 106 to 110 · Frontend finish (M18)
+### Week 22 · Days 106 to 110 · Frontend polish (M18)
 
-- [ ] **Day 106 · M18.** Checkout through fakepay with a client-generated `Idempotency-Key`; order status polling.
-- [ ] **Day 107 · M18.** Notifications bell and order history.
-- [ ] **Day 108 · M18.** Seller pages: create listing and upload evidence.
-- [ ] **Day 109 · M18.** Admin pages: pending listings and disputes.
+- [ ] **Day 106 · M18.** Route-level code splitting and a bundle size budget.
+- [ ] **Day 107 · M18.** A production build served from the API's origin; CORS and a Content Security Policy.
+- [ ] **Day 108 · M18.** A phone-width pass (390 px) over every screen.
+- [ ] **Day 109 · M18.** One browser test for the whole purchase, from search to transferred ticket, running in CI.
 - [ ] **Day 110 · M18 · Checkpoint.** A non-technical friend buys a ticket through the UI; fix whatever confused them.
 
 ## How to avoid building blindly

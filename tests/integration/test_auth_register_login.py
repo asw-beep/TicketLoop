@@ -102,13 +102,15 @@ def test_a_rejected_password_is_not_echoed_back(api: TestClient) -> None:
 # ---------------------------------------------------------------- login
 
 
-def test_login_returns_a_token_pair(api: TestClient) -> None:
+def test_login_returns_an_access_token_and_sets_the_refresh_cookie(api: TestClient) -> None:
     user = register(api)
 
-    pair = login(api, user["email"])
+    response = api.post(LOGIN, json={"email": user["email"], "password": PASSWORD})
 
-    assert set(pair) == {"access_token", "refresh_token", "token_type", "expires_in"}
-    assert (pair["token_type"], pair["expires_in"]) == ("bearer", 900)
+    body = response.json()
+    assert set(body) == {"access_token", "token_type", "expires_in"}
+    assert (body["token_type"], body["expires_in"]) == ("bearer", 900)
+    assert "refresh_token" in response.cookies
 
 
 def test_login_ignores_the_case_of_the_email(api: TestClient) -> None:

@@ -43,10 +43,6 @@ class LoginIn(RequestModel):
     password: GivenPassword
 
 
-class RefreshIn(RequestModel):
-    refresh_token: OpaqueToken
-
-
 class UpdateMeIn(RequestModel):
     full_name: FullName
 
@@ -76,8 +72,9 @@ class UserOut(ResponseModel):
     created_at: datetime
 
 
-class TokenPair(ResponseModel):
+class AccessTokenOut(ResponseModel):
+    """What login and refresh return in the body. The refresh token goes in a cookie only."""
+
     access_token: str
-    refresh_token: str
     token_type: Literal["bearer"] = "bearer"
     expires_in: int  # seconds until the access token expires

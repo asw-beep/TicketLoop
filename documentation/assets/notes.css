@@ -887,3 +887,23 @@ a.mod--done:hover .mod__title {
     position: static;
   }
 }
+
+/* ---------- Screenshots ---------- */
+
+.shot {
+  margin: 1.5rem 0 0;
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+}
+
+.shot figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}

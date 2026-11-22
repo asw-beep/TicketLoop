@@ -5,6 +5,7 @@ Functions take the request's Session and never commit; get_db commits once the r
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 
@@ -34,9 +35,17 @@ from app.modules.identity.errors import (
     WrongPasswordError,
 )
 from app.modules.identity.models import AccountStatus, PasswordResetToken, RefreshToken, User
-from app.modules.identity.schemas import TokenPair
 
 log = structlog.get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class IssuedTokens:
+    """A new access token and refresh token. The router puts the refresh token in a cookie."""
+
+    access_token: str
+    refresh_token: str
+    expires_in: int  # seconds until the access token expires
 
 
 # ---------------------------------------------------------------- accounts
@@ -60,7 +69,7 @@ def register(db: Session, *, email: str, password: str, full_name: str) -> User:
 # ---------------------------------------------------------------- login
 
 
-def login(db: Session, settings: Settings, *, email: str, password: str) -> TokenPair:
+def login(db: Session, settings: Settings, *, email: str, password: str) -> IssuedTokens:
     user = db.scalar(select(User).where(User.email == email))
     if user is None:
         burn_password_check(password)  # take as long as a real check would
@@ -125,8 +134,10 @@ def request_password_reset(
             to=user.email,
             subject="Reset your TicketLoop password",
             body=(
-                f"Use this code to choose a new password: {token}\n"
-                f"It works once and expires in {settings.password_reset_minutes} minutes. "
+                # After "#", so the token never leaves the browser: no server, access log or
+                # Referer header sees it. The page reads it and posts it to /confirm.
+                f"Choose a new password: {settings.frontend_url}/reset-password#token={token}\n"
+                f"The link works once and expires in {settings.password_reset_minutes} minutes. "
                 "If you did not ask for this, ignore this email; your password is unchanged."
             ),
         )
@@ -166,7 +177,7 @@ def confirm_password_reset(db: Session, *, token: str, new_password: str) -> Non
 # ---------------------------------------------------------------- refresh and logout
 
 
-def refresh(db: Session, settings: Settings, *, refresh_token: str) -> TokenPair:
+def refresh(db: Session, settings: Settings, *, refresh_token: str) -> IssuedTokens:
     """Swap a live refresh token for a new pair. The presented token is revoked.
 
     The swap is one conditional UPDATE, the same pattern as the M2 lock experiment and the
@@ -226,22 +237,24 @@ def _refuse_refresh(db: Session, token_hash: str) -> NoReturn:
     raise InvalidRefreshTokenError()
 
 
-def logout(db: Session, user: User, *, refresh_token: str) -> None:
-    """End the session the token belongs to: revoke every live token in its family."""
+def logout(db: Session, *, refresh_token: str) -> None:
+    """End the session the token belongs to: revoke every live token in its family.
+
+    The token is the credential, as it is for refresh: whoever holds it could already use it,
+    so ending its session needs nothing more. An unknown token has no session to end.
+    """
     # FOR UPDATE: if a refresh of this token is in flight, wait for it to commit, so the
     # family UPDATE below also sees, and revokes, the token that refresh just issued.
     row = db.scalar(
         select(RefreshToken)
-        .where(
-            RefreshToken.token_hash == hash_opaque_token(refresh_token),
-            RefreshToken.user_id == user.id,  # someone else's token is just "unknown"
-        )
+        .where(RefreshToken.token_hash == hash_opaque_token(refresh_token))
         .with_for_update()
     )
     if row is None:
-        raise InvalidRefreshTokenError()
+        log.info("auth.logout_without_session")
+        return
     _revoke_family(db, row.family_id)  # already revoked? Then nothing changes: still a 204
-    log.info("auth.logged_out", user_id=str(user.id), family_id=str(row.family_id))
+    log.info("auth.logged_out", user_id=str(row.user_id), family_id=str(row.family_id))
 
 
 def _revoke_all_sessions(db: Session, user_id: uuid.UUID) -> int:
@@ -272,7 +285,7 @@ def _revoke_family(db: Session, family_id: uuid.UUID) -> int:
 
 def _issue_token_pair(
     db: Session, settings: Settings, user: User, *, family_id: uuid.UUID
-) -> tuple[TokenPair, RefreshToken]:
+) -> tuple[IssuedTokens, RefreshToken]:
     """A new access token, and a new refresh token whose hash is saved in `family_id`."""
     refresh_token = new_opaque_token()
     row = RefreshToken(
@@ -283,7 +296,7 @@ def _issue_token_pair(
     )
     db.add(row)
     db.flush()
-    pair = TokenPair(
+    pair = IssuedTokens(
         access_token=create_access_token(user.id, settings),
         refresh_token=refresh_token,
         expires_in=settings.access_token_minutes * 60,

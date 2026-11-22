@@ -1,0 +1,532 @@
+/* TicketLoop app. The same palette and typeface as documentation/assets/notes.css, so the
+   notes and the app read as one project. One loud element per page, the ticket; the rest
+   stays quiet. M18 polishes this; until then it should be clear, accessible and consistent. */
+
+:root {
+  --paper: #e8ecf1;
+  --surface: #f8fafc;
+  --field: #ffffff;
+  --ink: #17203a;
+  --ink-soft: #4b5571;
+  --ink-faint: #6f7891;
+  --rule: #cdd3dd;
+  --ticket: #2c44c4;
+  --ticket-deep: #22369f;
+  --ticket-ink: #ffffff;
+  --perforation: rgb(255 255 255 / 0.45);
+  --link: #2c44c4;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+  --ok: #1d6b45;
+  --ok-soft: #e3f2e9;
+  --focus: #2c44c4;
+  --shadow: 0 1px 0 rgb(23 32 58 / 0.06), 0 12px 32px -16px rgb(23 32 58 / 0.35);
+  --font: "Archivo Variable", "Archivo", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
+  --radius: 14px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #10141f;
+    --surface: #171c2a;
+    --field: #10141f;
+    --ink: #e5e9f2;
+    --ink-soft: #a9b1c5;
+    --ink-faint: #7f889e;
+    --rule: #2f3850;
+    --ticket: #2b3da8;
+    --ticket-deep: #24338c;
+    --perforation: rgb(255 255 255 / 0.35);
+    --link: #a3b0ff;
+    --danger: #ff9b8f;
+    --danger-soft: #3a1c1d;
+    --ok: #86d9ab;
+    --ok-soft: #15301f;
+    --focus: #a3b0ff;
+    --shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 16px 36px -18px rgb(0 0 0 / 0.8);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --paper: #10141f;
+  --surface: #171c2a;
+  --field: #10141f;
+  --ink: #e5e9f2;
+  --ink-soft: #a9b1c5;
+  --ink-faint: #7f889e;
+  --rule: #2f3850;
+  --ticket: #2b3da8;
+  --ticket-deep: #24338c;
+  --perforation: rgb(255 255 255 / 0.35);
+  --link: #a3b0ff;
+  --danger: #ff9b8f;
+  --danger-soft: #3a1c1d;
+  --ok: #86d9ab;
+  --ok-soft: #15301f;
+  --focus: #a3b0ff;
+  --shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 16px 36px -18px rgb(0 0 0 / 0.8);
+  color-scheme: dark;
+}
+
+/* ---------- Base ---------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 1rem;
+  line-height: 1.5;
+  font-optical-sizing: auto;
+}
+
+h1,
+h2,
+p,
+dl,
+dd,
+pre {
+  margin: 0;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 0.18em;
+  text-decoration-thickness: 1px;
+}
+
+a:hover {
+  text-decoration-thickness: 2px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  color: var(--ink);
+  z-index: 10;
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+/* ---------- Shell ---------- */
+
+.shell {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+.masthead {
+  width: 100%;
+  max-width: 62rem;
+  margin-inline: auto;
+  padding: 1.25rem 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 1.3rem;
+  font-weight: 800;
+  font-stretch: 125%;
+  letter-spacing: -0.01em;
+}
+
+.wordmark__mark {
+  width: 1.6rem;
+  height: 1.6rem;
+  color: var(--ticket);
+}
+
+.masthead nav {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  font-weight: 600;
+}
+
+.masthead nav a {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.masthead nav a:hover,
+.masthead nav a.active {
+  color: var(--link);
+}
+
+.link-button {
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink-soft);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  color: var(--link);
+}
+
+.page {
+  width: 100%;
+  max-width: 46rem;
+  margin-inline: auto;
+  padding: 2rem 16px 4rem;
+}
+
+.devbar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.4rem 1rem;
+  padding: 1rem 16px 1.5rem;
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}
+
+.devbar a {
+  color: var(--ink-soft);
+}
+
+/* ---------- The ticket ---------- */
+
+.ticket {
+  --notch: 11px;
+  position: relative;
+  display: grid;
+  grid-template-columns: 6.5rem 1fr;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.ticket__stub {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.5rem 0.75rem;
+  background: var(--ticket);
+  color: var(--ticket-ink);
+  border-radius: var(--radius) 0 0 var(--radius);
+  border-right: 2px dashed var(--perforation);
+}
+
+/* The two half-circle punches where the stub tears off. They are paper-coloured discs
+   sitting over the seam, so they read as holes. */
+.ticket__stub::before,
+.ticket__stub::after {
+  content: "";
+  position: absolute;
+  right: calc(var(--notch) * -1 - 1px);
+  width: calc(var(--notch) * 2);
+  height: calc(var(--notch) * 2);
+  border-radius: 50%;
+  background: var(--paper);
+}
+
+.ticket__stub::before {
+  top: calc(var(--notch) * -1);
+}
+
+.ticket__stub::after {
+  bottom: calc(var(--notch) * -1);
+}
+
+/* The title runs up the stub, as it would be printed on a real one. */
+.ticket__stub h1 {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-size: clamp(2rem, 1.4rem + 1.6vw, 2.6rem);
+  line-height: 1;
+  font-weight: 800;
+  font-stretch: 118%;
+  letter-spacing: -0.015em;
+  white-space: nowrap;
+}
+
+.stub__serial {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.ticket__body {
+  min-width: 0;
+  padding: 2rem clamp(1.25rem, 4vw, 2.5rem);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.ticket__footer {
+  margin-top: 0.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  color: var(--ink-soft);
+}
+
+/* On a phone the stub becomes a band across the top, torn along the bottom. */
+@media (max-width: 34rem) {
+  .ticket {
+    grid-template-columns: 1fr;
+  }
+
+  .ticket__stub {
+    flex-direction: row;
+    align-items: baseline;
+    padding: 1.25rem 1.25rem 1.1rem;
+    border-radius: var(--radius) var(--radius) 0 0;
+    border-right: 0;
+    border-bottom: 2px dashed var(--perforation);
+  }
+
+  .ticket__stub::before,
+  .ticket__stub::after {
+    top: auto;
+    right: auto;
+    bottom: calc(var(--notch) * -1 - 1px);
+  }
+
+  .ticket__stub::before {
+    left: calc(var(--notch) * -1);
+  }
+
+  .ticket__stub::after {
+    right: calc(var(--notch) * -1);
+  }
+
+  .ticket__stub h1,
+  .stub__serial {
+    writing-mode: horizontal-tb;
+    transform: none;
+  }
+
+  .ticket__stub h1 {
+    font-size: 1.9rem;
+    white-space: normal;
+  }
+}
+
+/* ---------- The account pass ---------- */
+
+.pass__name {
+  font-size: clamp(1.6rem, 1.2rem + 1.5vw, 2.2rem);
+  font-weight: 750;
+  font-stretch: 110%;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.pass__email {
+  margin-top: -0.75rem;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.pass__details {
+  margin-top: auto; /* along the bottom edge, as the small print sits on a printed ticket */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 1rem 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+}
+
+.pass__details dt {
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}
+
+.pass__details dd {
+  font-weight: 650;
+}
+
+/* ---------- Panels below a ticket ---------- */
+
+.panel {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--rule);
+  max-width: 30rem;
+}
+
+.panel h2 {
+  font-size: 1.2rem;
+  font-weight: 750;
+  font-stretch: 108%;
+}
+
+.panel .lede {
+  margin-top: 0.25rem;
+}
+
+.panel form {
+  margin-top: 1.25rem;
+}
+
+/* ---------- Forms ---------- */
+
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.lede {
+  color: var(--ink-soft);
+  max-width: 34rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.field label {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.field input {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.75rem;
+  font: inherit;
+  color: var(--ink);
+  background: var(--field);
+  border: 1.5px solid var(--rule);
+  border-radius: 8px;
+}
+
+.field input:hover {
+  border-color: var(--ink-faint);
+}
+
+.field input:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--focus) 35%, transparent);
+  outline-offset: 0;
+  border-color: var(--focus);
+}
+
+.field input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.field__hint {
+  font-size: 0.875rem;
+  color: var(--ink-faint);
+}
+
+.field__error {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--danger);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1.25rem;
+  margin-top: 0.25rem;
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  padding: 0.6rem 1.35rem;
+  font: inherit;
+  font-weight: 700;
+  font-stretch: 108%;
+  color: var(--ticket-ink);
+  background: var(--ticket);
+  border: 0;
+  border-radius: 8px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: var(--ticket-deep);
+  text-decoration: none;
+}
+
+.button:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.message {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  border-left: 4px solid;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.message--error {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.message--ok {
+  background: var(--ok-soft);
+  border-color: var(--ok);
+}
+
+.command {
+  padding: 0.75rem 1rem;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  background: var(--paper);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    scroll-behavior: auto !important;
+  }
+}

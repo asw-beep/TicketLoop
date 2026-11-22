@@ -45,6 +45,25 @@ class Settings(BaseSettings):
     access_token_minutes: int = 15
     refresh_token_days: int = 7
     password_reset_minutes: int = 30
+    # Where reset emails link to: the frontend's reset page, which reads #token= from the URL.
+    frontend_url: str = "http://localhost:5173"
+
+    # Email. SMTP_HOST unset means: Mailpit on localhost on a laptop, and in tests an
+    # in-memory list the tests read. See smtp_server below.
+    smtp_host: str | None = None
+    smtp_port: int = 1025
+    email_from: str = "TicketLoop <no-reply@ticketloop.local>"
+
+    @property
+    def cookie_secure(self) -> bool:
+        """Mark cookies Secure (HTTPS only) everywhere except a laptop and tests, which use http."""
+        return self.environment in ("staging", "production")
+
+    @property
+    def smtp_server(self) -> tuple[str, int] | None:
+        """(host, port) to send email through, or None to keep it in memory."""
+        host = self.smtp_host or ("localhost" if self.environment == "local" else None)
+        return (host, self.smtp_port) if host else None
 
     @model_validator(mode="after")
     def _check_jwt_secret(self) -> Self:

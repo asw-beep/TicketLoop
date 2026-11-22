@@ -17,7 +17,11 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.infrastructure.database.engine import create_db_engine
 from app.infrastructure.database.session import create_session_factory
-from app.infrastructure.external_providers.email import InMemoryEmailSender
+from app.infrastructure.external_providers.email import (
+    EmailSender,
+    InMemoryEmailSender,
+    SmtpEmailSender,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -39,12 +43,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = create_db_engine(settings)
     app.state.session_factory = create_session_factory(app.state.engine)  # used by get_db
-    app.state.email_sender = InMemoryEmailSender()  # until a real email sender exists
+    app.state.email_sender = create_email_sender(settings)
 
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     app.include_router(build_api_router(settings.api_prefix))
     return app
+
+
+def create_email_sender(settings: Settings) -> EmailSender:
+    if settings.smtp_server is None:
+        return InMemoryEmailSender()
+    host, port = settings.smtp_server
+    return SmtpEmailSender(host=host, port=port, sender=settings.email_from)
 
 
 app = create_app()

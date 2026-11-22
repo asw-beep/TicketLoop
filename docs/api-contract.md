@@ -48,15 +48,15 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `POST /auth/register` | Public | `{email, password, full_name}`; password 12 to 128 chars | 201 `User` | 409 email taken; 422 |
-| `POST /auth/login` | Public | `{email, password}` | 200 `TokenPair` | 401 wrong email or password (same message for both); 403 suspended; 429 |
-| `POST /auth/refresh` | Public | `{refresh_token}` | 200 new `TokenPair`; old refresh token revoked | 401 invalid, expired or revoked. A revoked token revokes its whole family. |
-| `POST /auth/logout` | User | `{refresh_token}` | 204 | 401 |
+| `POST /auth/login` | Public | `{email, password}` | 200 `AccessToken`; sets the refresh cookie | 401 wrong email or password (same message for both); 403 suspended; 429 |
+| `POST /auth/refresh` | Refresh cookie | no body | 200 new `AccessToken`; the cookie rotates and the old token is revoked | 401 missing, invalid, expired or revoked. A revoked token revokes its whole family. |
+| `POST /auth/logout` | Refresh cookie | no body | 204; the cookie's session revoked and the cookie cleared | none; with no cookie or an unknown one there is simply nothing to end |
 | `POST /auth/password-reset/request` | Public | `{email}` | 202, identical whether or not the email exists | 429 |
 | `POST /auth/password-reset/confirm` | Public | `{token, new_password}` | 204; every refresh token for the user revoked | 400 invalid or used token; 422 |
 
-`TokenPair` = `{access_token, refresh_token, token_type: "bearer", expires_in: 900}`. The refresh token is opaque (43 random URL-safe characters), not a JWT.
+`AccessToken` = `{access_token, token_type: "bearer", expires_in: 900}`. The refresh token never appears in a body: it travels only in the `refresh_token` cookie (`HttpOnly`, `SameSite=Strict`, `Path=/api/v1/auth`, `Max-Age` 7 days, `Secure` in staging and production). It is opaque (43 random URL-safe characters), not a JWT. Page scripts cannot read the cookie, and other sites cannot make the browser send it.
 
-As built: logout ends the whole session, revoking every live token in the presented token's family. The reset request answers 202 `{"message": ...}` with the same body for every email; the code is delivered by the email sender (in memory until a real one exists). Every 401 carries `WWW-Authenticate: Bearer`. Problem types: `email-taken`, `invalid-credentials`, `account-suspended`, `invalid-refresh-token`, `wrong-password`, `invalid-reset-token`, `not-authenticated`, `admin-required`. The 429s arrive with rate limits in M14.
+As built: logout ends the whole session, revoking every live token in the presented token's family. The reset request answers 202 `{"message": ...}` with the same body for every email; the email carries a link to the frontend's `/reset-password#token=...`; after `#`, so the token never reaches a server log or a `Referer` header. Locally it goes to Mailpit; in tests, to an in-memory list. Changing the password also clears the refresh cookie. Every 401 carries `WWW-Authenticate: Bearer`. Problem types: `email-taken`, `invalid-credentials`, `account-suspended`, `invalid-refresh-token`, `wrong-password`, `invalid-reset-token`, `not-authenticated`, `admin-required`. The 429s arrive with rate limits in M14.
 `User` = `{id, email, full_name, role, account_status, created_at}`. Never `password_hash`.
 
 ## Users (M3 built; history in M13)

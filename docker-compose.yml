@@ -1,6 +1,7 @@
 # Local stack. Two ways to use it:
-#   docker compose up --build     Postgres, migrations, then the API (API on localhost:8000)
-#   docker compose up -d db       Postgres only; run the API on Windows with uvicorn --reload
+#   docker compose up --build          Postgres, Mailpit, migrations, then the API (localhost:8000)
+#   docker compose up -d db mailpit    Postgres and Mailpit only; run the API on Windows with
+#                                      uvicorn --reload, and the frontend with npm run dev
 # Values like ${POSTGRES_USER:-ticketloop} come from .env if it exists, else the default.
 
 name: ticketloop
@@ -24,6 +25,14 @@ services:
       retries: 10
       start_period: 10s
 
+  # A fake mail server: catches every email the app sends and shows it in a web inbox at
+  # http://localhost:8025. Nothing is delivered to a real address.
+  mailpit:
+    image: axllent/mailpit:v1.33.1
+    ports:
+      - "8025:8025" # the web inbox
+      - "1025:1025" # SMTP, where the API sends
+
   # A one-off job: bring the schema up to date, then exit. Kept out of the API's own startup
   # so several API containers (the M8 race test, load tests) never race to migrate at once.
   migrate:
@@ -43,6 +52,7 @@ services:
       ENVIRONMENT: local
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_JSON: "true"
+      SMTP_HOST: mailpit
     ports:
       - "8000:8000"
     depends_on:

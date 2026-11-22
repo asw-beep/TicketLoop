@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.main import create_app
 from app.modules.identity.models import RefreshToken, User
-from tests.integration.api import registered_and_logged_in
+from tests.integration.api import cookie_header, registered_and_logged_in
 
 pytestmark = pytest.mark.integration
 
@@ -55,7 +55,9 @@ def refresh_twice_at_once(
     def attempt(_: int) -> Attempt:
         start.wait()  # release both requests together
         started = time.perf_counter()
-        response = api.post("/api/v1/auth/refresh", json={"refresh_token": token})
+        # An explicit Cookie header: both requests carry the same token, whatever the
+        # client's cookie jar learns from the other response meanwhile.
+        response = api.post("/api/v1/auth/refresh", headers=cookie_header(token))
         return Attempt(response.status_code, started, time.perf_counter())
 
     first, second = pool.map(attempt, range(2))

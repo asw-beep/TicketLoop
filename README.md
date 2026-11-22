@@ -18,9 +18,9 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 
 ## Run it
 
-You need Docker Desktop, Python 3.12 or newer, and [uv](https://docs.astral.sh/uv/).
+You need Docker Desktop, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and Node 24 LTS for the frontend.
 
-**Everything in containers** (Postgres, then a one-off `migrate` job, then the API):
+**Everything in containers** (Postgres, Mailpit, then a one-off `migrate` job, then the API):
 
 ```bash
 docker compose up --build
@@ -28,15 +28,25 @@ curl localhost:8000/api/v1/health
 # {"status":"ok","checks":{"database":"ok"}}
 ```
 
-**Day to day** (Postgres in Docker, the API on Windows with auto-reload):
+**Day to day** (Postgres and Mailpit in Docker, the API and the frontend on Windows, both reloading as you edit):
 
 ```bash
-docker compose up -d db               # only Postgres
+docker compose up -d db mailpit       # Postgres, and a fake inbox at http://localhost:8025
 cp .env.example .env                  # optional; the defaults already match compose
 uv sync                               # create .venv and install dependencies
 uv run alembic upgrade head           # create or update the tables
 uv run uvicorn app.main:app --reload  # http://localhost:8000/docs for the API explorer
 ```
+
+Then, in a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev                           # http://localhost:5173
+```
+
+The dev server forwards `/api` to the API on port 8000, so the browser sees one origin.
 
 Set `LOG_JSON=false` in `.env` for coloured, readable log lines while developing. Stop the `api` container first (`docker compose stop api`) if it is running, since both use port 8000.
 
@@ -47,15 +57,19 @@ docker compose down -v   # stop and delete the database data too
 
 ## Try the auth flow
 
+Open http://localhost:5173: create an account, change your name, log out and in, and use **Forgot your password?**. The reset email lands in Mailpit at http://localhost:8025, and its link opens the reset page.
+
+From a terminal instead (`-c` and `-b` keep the refresh cookie in a file, as a browser would):
+
 ```bash
 B=localhost:8000/api/v1
 curl -s $B/auth/register -H 'content-type: application/json' \
   -d '{"email":"asha@example.in","password":"correct horse battery staple","full_name":"Asha"}'
-curl -s $B/auth/login -H 'content-type: application/json' \
+curl -s -c jar.txt $B/auth/login -H 'content-type: application/json' \
   -d '{"email":"asha@example.in","password":"correct horse battery staple"}'
-# {"access_token":"eyJ...","refresh_token":"...","token_type":"bearer","expires_in":900}
+# {"access_token":"eyJ...","token_type":"bearer","expires_in":900}  plus the refresh cookie
 curl -s $B/users/me -H "Authorization: Bearer <access_token>"
-curl -s $B/auth/refresh -H 'content-type: application/json' -d '{"refresh_token":"<refresh_token>"}'
+curl -s -b jar.txt -c jar.txt -X POST $B/auth/refresh   # a new access token; the cookie rotates
 ```
 
 Or open http://localhost:8000/docs, log in, and paste the access token into **Authorize**.
@@ -91,6 +105,15 @@ uv run ruff check .
 uv run ruff format .
 ```
 
+The frontend, from `frontend/`:
+
+```bash
+npm test                  # unit tests (Vitest)
+npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit`
+npm run typecheck && npm run lint && npm run format:check
+npm run api:types         # after changing the API: regenerate openapi.json and the TypeScript types
+```
+
 ## Layout
 
 ```text
@@ -108,11 +131,16 @@ tests/
   integration/             need Postgres
   concurrency/ failure/ load/   later modules
 migrations/                Alembic env.py and one file per schema change
-scripts/                   experiments and operator tools: lock_experiment, make_admin
-.github/workflows/ci.yml   ruff, alembic check and pytest against Postgres 17 on every push
+scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi
+frontend/                  React + TypeScript app (Vite); each module adds its screens
+  src/api/                 typed client; schema.d.ts is generated from the backend
+  src/auth/                access token in memory, refresh through the HttpOnly cookie
+  src/pages/               one file per screen
+  e2e/                     Playwright browser tests against the real stack
+.github/workflows/ci.yml   backend tests, frontend checks and browser tests on every push
 docs/                      design documents (below)
 documentation/             one HTML page per finished module for revision and interview prep; open index.html
-docker-compose.yml         Postgres, the migrate job, the API
+docker-compose.yml         Postgres, Mailpit, the migrate job, the API
 Dockerfile                 the API image
 ```
 

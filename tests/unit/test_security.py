@@ -176,6 +176,19 @@ def test_a_short_jwt_secret_is_refused() -> None:
         Settings(_env_file=None, jwt_secret_key="too-short")
 
 
+@pytest.mark.parametrize(
+    ("environment", "secure"),
+    [("local", False), ("test", False), ("staging", True), ("production", True)],
+)
+def test_the_refresh_cookie_is_secure_everywhere_but_a_laptop(
+    environment: str, secure: bool
+) -> None:
+    # Secure: the browser sends the cookie over HTTPS only. A laptop serves plain http.
+    settings = Settings(_env_file=None, environment=environment, jwt_secret_key="s" * 48)
+
+    assert settings.cookie_secure is secure
+
+
 def test_production_accepts_its_own_secret() -> None:
     settings = Settings(_env_file=None, environment="production", jwt_secret_key="s" * 48)
 

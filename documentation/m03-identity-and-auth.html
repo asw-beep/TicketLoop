@@ -37,6 +37,7 @@
       <div class="section__body">
         <p class="pitch">Login gives two tokens. The access token is a JWT that lives 15 minutes; any API process can check its signature without the database. The refresh token is 32 random bytes, and the database keeps only its SHA-256. Every refresh revokes the token it used and issues a new one in the same family.</p>
         <p class="pitch">If a revoked refresh token comes back, two parties hold tokens from one login, and I cannot tell which is the thief. So I revoke the whole family and both have to log in again. The swap is one conditional UPDATE, so two refreshes of the same token at the same instant have exactly one winner. A test fires 20 such pairs at once.</p>
+        <p class="pitch">In the browser the access token lives in memory and the refresh token in an HttpOnly cookie that page scripts cannot read, so an injected script cannot carry a week-long token away. Every module from here on ships its screens, so I can try each feature by hand the day it lands.</p>
       </div>
     </section>
 
@@ -50,10 +51,12 @@
           <li><span class="built__what">Nine endpoints</span><span class="built__note">register, login, refresh, logout, password-reset request and confirm, <code>GET</code> and <code>PATCH /users/me</code>, and <code>POST /users/me/password</code>.</span><code>app/modules/identity/router.py</code> <code>service.py</code></li>
           <li><span class="built__what">Route guards</span><span class="built__note"><code>CurrentUser</code> checks the token, loads the user and refuses SUSPENDED accounts. <code>AdminUser</code> also needs <code>role = ADMIN</code>.</span><code>app/modules/identity/dependencies.py</code></li>
           <li><span class="built__what">Strict request bodies</span><span class="built__note">Unknown fields are a 422, so <code>{"role": "ADMIN"}</code> in a sign-up is refused, not ignored. Passwords are <code>Secret[...]</code> and print as stars.</span><code>app/core/schemas.py</code> <code>app/modules/identity/schemas.py</code></li>
-          <li><span class="built__what">Email port</span><span class="built__note">An <code>EmailSender</code> protocol with an in-memory sender that tests read. It never logs a message body, because the body holds the reset code.</span><code>app/infrastructure/external_providers/email.py</code></li>
+          <li><span class="built__what">Email port</span><span class="built__note">An <code>EmailSender</code> protocol with two senders: SMTP to Mailpit on a laptop (inbox at <code>localhost:8025</code>), and an in-memory list in tests. Neither logs a message body, because the body holds the reset link.</span><code>app/infrastructure/external_providers/email.py</code> <code>docker-compose.yml</code></li>
+          <li><span class="built__what">Refresh cookie</span><span class="built__note">Login and refresh set <code>refresh_token</code> as an HttpOnly, SameSite=Strict cookie on <code>/api/v1/auth</code> and return only the access token. Logout and a password change clear it.</span><code>app/modules/identity/router.py</code></li>
+          <li><span class="built__what">Frontend</span><span class="built__note">Vite, React and TypeScript in <code>frontend/</code>. Types come from the backend's OpenAPI description, and CI fails if they drift. Six screens, listed below.</span><code>frontend/src/</code> <code>scripts/export_openapi.py</code></li>
           <li><span class="built__what">Admin tool</span><span class="built__note">No route grants ADMIN. An operator runs <code>python -m scripts.make_admin email</code>.</span><code>scripts/make_admin.py</code></li>
-          <li><span class="built__what">CI</span><span class="built__note">GitHub Actions with a Postgres 17 service container: ruff, format check, <code>alembic check</code>, then pytest with <code>REQUIRE_POSTGRES=1</code>, so a missing database fails the run instead of skipping half the tests.</span><code>.github/workflows/ci.yml</code></li>
-          <li><span class="built__what">Tests</span><span class="built__note">125 in all: 18 new unit tests for the security helpers and 74 new integration tests, covering every 401 and 403, rotation, reuse, logout, the reset flow, a log check for passwords, and the refresh race.</span><code>tests/unit/test_security.py</code> <code>tests/integration/test_auth_*.py</code></li>
+          <li><span class="built__what">CI</span><span class="built__note">Three GitHub Actions jobs. The backend: ruff, format check, <code>alembic check</code>, then pytest against Postgres 17 with <code>REQUIRE_POSTGRES=1</code>, so a missing database fails the run instead of skipping half the tests. The frontend: format, lint, types, unit tests, build, and the API types in sync. The browser tests: Chrome against Vite, the API, Postgres and Mailpit.</span><code>.github/workflows/ci.yml</code></li>
+          <li><span class="built__what">Tests</span><span class="built__note">143 backend tests, covering every 401 and 403, rotation, reuse, the cookie's attributes, logout, the reset flow and its link, a log check for passwords, SMTP against a real local server, and the refresh race. 20 frontend unit tests for the refresh rules, and 4 browser tests.</span><code>tests/</code> <code>frontend/src/**/*.test.ts</code> <code>frontend/e2e/</code></li>
         </ul>
       </div>
     </section>
@@ -85,6 +88,25 @@ B: sees a revoked token, revokes the family (R2 too)      <span class="c"># COMM
           <li><strong>I proved the test can fail.</strong> With <code>revoked_at IS NULL</code> removed from the claim, it got <code>[200, 200]</code>. It also checks that at least one pair of requests overlapped in time, so it cannot pass only because they ran one after the other.</li>
           <li><strong>The strict rule has a cost.</strong> A client that refreshes from two tabs at once logs itself out. Auth0 offers a short grace window for this; I chose none, as FR-01 says.</li>
         </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>Run <code>npm run dev</code> in <code>frontend/</code> and open <code>localhost:5173</code>. Each form sits on a ticket whose stub carries the page title; on a phone the stub becomes a band across the top.</p>
+        <ul class="built">
+          <li><span class="built__what">Create account</span><span class="built__note">Name, email, password (12 or more characters). Logs you straight in.</span><code>/register</code></li>
+          <li><span class="built__what">Log in</span><span class="built__note">One message, "Wrong email or password", whichever was wrong. Notices such as "You're logged out" appear here.</span><code>/login</code></li>
+          <li><span class="built__what">Your pass</span><span class="built__note">Your account as an admit-one ticket: name, email, role, status, member since. Below it, change your name and change your password.</span><code>/account</code></li>
+          <li><span class="built__what">Reset password</span><span class="built__note">Asks for an email and answers the same way for every address. The link arrives in Mailpit.</span><code>/forgot-password</code></li>
+          <li><span class="built__what">New password</span><span class="built__note">Opened from the emailed link. Reads the token after <code>#</code>, removes it from the address bar, and says so plainly when the link is spent.</span><code>/reset-password</code></li>
+          <li><span class="built__what">Offline</span><span class="built__note">Shown when the API cannot be reached, with the command that starts it.</span><code>any page</code></li>
+        </ul>
+        <figure class="shot">
+          <img src="assets/m03-account.png" alt="The account page: a blue ticket stub reading Your pass, the account details beside it, and forms below to change the name and the password." loading="lazy" width="1280" height="1273">
+          <figcaption>The account page, light theme. The stub's serial is the first part of the account ID.</figcaption>
+        </figure>
       </div>
     </section>
 
@@ -134,6 +156,11 @@ B: sees a revoked token, revokes the family (R2 too)      <span class="c"># COMM
             <p>Trusting the header's <code>alg</code> is how <code>"alg": "none"</code> and key-confusion attacks work. Decoding passes <code>algorithms=["HS256"]</code> and requires every claim. One shared key is fine while one service both signs and verifies; RS256 would matter once others must verify without being able to sign.</p>
           </div>
           <div class="decision">
+            <h4>The refresh token lives in an HttpOnly cookie</h4>
+            <p class="decision__over">Instead of returning it in JSON for the page to keep in localStorage, or in memory only</p>
+            <p>A script injected into the page can read localStorage and walk away with a week of access. It cannot read an HttpOnly cookie. SameSite=Strict stops other sites from making the browser send it, which is what protects refresh and logout from cross-site forgery, and the path limits it to <code>/api/v1/auth</code>. Memory only would be safer still, but every reload would log you out. The token never appears in any response body; otherwise a script could fetch it and the cookie would protect nothing.</p>
+          </div>
+          <div class="decision">
             <h4>Logout ends the whole family</h4>
             <p class="decision__over">Instead of revoking only the token presented</p>
             <p>With the current token the two are the same. With an older token from the session, revoking only that one would leave the live token working. Logout also locks the presented row with <code>FOR UPDATE</code>, so a refresh already in flight finishes first and its new token gets revoked too.</p>
@@ -158,9 +185,33 @@ B: sees a revoked token, revokes the family (R2 too)      <span class="c"># COMM
             <p>Reuse detection has to save the revocation and still answer 401. A 401 is an exception, and <code>get_db</code> rolls back on exceptions. I commit first, then raise, and the comment says why.</p>
           </div>
           <div class="decision">
-            <h4>A fake email sender behind a port</h4>
-            <p class="decision__over">Instead of logging the reset link, or adding SMTP now</p>
-            <p>Logging tokens is banned by the NFRs. The in-memory sender lets tests read the code, and a real sender later changes one line in <code>create_app</code>. From M11 the send moves into the outbox, after the commit.</p>
+            <h4>Mailpit locally, a list in tests, behind one port</h4>
+            <p class="decision__over">Instead of logging the reset link, or sending real email</p>
+            <p>Logging tokens is banned by the NFRs. Mailpit catches every message and shows it in a web inbox, so I can click a reset link by hand; tests read an in-memory list. <code>create_app</code> picks the sender from settings. The link carries the token after <code>#</code>, which browsers never send to a server. From M11 the send moves into the outbox, after the commit.</p>
+          </div>
+        </div>
+
+        <h3>Frontend</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Each module ships its own screens</h4>
+            <p class="decision__over">Instead of one frontend at the end</p>
+            <p>Testing a reservation countdown or a payment by hand through curl is slow and easy to get wrong. A thin slice per module means every feature is tried in a browser the day it lands; M18 becomes a polish pass. The screens hold no business rules.</p>
+          </div>
+          <div class="decision">
+            <h4>Refreshes never overlap, even across tabs</h4>
+            <p class="decision__over">Instead of letting every failed request refresh on its own</p>
+            <p>Two refreshes with one cookie look exactly like a stolen token, and the server ends the session. Inside a tab, callers share one in-flight refresh. Across tabs, a Web Lock makes each wait its turn, and the browser then sends the cookie the previous tab just received. Only a 401 of type <code>not-authenticated</code> triggers a refresh; a wrong current password is a 401 too.</p>
+          </div>
+          <div class="decision">
+            <h4>Types generated from the backend</h4>
+            <p class="decision__over">Instead of hand-written request and response types</p>
+            <p><code>npm run api:types</code> exports FastAPI's OpenAPI description and turns it into TypeScript. A renamed field fails the type check, and CI regenerates both files and fails on any difference.</p>
+          </div>
+          <div class="decision">
+            <h4>One origin through the dev server's proxy</h4>
+            <p class="decision__over">Instead of CORS between two ports</p>
+            <p>Vite forwards <code>/api</code> to port 8000, so the browser sees the pages and the API as one site. No CORS setup, and the SameSite=Strict cookie is sent. Production will do the same with one reverse proxy.</p>
           </div>
         </div>
       </div>
@@ -243,6 +294,18 @@ B: sees a revoked token, revokes the family (R2 too)      <span class="c"># COMM
             <p>Locally they skip when Postgres is down, which is convenient on a laptop but dangerous in CI: a broken database container would give a green run with 95 tests never executed. CI sets <code>REQUIRE_POSTGRES=1</code>, which turns that skip into a failure. I checked both ways against an unreachable port: 95 skipped without it, 95 errors with it.</p>
           </div>
         </details>
+        <details class="qa">
+          <summary>Where does the browser keep each token, and why there?</summary>
+          <div class="qa__a">
+            <p>The access token sits in a JavaScript variable: it lasts 15 minutes, dies with the tab, and is never written anywhere a script could find it later. The refresh token is an HttpOnly cookie, invisible to page scripts, with SameSite=Strict so other sites cannot make the browser send it, scoped to <code>/api/v1/auth</code>. A reload loses the access token, so the app calls refresh once on start and gets a new one. An attacker who injects a script can still act while the page is open, but cannot take a week-long token away.</p>
+          </div>
+        </details>
+        <details class="qa">
+          <summary>Why does the frontend need a lock around refresh?</summary>
+          <div class="qa__a">
+            <p>Rotation spends the token on every refresh, and the server reads a spent token coming back as theft. Two refreshes sent at once with the same cookie, from two failing requests or two tabs, would log the user out. Inside a tab I share one promise; across tabs the Web Locks API runs one refresh at a time, and because the browser attaches the current cookie when each request starts, the second tab sends the token the first just received. I also restore the session through a query rather than an effect, because React's development mode runs effects twice.</p>
+          </div>
+        </details>
       </div>
     </section>
 
@@ -256,6 +319,10 @@ B: sees a revoked token, revokes the family (R2 too)      <span class="c"># COMM
           <li><strong>Real Argon2 made the test suite slow.</strong> 64 MiB and 3 passes per hash, hundreds of times. An autouse fixture swaps in argon2's CHEAPEST profile; one unit test switches the real hasher back on and checks its parameters.</li>
           <li><strong><code>EmailStr</code> lowercases only the domain.</strong> <code>Asha@Example.IN</code> became <code>Asha@example.in</code>, which <code>ck_users_email_lowercase</code> would reject. The <code>Email</code> type trims, validates, then lowercases the whole address.</li>
           <li><strong>A race test can pass for the wrong reason.</strong> If the two requests never overlap, the outcome is the same as a sequential replay. The test records each request's start and end, and fails if no round overlapped.</li>
+          <li><strong>A logged-out notice vanished.</strong> Ending the session made the account page's guard redirect to <code>/login</code> at once, and that redirect replaced the navigation carrying the message. Notices now live in a small store the login page reads, so whichever redirect wins, the message survives. A browser test caught it.</li>
+          <li><strong>Every error read "status 401".</strong> openapi-fetch had already read the error body, and my code tried to read it again. The client now uses the problem openapi-fetch parsed. Found from a screenshot, then pinned with a unit test.</li>
+          <li><strong>A revoked cookie set off the theft alarm.</strong> After a password change the browser still held the old, revoked cookie; the next reload sent it and the server logged a reuse warning. The password-change response now clears the cookie.</li>
+          <li><strong>TypeScript 7 broke the toolchain.</strong> typescript-eslint and openapi-typescript both need TypeScript 5, so the frontend pins 5.9.3.</li>
           <li><strong>Python's <code>write_text</code> on Windows writes CRLF.</strong> Git normalises on commit because of <code>.gitattributes</code>, but the working copy differed. I now edit through the editor or write bytes.</li>
         </ul>
 
@@ -264,6 +331,7 @@ B: sees a revoked token, revokes the family (R2 too)      <span class="c"># COMM
           <li><strong>Logout with an older token while a refresh of the newest is in flight</strong> can miss the new token, because the lock covers only the presented row.</li>
           <li><strong>A refresh racing a password change</strong> can leave the token it just issued live. Locking the user row would close both gaps; M17's concurrency tests will measure whether that is worth it.</li>
           <li><strong>No rate limits yet.</strong> Login, register and reset can be hammered until M14.</li>
+          <li><strong>Logging out in one tab</strong> leaves the other tabs' access tokens working for up to 15 minutes. M18 adds a BroadcastChannel so they log out at once.</li>
         </ul>
       </div>
     </section>
@@ -271,13 +339,16 @@ B: sees a revoked token, revokes the family (R2 too)      <span class="c"># COMM
     <section class="section" aria-labelledby="check">
       <h2 id="check">Check it still works</h2>
       <div class="section__body">
-<pre><code>docker compose up -d db
+<pre><code>docker compose up -d db mailpit
 uv run alembic upgrade head
 uv run pytest tests/unit/test_security.py            <span class="c"># 18 tests, no database</span>
 uv run pytest -k "auth or current_user"              <span class="c"># 67 tests: every 401, 403 and the race</span>
-REQUIRE_POSTGRES=1 uv run pytest                     <span class="c"># 125 tests, what CI runs</span>
+REQUIRE_POSTGRES=1 uv run pytest                     <span class="c"># 143 tests, what CI runs</span>
 
 uv run uvicorn app.main:app --reload                 <span class="c"># /docs, then Authorize with a token</span>
+cd frontend &amp;&amp; npm install &amp;&amp; npm run dev            <span class="c"># localhost:5173; email at localhost:8025</span>
+npm test                                             <span class="c"># 20 unit tests: the refresh rules</span>
+npm run e2e                                          <span class="c"># 4 browser tests in your Chrome</span>
 uv run python -m scripts.make_admin asha@example.in  <span class="c"># --revoke to undo</span>
 gh run list --workflow ci.yml --limit 3              <span class="c"># the CI runs on GitHub</span></code></pre>
       </div>
