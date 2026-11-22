@@ -1,7 +1,7 @@
 # Runs on every push and pull request, three jobs side by side:
-#   test       the backend: lint, migrations, every test against a real Postgres 17
+#   test       the backend: lint, migrations, every test against a real Postgres 17 and MinIO
 #   frontend   the React app: format, lint, types, unit tests, build, and API types in sync
-#   e2e        the browser tests: Chrome clicking through Vite, the API, Postgres and Mailpit
+#   e2e        the browser tests: Chrome clicking through Vite, the API, Postgres, Mailpit and MinIO
 # M16 grows this into the full pipeline (type checks, Redis, RabbitMQ, concurrency tests).
 name: CI
 
@@ -45,6 +45,8 @@ jobs:
       ENVIRONMENT: test
       # Fail, don't skip, if the integration tests cannot reach Postgres.
       REQUIRE_POSTGRES: "1"
+      # And fail, don't skip, if the storage tests cannot reach MinIO.
+      REQUIRE_STORAGE: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -63,6 +65,15 @@ jobs:
 
       - name: Check formatting
         run: uv run ruff format --check .
+
+      - name: Start MinIO
+        # Not a service container: the image has no default command (its entrypoint is a bare
+        # `minio`), and service containers cannot pass one. Same pinned build as compose.
+        run: |
+          docker run -d --name minio -p 9000:9000             -e MINIO_ROOT_USER=ticketloop -e MINIO_ROOT_PASSWORD=ticketloop-local-secret             cgr.dev/chainguard/minio@sha256:548147b5fc95a67e3e45285dff7e0e50326c3eb1977c6218039461771156c5e7             server /data
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live && exit 0; sleep 1; done
+          docker logs minio
+          exit 1
 
       - name: Migrate and check the models match the migrations
         run: |
@@ -167,6 +178,15 @@ jobs:
         run: |
           uv sync --locked
           npm ci --prefix frontend
+
+      - name: Start MinIO
+        # Not a service container: the image has no default command (its entrypoint is a bare
+        # `minio`), and service containers cannot pass one. Same pinned build as compose.
+        run: |
+          docker run -d --name minio -p 9000:9000             -e MINIO_ROOT_USER=ticketloop -e MINIO_ROOT_PASSWORD=ticketloop-local-secret             cgr.dev/chainguard/minio@sha256:548147b5fc95a67e3e45285dff7e0e50326c3eb1977c6218039461771156c5e7             server /data
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live && exit 0; sleep 1; done
+          docker logs minio
+          exit 1
 
       - name: Migrate
         run: uv run alembic upgrade head

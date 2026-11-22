@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.modules.audit.models import AuditLog
 from app.modules.tickets.models import Ticket
 from tests.integration.factories import (
+    make_document,
     make_listing,
     make_password_reset_token,
     make_refresh_token,
@@ -151,3 +152,23 @@ def test_audit_rows_can_never_be_changed(db_session: Session, statement: object)
 
     with pytest.raises(DBAPIError, match="audit_logs is append-only"):
         db_session.execute(change)
+
+
+# ---------- ticket documents: FR-03 (M4) ----------
+
+
+def test_a_document_must_be_pdf_png_or_jpeg(db_session: Session) -> None:
+    with rejected_by(db_session, "ck_ticket_documents_type"):
+        make_document(db_session, content_type="text/html")
+
+
+@pytest.mark.parametrize("size", [0, 5_242_881])
+def test_a_document_must_be_1_byte_to_5_mib(db_session: Session, size: int) -> None:
+    with rejected_by(db_session, "ck_ticket_documents_size"):
+        make_document(db_session, size_bytes=size)
+
+
+def test_two_documents_cannot_share_a_storage_key(db_session: Session) -> None:
+    make_document(db_session, storage_key="ticket-documents/same")
+    with rejected_by(db_session, "uq_ticket_documents_storage_key"):
+        make_document(db_session, storage_key="ticket-documents/same")

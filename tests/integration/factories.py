@@ -14,7 +14,7 @@ from app.core.security import hash_opaque_token, new_opaque_token
 from app.modules.events.models import Event, TicketProvider
 from app.modules.identity.models import PasswordResetToken, RefreshToken, User
 from app.modules.listings.models import Listing
-from app.modules.tickets.models import Ticket
+from app.modules.tickets.models import Ticket, TicketDocument
 
 
 def _unique() -> str:
@@ -90,6 +90,21 @@ def make_ticket(session: Session, **fields: Any) -> Ticket:
         defaults["original_owner_id"] = owner.id
         defaults.setdefault("current_owner_id", owner.id)
     return _save(session, Ticket(**(defaults | fields)))
+
+
+def make_document(session: Session, **fields: Any) -> TicketDocument:
+    defaults: dict[str, Any] = {
+        "storage_key": f"ticket-documents/{uuid.uuid4().hex}",
+        "content_type": "image/png",
+        "size_bytes": 1024,
+    }
+    if "ticket_id" not in fields:
+        ticket = make_ticket(session)
+        defaults["ticket_id"] = ticket.id
+        defaults.setdefault("uploaded_by", ticket.current_owner_id)
+    elif "uploaded_by" not in fields:
+        defaults["uploaded_by"] = make_user(session).id
+    return _save(session, TicketDocument(**(defaults | fields)))
 
 
 def make_listing(session: Session, **fields: Any) -> Listing:

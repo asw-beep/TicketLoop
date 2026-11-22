@@ -3,7 +3,9 @@
 from fastapi import APIRouter
 
 from app.api import health
+from app.modules.events.router import admin_events_router, events_router
 from app.modules.identity.router import auth_router, users_router
+from app.modules.tickets.router import admin_tickets_router, tickets_router
 
 
 def build_api_router(prefix: str) -> APIRouter:
@@ -13,4 +15,8 @@ def build_api_router(prefix: str) -> APIRouter:
     # M5 listings, and so on.
     router.include_router(auth_router)
     router.include_router(users_router)
+    router.include_router(events_router)
+    router.include_router(admin_events_router)
+    router.include_router(tickets_router)
+    router.include_router(admin_tickets_router)
     return router

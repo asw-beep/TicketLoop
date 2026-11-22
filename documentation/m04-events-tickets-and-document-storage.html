@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M4 Events and Tickets</title>
+  <meta name="description" content="TicketLoop M4: events, ticket registration, proof of purchase in object storage, and the IDOR proof. What was built, the decisions behind it, and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Events, tickets and document storage</h1>
+      <p class="ticket__summary">Admins create events and move them through a small status machine. Users register tickets they bought and upload proof of purchase to a private S3 bucket (MinIO locally), which only the owner and admins can open, through links that expire after 5 minutes. An admin verifies or rejects each ticket. A ticket that isn't yours gets the same 404 as one that doesn't exist, on every route.</p>
+      <p class="ticket__fineprint">Done when: an IDOR test proves no cross-user access on every ticket endpoint.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M4</span>
+      <span class="ticket__days">Days 22 to 26</span>
+      <span class="stamp">Done<br>22 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">An admin creates an event as a draft and publishes it. A user registers a ticket they bought for it, with the order and ticket numbers, and uploads a receipt or e-ticket. An admin looks at the evidence and verifies or rejects the ticket. Only a verified, transfer-eligible ticket will be sellable in M5.</p>
+        <p class="pitch">The files sit in a private bucket under random keys. The API never streams them: it checks who is asking, then hands back a presigned link that works for 5 minutes. I decide a file's type from its first bytes, not its name, and refuse an oversized request before anything reads its body.</p>
+        <p class="pitch">Every route that takes a ticket ID goes through one function, so "not yours" and "doesn't exist" give byte-for-byte the same 404. A test lists every such route from the app's own schema. It fails if someone adds a ticket route without adding it to the IDOR checks.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Events</span><span class="built__note">Public <code>GET /events</code> and <code>/events/{id}</code> (published only); admin list, create and <code>PATCH</code>. The status machine allows <code>DRAFT → PUBLISHED</code> only while the start is in the future and <code>PUBLISHED → COMPLETED</code> only once it has passed; <code>CANCELLED</code> and <code>COMPLETED</code> are final. Each change is one conditional UPDATE.</span><code>app/modules/events/</code></li>
+          <li><span class="built__what">Ticket providers</span><span class="built__note">Admin list and create. The migration seeds <code>fakeprovider</code>, so a fresh database can take events straight away.</span><code>app/modules/events/router.py</code> <code>migrations/versions/2026_11_22_027244e97413_…</code></li>
+          <li><span class="built__what">Tickets</span><span class="built__note"><code>POST /tickets</code> takes the owner from the token, never the body, and needs a published event that hasn't started. <code>uq_tickets_event_provider_reference</code> turns a second registration of the same real ticket into a 409. <code>GET /tickets/me</code>, newest first; <code>GET /tickets/{id}</code> for the owner or an admin.</span><code>app/modules/tickets/service.py</code></li>
+          <li><span class="built__what">Storage adapter</span><span class="built__note">An <code>ObjectStorage</code> protocol with <code>put_object</code>, <code>presigned_get_url</code> and <code>ensure_bucket</code>. <code>S3Storage</code> speaks the S3 API through boto3 (SigV4, path-style addressing); <code>InMemoryStorage</code> stands in for most tests.</span><code>app/infrastructure/storage/</code></li>
+          <li><span class="built__what">Evidence uploads</span><span class="built__note">Owner only, while the ticket is <code>PENDING</code>, at most 5 per ticket. 1 byte to 5 MiB; PDF, PNG or JPEG by magic bytes; stored as <code>ticket-documents/&lt;uuid4 hex&gt;</code>. The file name is thrown away. A list route, and a link route that returns <code>{url, expires_at}</code>.</span><code>app/modules/tickets/documents.py</code> <code>files.py</code></li>
+          <li><span class="built__what">Body size limit</span><span class="built__note">Pure ASGI middleware: a <code>Content-Length</code> over 6 MiB gets a 413 problem response before FastAPI parses or spools the multipart body. A chunked body with no length is counted as it arrives and cut off at 6 MiB with the same 413.</span><code>app/core/body_limit.py</code></li>
+          <li><span class="built__what">Verification</span><span class="built__note"><code>GET /admin/tickets/pending</code>, oldest first, and <code>POST /admin/tickets/{id}/verify</code> with <code>VERIFIED</code> or <code>REJECTED</code>. A rejection needs a note, which the owner sees. One conditional UPDATE <code>WHERE verification_status = 'PENDING'</code>, so the first decision wins and the second gets a 409.</span><code>app/modules/tickets/service.py</code></li>
+          <li><span class="built__what">Pagination</span><span class="built__note"><code>Page[T]</code> = <code>{items, next_cursor}</code>. The cursor is base64url JSON holding an offset; garbage, more than 200 characters, or an offset outside 0 to 2³¹ − 1 is 400 <code>bad-cursor</code>, and <code>limit</code> outside 1 to 100 is 422. It fetches <code>limit + 1</code> rows to know whether there is a next page.</span><code>app/core/pagination.py</code></li>
+          <li><span class="built__what">MinIO</span><span class="built__note">Chainguard's free rebuild, pinned by digest, in Compose with a web console on port 9001. The API creates the bucket on startup only when <code>ENVIRONMENT=local</code>. Staging and production refuse to start with the built-in storage secret.</span><code>docker-compose.yml</code> <code>app/core/config.py</code></li>
+          <li><span class="built__what">Frontend</span><span class="built__note">Four new screens (below), an admin-only route guard, rupees ↔ paise and local time ↔ UTC helpers, and a client-side file check that saves pointless uploads.</span><code>frontend/src/pages/</code> <code>frontend/src/lib/</code></li>
+          <li><span class="built__what">CI</span><span class="built__note">The backend and browser-test jobs start MinIO with <code>docker run</code> and wait for its health check. The backend job sets <code>REQUIRE_STORAGE=1</code>, so the MinIO tests fail rather than skip if it isn't there.</span><code>.github/workflows/ci.yml</code></li>
+          <li><span class="built__what">Tests</span><span class="built__note">292 backend tests (149 new): the status machine, providers, tickets, uploads, verification, pagination, sniffing, the body limit (chunked bodies too), settings, the migration going down and up with data in it, 4 against real MinIO, and the 13-test IDOR proof. 49 frontend unit tests and 9 browser tests, 5 of them new.</span><code>tests/</code> <code>frontend/src/lib/*.test.ts</code> <code>frontend/e2e/tickets.spec.ts</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">An upload, step by step</h2>
+      <div class="section__body">
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>The middleware reads Content-Length</strong><p>Over 6 MiB: 413 at once. The body is never read, so a 1 GB upload cannot fill the disk while FastAPI spools it. With no length (chunked), it counts the bytes as they arrive and stops the request at 6 MiB.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>One gate decides who may see the ticket</strong><p><code>get_visible_ticket</code> returns the ticket for its owner or an admin, and raises the same <code>ticket-not-found</code> for everyone else and for IDs that don't exist.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>Business checks</strong><p>Only the owner uploads (an admin gets 403: they can see the ticket, so hiding it would be pointless). The ticket must be <code>PENDING</code> and hold fewer than 5 documents.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>The bytes decide the type</strong><p>The route reads at most 5 MiB + 1 byte. Empty is 422 and one byte too many is 413. The first 8 bytes must start <code>%PDF-</code>, <code>\x89PNG\r\n\x1a\n</code> or <code>FF D8 FF</code>, or it's 415. The browser's <code>Content-Type</code> and the name are ignored.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>Store, then record</strong><p><code>put_object</code> under a fresh random key. If storage is down, 503 and no row. Then the <code>ticket_documents</code> row, committed by <code>get_db</code> with the rest of the request.</p></div></li>
+          <li><span class="flow__n">6</span><div class="flow__text"><strong>Opening it later</strong><p>The link route passes the same gate, matches the document to that ticket, and signs a GET for the browser's host: 300 seconds, served as the checked type, <code>inline</code>.</p></div></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="idor">
+      <h2 id="idor">The IDOR proof</h2>
+      <div class="section__body">
+        <p>IDOR means changing an ID in a URL to read someone else's data. Proving it can't happen means testing every route, and remembering to test the next route someone adds.</p>
+<pre><code>IDOR_ROUTES = {                                      <span class="c"># tests/integration/test_ticket_access.py</span>
+    ("GET",  "/api/v1/tickets/{ticket_id}"),
+    ("POST", "/api/v1/tickets/{ticket_id}/documents"),
+    ("GET",  "/api/v1/tickets/{ticket_id}/documents"),
+    ("GET",  "/api/v1/tickets/{ticket_id}/documents/{document_id}"),
+}
+<span class="c"># every non-admin path with {ticket_id} or {document_id} in the app's OpenAPI schema</span>
+assert found == IDOR_ROUTES</code></pre>
+        <ul class="tight">
+          <li><strong>Bob gets 404 on each of Alice's routes,</strong> and the <code>type</code>, <code>title</code>, <code>status</code> and <code>detail</code> match what a random UUID gets. A guest gets 401. An admin reads all of them.</li>
+          <li><strong>Bob's refused upload stores nothing,</strong> and Alice's ticket never shows up in Bob's <code>/tickets/me</code>.</li>
+          <li><strong>Alice's own document under her other ticket is a 404 too.</strong> The link route matches both IDs, so a document ID can't be borrowed through a ticket you do own.</li>
+          <li><strong>The guard reads the OpenAPI schema, not <code>app.routes</code>.</strong> FastAPI 0.163 wraps included routers, so <code>app.routes</code> no longer lists them, and the guard first found nothing at all. A route hidden with <code>include_in_schema=False</code> would slip past it.</li>
+          <li><strong>The browser test covers the screen too:</strong> another user opening <code>/tickets/&lt;Alice's id&gt;</code> sees the not-found page, and the event's name appears nowhere on it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>Run <code>docker compose up -d db mailpit minio</code>, the API, and <code>npm run dev</code> in <code>frontend/</code>, then open <code>localhost:5173</code>. Promote an account with <code>scripts.make_admin</code> to see the admin screens.</p>
+        <ul class="built">
+          <li><span class="built__what">Events (admin)</span><span class="built__note">Every event with its status. Create, edit (only changed fields are sent), Publish, Mark completed, Cancel event. Once an event is published its provider shows as fixed text.</span><code>/admin/events</code></li>
+          <li><span class="built__what">My tickets</span><span class="built__note">Your tickets with their review status, and a form to register one: event, category, seat, price in rupees ("2,500" or "1499.50"), order and ticket numbers.</span><code>/tickets</code></li>
+          <li><span class="built__what">Ticket</span><span class="built__note">The ticket on a stub, the review result (with the admin's reason if rejected), the evidence list with Open, and the upload form while it's pending.</span><code>/tickets/:id</code></li>
+          <li><span class="built__what">Verify tickets (admin)</span><span class="built__note">The queue, oldest first, with each ticket's references and evidence. Verify with "Transfer eligible" (checked by default), or Reject with a required reason. A decided ticket leaves the queue.</span><code>/admin/tickets</code></li>
+          <li><span class="built__what">Not found</span><span class="built__note">Someone else's ticket, a malformed ticket ID, and admin screens for non-admins all land here.</span><code>any of the above</code></li>
+        </ul>
+        <figure class="shot">
+          <img src="assets/m04-ticket.png" alt="A ticket page: a blue stub reading Ticket beside the event name, venue, date, category, seat, price, order and ticket numbers; below, a Pending review badge, one PNG in the proof of purchase list with an Open button, and the upload form." loading="lazy" width="1280" height="1120">
+          <figcaption>A pending ticket with one piece of evidence. The order and ticket numbers are visible only to the owner and admins.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m04-admin-tickets.png" alt="The Verify tickets page: two pending tickets, each with event, venue and date, category, seat, price, order and ticket numbers, a PNG with an Open button, a checked Transfer eligible box, and Verify and Reject buttons." loading="lazy" width="1280" height="1118">
+          <figcaption>The admin queue, oldest first.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m04-my-tickets.png" alt="My tickets: three tickets, marked Pending review, Verified and Rejected, with a Register a ticket button." loading="lazy" width="1280" height="900">
+          <figcaption>My tickets after the admin has decided two of them.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m04-admin-events.png" alt="The admin Events page: four events marked Cancelled, Published, Published and Draft, with Edit, Mark completed, Publish and Cancel event buttons as each status allows." loading="lazy" width="1280" height="900">
+          <figcaption>Admin events. Each card offers only the moves its status allows; the API enforces them anyway.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+
+        <h3>Access</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>404 for a ticket that isn't yours</h4>
+            <p class="decision__over">Instead of 403 Forbidden</p>
+            <p>A 403 says "this exists, and you can't have it", which lets anyone walk IDs and learn which tickets exist. The 404 for "not yours" is built from the same error class with the same fixed detail as "doesn't exist", so nothing in the body tells them apart. 403 stays for things you can already see but may not do: an admin trying to upload to someone else's ticket.</p>
+          </div>
+          <div class="decision">
+            <h4>One visibility function, and a test that enumerates routes</h4>
+            <p class="decision__over">Instead of an ownership check written into each handler</p>
+            <p>A check copied into every handler is one forgotten line away from a leak. Every ticket route calls <code>get_visible_ticket</code> first. The test reads the route list from the app itself, so a new route that skips the IDOR checks fails CI rather than code review.</p>
+          </div>
+        </div>
+
+        <h3>Files</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Short-lived presigned links</h4>
+            <p class="decision__over">Instead of a public bucket, or streaming files through the API</p>
+            <p>A public bucket makes every receipt readable by anyone who learns or guesses its URL, forever. Streaming through the API ties up a worker for every download. A presigned URL is a signature over one object, one method and an expiry: the API checks who is asking, and the storage server checks the signature. After 5 minutes the link is useless, so a link pasted into a chat or left in browser history goes stale.</p>
+          </div>
+          <div class="decision">
+            <h4>Type from magic bytes, name thrown away</h4>
+            <p class="decision__over">Instead of trusting the extension or the browser's Content-Type</p>
+            <p>Both are typed by the client. The first bytes are at least the file's own claim. The object is stored as the type I checked, under <code>ticket-documents/&lt;uuid4 hex&gt;</code>, so a name like <code>../../etc/passwd.png</code> can't steer where it goes, overwrite another file, or leak into a URL. The link serves it with <code>Content-Disposition: inline</code> and the checked type.</p>
+          </div>
+          <div class="decision">
+            <h4>Size checked before parsing</h4>
+            <p class="decision__over">Instead of only checking the size inside the route</p>
+            <p>FastAPI parses and spools the whole multipart body before a route runs, even before it checks the token, so a route-level check would come after a huge upload had already landed on disk. The middleware refuses by <code>Content-Length</code> first, and counts a chunked body's bytes as they arrive. The route still reads at most 5 MiB + 1 byte.</p>
+          </div>
+          <div class="decision">
+            <h4>Two endpoints for one storage server</h4>
+            <p class="decision__over">Instead of one URL for everything</p>
+            <p>In Compose the API reaches MinIO as <code>http://minio:9000</code>, but the browser knows it as <code>http://localhost:9000</code>. SigV4 signs the host, so a link signed for <code>minio:9000</code> and rewritten to <code>localhost</code> would fail its check. I keep two boto3 clients: one makes the calls, the other only signs links for the public host. Signing is local maths, with no network call.</p>
+          </div>
+          <div class="decision">
+            <h4>Real MinIO for the adapter, a fake for everything else</h4>
+            <p class="decision__over">Instead of mocking boto3, or using MinIO in every test</p>
+            <p>Four tests run against real MinIO: a presigned link serves the object with its type, the bucket refuses an unsigned read, a link stops working once it expires, and a server that's down raises <code>StorageError</code>. Everything above the adapter uses an in-memory store behind the same protocol, so the upload tests run in milliseconds and never depend on Docker.</p>
+          </div>
+        </div>
+
+        <h3>State and lists</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Status changes as one conditional UPDATE</h4>
+            <p class="decision__over">Instead of reading the row, checking it in Python, then writing</p>
+            <p>Two admins who both read <code>PENDING</code> would both write. <code>UPDATE … WHERE verification_status = 'PENDING' RETURNING id</code> lets Postgres pick one winner, and the loser sees zero rows and gets a 409. Event status changes use <code>WHERE status = &lt;the status I read&gt;</code> the same way.</p>
+          </div>
+          <div class="decision">
+            <h4>An offset inside an opaque cursor</h4>
+            <p class="decision__over">Instead of <code>?offset=40</code>, or building keyset pagination now</p>
+            <p>The response shape is the contract's from day one, <code>{items, next_cursor}</code>, and clients pass the cursor back without reading it. M6 can switch to keyset (the last row's sort key and id) without any client changing. Offset has known flaws: rows shift between pages, and deep pages get slow. Neither matters with a few hundred events.</p>
+          </div>
+        </div>
+
+        <h3>Running it</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Chainguard's MinIO, pinned by digest</h4>
+            <p class="decision__over">Instead of <code>minio/minio:latest</code></p>
+            <p>MinIO stopped publishing its free community image in October 2025. Chainguard rebuilds it for free. A digest pins the exact bytes, so Compose and CI run the same build and nothing changes under me.</p>
+          </div>
+          <div class="decision">
+            <h4><code>docker run</code> in CI</h4>
+            <p class="decision__over">Instead of a GitHub Actions service container</p>
+            <p>The Chainguard image's entrypoint is bare <code>/usr/bin/minio</code> and needs <code>server /data</code> as arguments. Service containers can't pass a command, so the job starts MinIO with <code>docker run</code> and polls <code>/minio/health/live</code> for up to 30 seconds.</p>
+          </div>
+        </div>
+
+        <h3>Frontend</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Open the tab first, fetch the link second</h4>
+            <p class="decision__over">Instead of fetching the link, then calling <code>window.open</code></p>
+            <p>Browsers allow a new tab only during a click. After waiting for the network the click no longer counts, and the tab is blocked as a popup. I open a blank tab on the click, cut its <code>opener</code>, then point it at the signed link. If the request fails, the tab closes.</p>
+          </div>
+          <div class="decision">
+            <h4>Rupees parsed as text, sent as integer paise</h4>
+            <p class="decision__over">Instead of <code>Math.round(parseFloat(input) * 100)</code></p>
+            <p>A strict pattern accepts digits, Indian-style commas and up to two decimals, then joins the whole and fractional parts as integers. No float ever touches money, and "1.234", "-1" and "1e3" are refused in the form. Times go the same careful way: a <code>datetime-local</code> value is the browser's own time zone, and the API always gets UTC with a <code>Z</code>.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>Why return 404 instead of 403 for another user's ticket?</summary>
+          <div class="qa__a">
+            <p>Because 403 confirms the ticket exists. With 403 for "exists but not yours" and 404 for "doesn't exist", anyone can walk IDs and map which ones are real, even with UUIDs. A leaked or logged ID becomes confirmable. Returning the same 404, with the same body, for both cases gives an attacker nothing to compare. 403 still has a job: when you can already see something but may not act on it, like an admin trying to upload to a user's ticket, hiding it would be pointless, and a clear "not allowed" is more honest.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why hand out short-lived presigned URLs instead of a public bucket?</summary>
+          <div class="qa__a">
+            <p>A public bucket protects files only by the secrecy of their URLs, and URLs leak through browser history, logs, screenshots and shared chats. Once leaked, the file is readable forever. With a private bucket the API decides who may see a file on every request, then signs a URL for that one object that expires in 5 minutes. The storage server checks the signature itself, so the bytes never pass through my API workers. A leaked link stops working in minutes. The cost is that each view needs one more API call.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What is IDOR, and how do you stop it across a whole API, not just one route?</summary>
+          <div class="qa__a">
+            <p>Insecure Direct Object Reference: the server trusts an ID from the request without checking that the caller may use that object. Change <code>/tickets/123</code> to <code>/tickets/124</code> and read someone else's ticket. Random UUIDs make guessing hard but don't fix it. I route every lookup through one function that returns the object only for its owner or an admin. A test then enumerates every route with a ticket or document ID from the app's own OpenAPI schema and checks another user's request against each one. The 404 must match the one a random ID gets. New routes can't skip the test, because the enumeration catches them.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why not trust a file's extension or Content-Type?</summary>
+          <div class="qa__a">
+            <p>The client sets both. Anything can be called <code>receipt.png</code> and sent as <code>image/png</code>. I read the first bytes and accept only the PDF, PNG and JPEG signatures, then store and serve the file as that type. It isn't proof of a well-formed file: a polyglot can start with a valid signature and carry something else. But I never execute or render it server-side, and it's served from a different origin, MinIO, as an image or PDF. Real antivirus scanning would come before production.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why store uploads under a random key and not the file name?</summary>
+          <div class="qa__a">
+            <p>The name is user input. Used as a path or key, <code>../../</code> sequences can escape the intended folder, two users can collide and overwrite each other, and the name itself (often a real name or an order number) ends up in URLs and logs. A random <code>uuid4</code> key has none of those problems, can't be guessed, and a unique constraint on it guarantees one row per object. I drop the original name entirely, because nothing needs it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Where do you enforce the upload size limit, and why there?</summary>
+          <div class="qa__a">
+            <p>Twice. An ASGI middleware refuses any request whose <code>Content-Length</code> is over 6 MiB, before FastAPI touches the body. That matters because FastAPI parses and spools a multipart upload to disk before the route runs, so a route-level check would come after the damage. A chunked upload has no length to read, so the middleware counts its bytes as they arrive, stops the app at 6 MiB, and answers 413 in place of whatever the app was about to say. Then the route reads at most 5 MiB + 1 byte and refuses the extra byte. The review caught the chunked case: FastAPI parses the form before it checks the token, so an anonymous client could have streamed gigabytes to disk and only then been told 401.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Offset or keyset pagination? Why is your cursor opaque if it only holds an offset?</summary>
+          <div class="qa__a">
+            <p>Offset re-counts skipped rows on every page, so deep pages slow down, and rows inserted between requests shift the pages, so a user sees duplicates or misses items. Keyset fixes both by asking for rows after the last one's sort key and id, using an index. I start with an offset because the lists are small, but wrap it in an opaque base64 cursor from day one. The client contract is "pass <code>next_cursor</code> back", so M6 can switch to keyset without breaking any client. Bad cursors are a 400, not a crash.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Two admins click Verify on the same ticket at the same moment. What happens?</summary>
+          <div class="qa__a">
+            <p>Both send <code>UPDATE tickets SET … WHERE id = :id AND verification_status = 'PENDING' RETURNING id</code>. The first locks the row and changes it. The second waits on the lock, then re-checks its WHERE against the committed row under Read Committed, finds it is no longer <code>PENDING</code>, and updates nothing. Zero rows back means someone decided first: it answers 409, and the screen tells the second admin another admin already decided. A read-then-write in Python would let both succeed and the second decision would silently overwrite the first.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does the API need two S3 endpoints?</summary>
+          <div class="qa__a">
+            <p>The API and the browser reach the storage server by different names. Inside Docker it's <code>minio:9000</code>; from the laptop's browser it's <code>localhost:9000</code>; in production it might be a private network address versus a public domain. A SigV4 presigned URL includes the host in what it signs, so I can't sign for one host and swap in another. One boto3 client makes the real calls on the internal endpoint, and a second one signs links for the public endpoint.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What would real ticket verification need?</summary>
+          <div class="qa__a">
+            <p>An integration with the ticket provider. A receipt or screenshot proves nothing; anyone can edit one, and the same ticket can be sold twice from one real purchase. Today an admin compares the evidence with the order and ticket numbers by eye, and the unique constraint on (event, provider reference) stops the same ticket being registered twice. The real check is the provider's API confirming the ticket exists, belongs to the seller, and can be transferred, which is what <code>ticket_providers</code> and <code>transfer_eligible</code> are there for.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does the frontend open a blank tab before it has the link?</summary>
+          <div class="qa__a">
+            <p>Popup blockers allow <code>window.open</code> only while the browser is still handling the user's click. Awaiting a network request ends that window, so opening the tab afterwards is often blocked. I open a blank tab synchronously on the click, set its <code>opener</code> to null so the file's page can't reach back into TicketLoop, then navigate it to the signed URL once it arrives. If the request fails, I close the tab and show the error.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>The IDOR guard passed with nothing in it.</strong> In FastAPI 0.163, <code>app.routes</code> lists an included router as one wrapper object, so my route filter found zero ticket routes. The test failed, which is how I noticed. It now reads the app's OpenAPI schema.</li>
+          <li><strong>A <code>PATCH</code> with an explicit <code>null</code> crashed with a 500.</strong> Pydantic accepted <code>"name": null</code> for an optional field, and the database's NOT NULL refused it. A model validator now rejects explicit nulls with 422; to clear the description, send <code>""</code>.</li>
+          <li><strong>A "newest first" test was flaky.</strong> Postgres <code>now()</code> is the transaction's start time, and each test runs in one transaction, so two rows had identical timestamps. The test now ages one row by a minute.</li>
+          <li><strong>The body-limit middleware wasn't installed.</strong> <code>app/main.py</code> has CRLF line endings in the working copy, so a scripted <code>\n</code> replace matched nothing and reported no error. The failing test caught it.</li>
+          <li><strong>A pipe hid a lint failure.</strong> <code>ruff check . | tail</code> exits with <code>tail</code>'s status, so an import-order error got committed. Lint now runs on its own, before anything is piped.</li>
+          <li><strong>MinIO wouldn't start as a CI service.</strong> The image needs <code>server /data</code> as arguments, and service containers can't pass them. The job uses <code>docker run</code> and a health poll.</li>
+          <li><strong>The storage-secret check broke three old tests.</strong> They built staging and production settings without a storage secret, which now refuses to start. They now pass one, which is the point of the check.</li>
+          <li><strong>Logging out kept the last user's tickets in memory.</strong> Logout only forgot who you were; the cached ticket list stayed for five minutes. On a shared laptop the next person saw it flash up before their own loaded. Logout now clears every cached query. A browser test slows the second user's list down and checks that nothing from the first appears meanwhile.</li>
+          <li><strong>The address <code>/tickets/me</code> blanked the app.</strong> The ticket page sent "me" to <code>GET /tickets/me</code>, which is the list, and then read a list as a ticket. It also cached that under the list's own key, breaking My tickets until a reload. Non-UUID addresses now show Not found, and one ticket is cached under <code>["ticket", id]</code>.</li>
+          <li><strong>A cursor with a huge offset gave a 500.</strong> <code>{"o": 10**30}</code> decoded fine and then overflowed Postgres's bigint in <code>OFFSET</code>. Offsets above 2³¹ − 1 and cursors over 200 characters are now 400 <code>bad-cursor</code>, like any other bad cursor.</li>
+          <li><strong>Going down and up again broke the migration.</strong> The downgrade keeps <code>fakeprovider</code> while events use it, and the upgrade then inserted it a second time. The insert is now <code>ON CONFLICT (code) DO NOTHING</code>, and a test runs the round trip with an event in the table.</li>
+          <li><strong>The order number wrapped at its hyphen.</strong> On the ticket page "ORD-…" broke onto two lines in a narrow column. Reference codes now use the mono font, which is narrower and reads as a code.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>A file can outlive a failed request.</strong> The object is stored before the row is committed; if the commit then fails, the object stays in the bucket with no row pointing at it. A cleanup job can remove keys with no row.</li>
+          <li><strong>No malware scanning.</strong> Files are typed by signature only. They're never executed or rendered by the API, and they're served from MinIO's origin.</li>
+          <li><strong>The 5-document cap can be raced.</strong> Parallel uploads to one ticket all read the count before any of them writes. Locking the ticket row would serialise them.</li>
+          <li><strong>The bucket is created only at startup.</strong> If MinIO starts after the API, uploads answer 503 until the API restarts.</li>
+          <li><strong>Offset pagination</strong> can repeat or skip a row when the list changes between pages. M6 moves to keyset.</li>
+          <li><strong>Verification is by eye.</strong> A provider API replaces it later.</li>
+          <li><strong>At 390 px the admin's top bar wraps</strong> to three short lines beside the wordmark. Readable; M18 tidies it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db mailpit minio
+uv run alembic upgrade head
+uv run pytest tests/unit/test_file_sniffing.py tests/unit/test_pagination.py   <span class="c"># 25 tests, no services</span>
+uv run pytest tests/integration/test_ticket_access.py                          <span class="c"># 13 tests: the IDOR proof</span>
+REQUIRE_STORAGE=1 uv run pytest tests/integration/test_storage_s3.py           <span class="c"># 4 tests against real MinIO</span>
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 uv run pytest                             <span class="c"># 292 tests, what CI runs</span>
+
+uv run uvicorn app.main:app --reload                 <span class="c"># /docs; files in MinIO at localhost:9001</span>
+uv run python -m scripts.make_admin you@example.in   <span class="c"># unlocks Events and Verify tickets</span>
+cd frontend &amp;&amp; npm run dev                           <span class="c"># localhost:5173</span>
+npm test                                             <span class="c"># 49 unit tests: money, time, file checks, refresh</span>
+npm run e2e                                          <span class="c"># 9 browser tests, 5 for this module</span>
+gh run list --workflow ci.yml --limit 3              <span class="c"># the CI runs on GitHub</span></code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m03-identity-and-auth.html">Previous<strong>M3 Identity and auth</strong></a>
+    <span class="pager__next">Next<br><strong>M5 Listings, verification and audit log</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

@@ -57,7 +57,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const forget = useCallback(() => {
     setAccessToken(null);
-    queryClient.removeQueries({ queryKey: ME_KEY });
+    // Drop everything fetched as this user (their tickets, admin queues), not just who they
+    // are: the next person to log in on this tab must never see it, not even for a moment.
+    // The session-restore query stays, or it would fire a refresh with a cookie now cleared.
+    queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== "session-restore" });
   }, [queryClient]);
 
   const logOut = useCallback(async () => {

@@ -21,8 +21,17 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.infrastructure.database.engine import create_db_engine
 from app.infrastructure.database.session import create_session_factory
+from app.infrastructure.storage import InMemoryStorage, S3Storage, StorageError
 from app.main import create_app
+from app.modules.events.models import Event
+from app.modules.identity.models import UserRole
+from app.modules.tickets.models import Ticket
+from scripts.make_admin import set_role
+from tests.integration.api import login, register
 from tests.integration.database import database_url_with_name, recreate_database, upgrade
+from tests.integration.factories import make_event, make_ticket
+
+TEST_BUCKET = "ticketloop-documents-test"
 
 
 @pytest.fixture(scope="session")
@@ -87,7 +96,33 @@ def db_app(test_settings: Settings, db_connection: Connection) -> FastAPI:
     factory = create_session_factory(db_connection)
     factory.configure(join_transaction_mode="create_savepoint")
     app.state.session_factory = factory
+    # Uploads go to a dict, not MinIO; tests that need the real server swap in s3_storage.
+    app.state.storage = InMemoryStorage()
     return app
+
+
+@pytest.fixture
+def memory_storage(db_app: FastAPI) -> InMemoryStorage:
+    """The in-memory storage the test app uploads to."""
+    return db_app.state.storage
+
+
+@pytest.fixture(scope="session")
+def s3_storage(test_settings: Settings) -> S3Storage:
+    """A real MinIO bucket for the tests that must prove links open and the bucket is private.
+
+    Skipped when MinIO is not running, like Postgres; CI sets REQUIRE_STORAGE=1 to fail
+    instead. The bucket is emptied once per run; keys are random, so tests never collide.
+    """
+    storage = S3Storage.from_settings(test_settings, bucket=TEST_BUCKET)
+    try:
+        storage.ensure_bucket()
+        storage.delete_all_objects()
+    except StorageError:
+        if os.environ.get("REQUIRE_STORAGE") == "1":
+            pytest.fail("MinIO is required (REQUIRE_STORAGE=1) but is not reachable.")
+        pytest.skip("MinIO is not running. Start it with `docker compose up -d minio`.")
+    return storage
 
 
 @pytest.fixture
@@ -95,3 +130,43 @@ def api(db_app: FastAPI) -> Iterator[TestClient]:
     """A client for the real app on the rolled-back test database."""
     with TestClient(db_app) as client:
         yield client
+
+
+def new_account(api: TestClient) -> dict[str, str]:
+    """Register and log in a fresh user: {"id", "email", "token"}."""
+    user = register(api)
+    token = login(api, user["email"])["access_token"]
+    return {"id": user["id"], "email": user["email"], "token": token}
+
+
+@pytest.fixture
+def admin(api: TestClient, db_session: Session) -> dict[str, str]:
+    """A logged-in admin. The role is read from the database on every request, so promoting
+    after login is enough."""
+    account = new_account(api)
+    set_role(db_session, account["email"], UserRole.ADMIN)
+    db_session.flush()
+    return account
+
+
+@pytest.fixture
+def user(api: TestClient) -> dict[str, str]:
+    """A logged-in user with no special role: {"id", "email", "token"}."""
+    return new_account(api)
+
+
+@pytest.fixture
+def published_event(db_session: Session) -> Event:
+    """A published event 30 days from now, open for ticket registration."""
+    return make_event(db_session, status="PUBLISHED")
+
+
+@pytest.fixture
+def owned_ticket(db_session: Session, user: dict[str, str], published_event: Event) -> Ticket:
+    """A PENDING ticket owned by `user`."""
+    return make_ticket(
+        db_session,
+        event_id=published_event.id,
+        original_owner_id=user["id"],
+        current_owner_id=user["id"],
+    )

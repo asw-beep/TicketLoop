@@ -14,13 +14,14 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M1 · Dev environment and skeleton | Done: app factory, `/api/v1/health` with a database check, settings, JSON logs with request IDs, RFC 9457 errors, Docker Compose, tests |
 | M2 · Database layer | Done: users, events, tickets, listings and audit log by Alembic migration; constraints that enforce the business rules; one transaction per request; a test database rolled back after every test |
 | M3 · Identity and auth | Done: register and login with Argon2id; 15-minute JWT access tokens; 7-day refresh tokens that rotate, with reuse detection that revokes the whole session; logout; password change and reset; `get_current_user` and `require_admin`; `GET` and `PATCH /users/me`; CI on every push |
-| M4 · Events, tickets and document storage | Next |
+| M4 · Events, tickets and document storage | Done: admin event management with a status machine; ticket registration; proof of purchase in MinIO (S3) behind 5-minute signed links, typed by its first bytes; admin verification; one 404 for "missing" and "not yours" on every ticket route, proven by a test that enumerates them; screens for all of it |
+| M5 · Listings, verification and audit log | Next |
 
 ## Run it
 
 You need Docker Desktop, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and Node 24 LTS for the frontend.
 
-**Everything in containers** (Postgres, Mailpit, then a one-off `migrate` job, then the API):
+**Everything in containers** (Postgres, Mailpit, MinIO, then a one-off `migrate` job, then the API):
 
 ```bash
 docker compose up --build
@@ -28,10 +29,10 @@ curl localhost:8000/api/v1/health
 # {"status":"ok","checks":{"database":"ok"}}
 ```
 
-**Day to day** (Postgres and Mailpit in Docker, the API and the frontend on Windows, both reloading as you edit):
+**Day to day** (Postgres, Mailpit and MinIO in Docker, the API and the frontend on Windows, both reloading as you edit):
 
 ```bash
-docker compose up -d db mailpit       # Postgres, and a fake inbox at http://localhost:8025
+docker compose up -d db mailpit minio # Postgres, a fake inbox at http://localhost:8025, and S3 storage
 cp .env.example .env                  # optional; the defaults already match compose
 uv sync                               # create .venv and install dependencies
 uv run alembic upgrade head           # create or update the tables
@@ -48,11 +49,13 @@ npm run dev                           # http://localhost:5173
 
 The dev server forwards `/api` to the API on port 8000, so the browser sees one origin.
 
+MinIO stores the uploaded proof of purchase. Its web console is at http://localhost:9001 (user `ticketloop`, password `ticketloop-local-secret`); the files sit in the bucket `ticketloop-documents`, which the API creates on startup when `ENVIRONMENT=local`. Anywhere else, create the bucket yourself and set `STORAGE_ENDPOINT_URL`, `STORAGE_PUBLIC_URL` (the host browsers reach, used to sign download links), `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` and `STORAGE_REGION`; see `.env.example`. Staging and production refuse to start with the built-in storage secret.
+
 Set `LOG_JSON=false` in `.env` for coloured, readable log lines while developing. Stop the `api` container first (`docker compose stop api`) if it is running, since both use port 8000.
 
 ```bash
-docker compose down      # stop everything; database data survives in the pgdata volume
-docker compose down -v   # stop and delete the database data too
+docker compose down      # stop everything; data survives in the pgdata and miniodata volumes
+docker compose down -v   # stop and delete the database and the stored files too
 ```
 
 ## Try the auth flow
@@ -82,6 +85,34 @@ uv run python -m scripts.make_admin asha@example.in            # --revoke to und
 
 Set `JWT_SECRET_KEY` (at least 32 bytes) anywhere but your laptop; staging and production refuse to start with the built-in development key.
 
+## Try the ticket flow
+
+1. Create two accounts at http://localhost:5173/register, one for you as admin and one as a ticket holder (a private window keeps the sessions apart).
+2. Promote the first: `uv run python -m scripts.make_admin <email>`, then reload the page. **Events** and **Verify tickets** appear in the top bar.
+3. **Events → New event**: fill it in with a start time in the future, create it (it starts as a draft), then **Publish**.
+4. As the ticket holder, **My tickets → Register a ticket**: pick the event, enter the category, the price you paid in rupees, and the order and ticket numbers.
+5. On the ticket's page, upload a PDF, PNG or JPEG up to 5 MB, then **Open** it: the file comes straight from MinIO through a link that works for 5 minutes.
+6. As the admin, **Verify tickets**: open the same file, then **Verify** (with or without "Transfer eligible") or **Reject** with a reason. The holder's ticket page shows the decision.
+
+The same from a terminal (it uses [`jq`](https://jqlang.org/) to pick fields out of the JSON), with `$ADMIN` and `$HOLDER` holding access tokens from `/auth/login`:
+
+```bash
+B=localhost:8000/api/v1
+PROVIDER=$(curl -s $B/admin/providers -H "Authorization: Bearer $ADMIN" | jq -r '.[0].id')
+EVENT=$(curl -s $B/admin/events -H "Authorization: Bearer $ADMIN" -H 'content-type: application/json' \
+  -d "{\"name\":\"Monsoon Beats\",\"category\":\"CONCERT\",\"venue\":\"Stadium\",\"city\":\"Kochi\",
+       \"starts_at\":\"2027-01-15T13:00:00Z\",\"organizer\":\"Backwater Live\",\"provider_id\":\"$PROVIDER\"}" | jq -r .id)
+curl -s -X PATCH $B/admin/events/$EVENT -H "Authorization: Bearer $ADMIN" \
+  -H 'content-type: application/json' -d '{"status":"PUBLISHED"}'
+TICKET=$(curl -s $B/tickets -H "Authorization: Bearer $HOLDER" -H 'content-type: application/json' \
+  -d "{\"event_id\":\"$EVENT\",\"ticket_category\":\"GENERAL\",\"original_price_paise\":250000,
+       \"purchase_reference\":\"ORD-1\",\"provider_reference\":\"TKT-1\"}" | jq -r .id)
+DOC=$(curl -s $B/tickets/$TICKET/documents -H "Authorization: Bearer $HOLDER" -F file=@receipt.pdf | jq -r .id)
+curl -s $B/tickets/$TICKET/documents/$DOC -H "Authorization: Bearer $HOLDER"   # {"url": "...", "expires_at": "..."}
+curl -s $B/admin/tickets/$TICKET/verify -H "Authorization: Bearer $ADMIN" \
+  -H 'content-type: application/json' -d '{"decision":"VERIFIED","transfer_eligible":true}'
+```
+
 ## Migrations
 
 ```bash
@@ -101,6 +132,7 @@ uv run pytest             # integration tests are skipped unless Postgres is run
                           # they build ticketloop_test from the migrations each run
 uv run pytest -m integration
 REQUIRE_POSTGRES=1 uv run pytest   # fail instead of skip without Postgres, as CI does
+REQUIRE_STORAGE=1 uv run pytest    # the same for the MinIO tests (docker compose up -d minio)
 uv run ruff check .
 uv run ruff format .
 ```
@@ -109,7 +141,7 @@ The frontend, from `frontend/`:
 
 ```bash
 npm test                  # unit tests (Vitest)
-npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit`
+npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit minio`
 npm run typecheck && npm run lint && npm run format:check
 npm run api:types         # after changing the API: regenerate openapi.json and the TypeScript types
 ```
@@ -124,7 +156,9 @@ app/
   models.py                imports every model, so Alembic sees every table
   modules/                 one package per business module: models, schemas, service, router
     identity/              users, tokens, auth routes, get_current_user and require_admin
-  infrastructure/          Postgres engine, sessions, base model, email sender; later Redis, RabbitMQ, storage
+    events/                events, ticket providers, the event status machine, admin event routes
+    tickets/               ticket registration, evidence uploads and links, admin verification
+  infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory); later Redis, RabbitMQ
   workers/                 background jobs (M8 onward)
 tests/
   unit/                    fast, no external services
@@ -140,7 +174,7 @@ frontend/                  React + TypeScript app (Vite); each module adds its s
 .github/workflows/ci.yml   backend tests, frontend checks and browser tests on every push
 docs/                      design documents (below)
 documentation/             one HTML page per finished module for revision and interview prep; open index.html
-docker-compose.yml         Postgres, Mailpit, the migrate job, the API
+docker-compose.yml         Postgres, Mailpit, MinIO, the migrate job, the API
 Dockerfile                 the API image
 ```
 

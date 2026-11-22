@@ -24,6 +24,10 @@ class EventStatus(StrEnum):
     COMPLETED = "COMPLETED"
 
 
+# The provider seeded by the M4 migration, so every database has one to attach events to.
+FAKE_PROVIDER_CODE = "fakeprovider"
+
+
 class TicketProvider(UUIDPrimaryKey, CreatedAt, Base):
     __tablename__ = "ticket_providers"
     __table_args__ = (UniqueConstraint("code"),)

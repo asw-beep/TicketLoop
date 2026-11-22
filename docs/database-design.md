@@ -4,6 +4,8 @@ PostgreSQL 17 is the single source of truth for inventory and money. This docume
 
 The draft is the target. From M2, each module's Alembic migration builds its own tables from it: M3 builds identity, M4 the catalogue, and so on.
 
+**Built so far (M4):** the M2 migration created `users`, `ticket_providers`, `events`, `tickets`, `listings` and `audit_logs`; M3 added `refresh_tokens` and `password_reset_tokens`; M4 added `ticket_documents`, the column `tickets.verification_note`, and one seeded row in `ticket_providers` (`fakeprovider`, FakeProvider) so an admin can create events on a fresh database. Its downgrade removes that row only if no event uses it.
+
 ## Conventions
 
 | Topic | Rule | Why |
@@ -77,12 +79,15 @@ erDiagram
         text provider_reference "UK with event_id"
         text verification_status
         boolean transfer_eligible
+        text verification_note
     }
     ticket_documents {
         uuid id PK
         uuid ticket_id FK
         uuid uploaded_by FK
         text storage_key UK
+        text content_type
+        bigint size_bytes
     }
     listings {
         uuid id PK
@@ -249,10 +254,10 @@ erDiagram
 | `users` | Accounts, role and suspension status | M3 |
 | `refresh_tokens` | One row per issued refresh token, hashed. `family_id` ties together every token descended from one login, so reuse of a revoked token can revoke them all. | M3 |
 | `password_reset_tokens` | Single-use, hashed, 30-minute reset tokens | M3 |
-| `ticket_providers` | Who can transfer a ticket for an event. One fake provider now. | M4 |
-| `events` | What people go to. Admin-managed. | M4 |
-| `tickets` | One entitlement to attend. `current_owner_id` changes only when a transfer completes. | M4 |
-| `ticket_documents` | Pointers to private evidence files in object storage | M4 |
+| `ticket_providers` | Who can transfer a ticket for an event. One fake provider, `fakeprovider`, seeded by the M4 migration. | M4 (built) |
+| `events` | What people go to. Admin-managed. | M4 (built) |
+| `tickets` | One entitlement to attend. `current_owner_id` changes only when a transfer completes. `verification_note` holds the admin's reason for a decision. | M4 (built) |
+| `ticket_documents` | Pointers to private evidence files in object storage: a random `storage_key` (`ticket-documents/<32 hex>`), the type read from the file's first bytes, and its size. The file name is never stored. At most 5 per ticket, enforced by the service. | M4 (built) |
 | `listings` | One ticket offered at one fixed price. Its row is the lock that decides who gets the ticket. | M5 |
 | `interests` | "I would like this ticket", the input to allocation | M7 |
 | `reservations` | A 10-minute hold on a listing for one buyer | M8 |

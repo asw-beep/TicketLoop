@@ -165,6 +165,10 @@ def test_an_opaque_token_is_stored_as_its_sha256() -> None:
 
 # ---------------------------------------------------------------- settings
 
+# Staging and production also refuse the built-in storage secret (M4), so settings built for
+# them here carry their own.
+DEPLOYED_STORAGE_SECRET = "a-storage-secret-from-the-environment"
+
 
 def test_staging_and_production_refuse_the_built_in_jwt_secret() -> None:
     with pytest.raises(ValidationError, match="JWT_SECRET_KEY"):
@@ -184,12 +188,22 @@ def test_the_refresh_cookie_is_secure_everywhere_but_a_laptop(
     environment: str, secure: bool
 ) -> None:
     # Secure: the browser sends the cookie over HTTPS only. A laptop serves plain http.
-    settings = Settings(_env_file=None, environment=environment, jwt_secret_key="s" * 48)
+    settings = Settings(
+        _env_file=None,
+        environment=environment,
+        jwt_secret_key="s" * 48,
+        storage_secret_key=DEPLOYED_STORAGE_SECRET,
+    )
 
     assert settings.cookie_secure is secure
 
 
 def test_production_accepts_its_own_secret() -> None:
-    settings = Settings(_env_file=None, environment="production", jwt_secret_key="s" * 48)
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret_key="s" * 48,
+        storage_secret_key=DEPLOYED_STORAGE_SECRET,
+    )
 
     assert settings.jwt_secret_key.get_secret_value() == "s" * 48

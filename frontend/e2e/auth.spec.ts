@@ -3,30 +3,11 @@
  * forgotten password from the emailed link, and log out everywhere on a password change.
  */
 import { expect, test } from "@playwright/test";
-import type { APIRequestContext, Page } from "@playwright/test";
+import type { APIRequestContext } from "@playwright/test";
+import { PASSWORD, logIn, newEmail, register } from "./helpers";
 
 const MAILPIT = process.env.MAILPIT_URL ?? "http://localhost:8025";
-const PASSWORD = "correct horse battery staple";
 const NEW_PASSWORD = "a brand new passphrase";
-
-function newEmail(): string {
-  return `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.in`;
-}
-
-async function register(page: Page, email: string, name = "Asha Menon"): Promise<void> {
-  await page.goto("/register");
-  await page.getByLabel("Full name").fill(name);
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
-  await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page.getByRole("heading", { name: "Your pass" })).toBeVisible();
-}
-
-async function logIn(page: Page, email: string, password: string): Promise<void> {
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Log in" }).click();
-}
 
 /** The reset link from the newest email Mailpit caught for this address. */
 async function resetLinkFor(request: APIRequestContext, email: string): Promise<string> {

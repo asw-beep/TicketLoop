@@ -108,6 +108,7 @@ CREATE TABLE tickets (
     status                TEXT NOT NULL DEFAULT 'ACTIVE',
     verified_by           UUID REFERENCES users (id),
     verified_at           TIMESTAMPTZ,
+    verification_note     TEXT,                      -- the admin's reason, shown to the owner (M4)
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT uq_tickets_event_provider_reference UNIQUE (event_id, provider_reference),

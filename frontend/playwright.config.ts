@@ -1,9 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
 /**
- * Browser tests against the real stack: Vite, the API, Postgres and Mailpit.
+ * Browser tests against the real stack: Vite, the API, Postgres, Mailpit and MinIO.
  *
- *   docker compose up -d db mailpit     then, from frontend/:   npm run e2e
+ *   docker compose up -d db mailpit minio     then, from frontend/:   npm run e2e
  *
  * Playwright starts the API and the dev server unless they are already running. It drives
  * the installed Google Chrome, here and on GitHub's runners, so there is no browser download.

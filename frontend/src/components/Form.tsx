@@ -1,4 +1,9 @@
-import type { InputHTMLAttributes, ReactNode } from "react";
+import type {
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+  TextareaHTMLAttributes,
+} from "react";
 import { ApiError, describeError, fieldErrors } from "../api/problem";
 
 type FieldProps = InputHTMLAttributes<HTMLInputElement> & {
@@ -32,6 +37,93 @@ export function Field({ label, name, hint, error, id = name, ...input }: FieldPr
           {error}
         </p>
       )}
+    </div>
+  );
+}
+
+type Described = { label: string; name: string; hint?: ReactNode; error?: string; id?: string };
+
+/** The ids that tie a control to its hint and error, for aria-describedby. */
+function describedBy(id: string, hint?: ReactNode, error?: string) {
+  const hintId = hint ? `${id}-hint` : undefined;
+  const errorId = error ? `${id}-error` : undefined;
+  return { hintId, errorId, ids: [hintId, errorId].filter(Boolean).join(" ") || undefined };
+}
+
+function FieldNotes({
+  hint,
+  error,
+  hintId,
+  errorId,
+}: Partial<Described> & {
+  hintId?: string;
+  errorId?: string;
+}) {
+  return (
+    <>
+      {hint && (
+        <p className="field__hint" id={hintId}>
+          {hint}
+        </p>
+      )}
+      {error && (
+        <p className="field__error" id={errorId}>
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** A labelled drop-down, wired up like Field. */
+export function SelectField({
+  label,
+  name,
+  hint,
+  error,
+  id = name,
+  children,
+  ...select
+}: Described & SelectHTMLAttributes<HTMLSelectElement>) {
+  const notes = describedBy(id, hint, error);
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <select
+        id={id}
+        name={name}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={notes.ids}
+        {...select}
+      >
+        {children}
+      </select>
+      <FieldNotes hint={hint} error={error} hintId={notes.hintId} errorId={notes.errorId} />
+    </div>
+  );
+}
+
+/** A labelled multi-line text box, wired up like Field. */
+export function TextAreaField({
+  label,
+  name,
+  hint,
+  error,
+  id = name,
+  ...textarea
+}: Described & TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const notes = describedBy(id, hint, error);
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <textarea
+        id={id}
+        name={name}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={notes.ids}
+        {...textarea}
+      />
+      <FieldNotes hint={hint} error={error} hintId={notes.hintId} errorId={notes.errorId} />
     </div>
   );
 }

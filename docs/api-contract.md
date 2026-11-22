@@ -13,7 +13,7 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 | IDs | UUID strings. |
 | Money | Integer paise, field names end in `_paise`: `{"asking_price_paise": 125000}` is ₹1,250. Currency is `"INR"`. |
 | Time | ISO 8601 in UTC: `"2026-12-31T18:30:00Z"`. |
-| Pagination | Every list takes `limit` (default 20, max 100) and `cursor`. Responses are `{"items": [...], "next_cursor": "..." or null}`. The cursor is opaque base64 of the last row's sort key and id; clients pass it back unchanged. |
+| Pagination | Every list takes `limit` (default 20, max 100) and `cursor`. Responses are `{"items": [...], "next_cursor": "..." or null}`. The cursor is opaque base64; clients pass it back unchanged. As built in M4 it holds an offset; M6 switches it to the last row's sort key and id (keyset), and clients do not change. A cursor that does not decode, is longer than 200 characters, or holds an offset beyond 2³¹ − 1 is 400 `bad-cursor`; `limit` outside 1 to 100 is 422. |
 | Errors | `application/problem+json` per RFC 9457: `type`, `title`, `status`, `detail`, `instance`, `request_id`, and for 422 an `errors` list. Built in `app/core/exceptions.py`. |
 | Request ID | Every response has `X-Request-ID`. A client may send its own (up to 64 chars of `A-Z a-z 0-9 . _ -`). |
 | Idempotency | `POST /orders` and `POST /payments/intents` require an `Idempotency-Key` header (a client-generated UUID). See below. |
@@ -68,32 +68,40 @@ As built: logout ends the whole session, revoking every live token in the presen
 | `POST /users/me/password` | User | `{current_password, new_password}` | 204; all refresh tokens revoked | 401 wrong current password |
 | `GET /users/me/history` | User | `cursor`, `limit` | 200 page of `{kind: order, payment or transfer, id, status, amount_paise, at}` | — |
 
-## Events (M4, M6)
+## Events (M4 built; filters in M6)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
-| `GET /events` | Public | `q`, `category`, `city`, `starts_after`, `starts_before`, `cursor`, `limit` | 200 page of `Event` (`PUBLISHED` only) | 400 bad cursor |
+| `GET /events` | Public | `cursor`, `limit` in M4; `q`, `category`, `city`, `starts_after`, `starts_before` arrive in M6 | 200 page of `Event` (`PUBLISHED` only), soonest first | 400 bad cursor |
 | `GET /events/{event_id}` | Public | — | 200 `Event` | 404 (also for unpublished) |
 | `GET /events/{event_id}/listings` | Public | same filters and sort as `GET /listings` | 200 page of `PublicListing` | 404 |
-| `POST /admin/events` | Admin | `{name, description, category, venue, city, starts_at, organizer, provider_id}` | 201 `Event` (`DRAFT`) | 403; 422 `starts_at` in the past |
-| `PATCH /admin/events/{event_id}` | Admin | any of the above, plus `status` (validated by the event state machine) | 200 `Event` | 404; 409 illegal status change |
-| `GET /admin/providers` / `POST /admin/providers` | Admin | `{code, name}` | 200 list / 201 provider | 409 code taken |
+| `GET /admin/events` | Admin | `cursor`, `limit` | 200 page of `Event`, every status | 403 |
+| `POST /admin/events` | Admin | `{name, description, category, venue, city, starts_at, organizer, provider_id}`; `starts_at` must carry a time zone | 201 `Event` (`DRAFT`) | 403; 404 provider; 422 `starts_at` in the past or without a zone |
+| `PATCH /admin/events/{event_id}` | Admin | any of the above, plus `status` (validated by the event state machine); an explicit `null` is 422 | 200 `Event` | 404; 409 illegal status change, event `CANCELLED` or `COMPLETED`, or provider changed after `DRAFT`; 422 a changed `starts_at` in the past |
+| `GET /admin/providers` / `POST /admin/providers` | Admin | `{code, name}`; `code` is 2 to 50 of `a-z 0-9 -` | 200 list / 201 provider | 409 code taken |
 
-`Event` = `{id, name, description, category, venue, city, starts_at, organizer, status}`.
+`Event` = `{id, name, description, category, venue, city, starts_at, organizer, provider_id, status}`.
 
-## Tickets (M4)
+As built: status moves `DRAFT → PUBLISHED` (only while `starts_at` is in the future), `DRAFT → CANCELLED`, `PUBLISHED → CANCELLED` and `PUBLISHED → COMPLETED` (only once `starts_at` has passed). Every change is one conditional `UPDATE ... WHERE status = <the status read>`, so two admins racing get one success and one 409. Text fields are trimmed, and blank after trimming is 422. The migration seeds one provider, `fakeprovider` (FakeProvider), so events can be created on a fresh database. Problem types: `event-not-found`, `provider-not-found`, `event-in-past`, `illegal-status-change`, `event-not-editable`, `provider-code-taken`.
+
+## Tickets (M4, built)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
-| `POST /tickets` | User | `{event_id, ticket_category, seat_details, original_price_paise, purchase_reference, provider_reference}` | 201 `Ticket`, owner from the token, `verification_status: PENDING` | 404 event; 409 provider reference already registered; 422 event already started |
+| `POST /tickets` | User | `{event_id, ticket_category, seat_details, original_price_paise, purchase_reference, provider_reference}`; price 1 to 10,000,000 paise | 201 `Ticket`, owner from the token, `verification_status: PENDING` | 404 event (also a `DRAFT` one); 409 provider reference already registered for that event, or event not `PUBLISHED`; 422 event already started |
 | `GET /tickets/me` | User | `cursor`, `limit` | 200 page of `Ticket` | — |
 | `GET /tickets/{ticket_id}` | Owner, Admin | — | 200 `Ticket` | 404 |
-| `POST /tickets/{ticket_id}/documents` | Owner | `multipart/form-data`, field `file`: PDF, PNG or JPEG, up to 5 MiB | 201 `{id, content_type, size_bytes, created_at}` | 404; 413; 415 |
-| `GET /tickets/{ticket_id}/documents/{document_id}` | Owner, Admin | — | 200 `{url, expires_at}`: a presigned URL valid for 5 minutes | 404 |
+| `POST /tickets/{ticket_id}/documents` | Owner | `multipart/form-data`, field `file`: PDF, PNG or JPEG, up to 5 MiB | 201 `Document` | 404; 403 an admin (only the owner uploads); 409 ticket not `PENDING`, or already 5 documents; 413; 415; 422 empty file; 503 storage down |
+| `GET /tickets/{ticket_id}/documents` | Owner, Admin | — | 200 list of `Document`, oldest first | 404 |
+| `GET /tickets/{ticket_id}/documents/{document_id}` | Owner, Admin | — | 200 `{url, expires_at}`: a presigned URL valid for 5 minutes | 404 (also a document of another ticket) |
 | `GET /admin/tickets/pending` | Admin | `cursor`, `limit` | 200 page of `Ticket` | — |
-| `POST /admin/tickets/{ticket_id}/verify` | Admin | `{decision: VERIFIED or REJECTED, transfer_eligible, note}` | 200 `Ticket` | 404; 409 not `PENDING` |
+| `POST /admin/tickets/{ticket_id}/verify` | Admin | `{decision: VERIFIED or REJECTED, transfer_eligible, note}`; `note` (up to 500 chars) required for `REJECTED`; `transfer_eligible` defaults to false | 200 `Ticket` | 404; 409 not `PENDING`; 422 |
 
-`Ticket` = `{id, event_id, ticket_category, seat_details, original_price_paise, verification_status, transfer_eligible, status, created_at}` plus `purchase_reference` and `provider_reference` **only** for the owner and admins.
+`Ticket` = `{id, event_id, event: {id, name, venue, city, starts_at}, ticket_category, seat_details, original_price_paise, purchase_reference, provider_reference, verification_status, verification_note, transfer_eligible, status, created_at}`. In M4 only the owner and admins can read a ticket, so the references are always theirs to see; M5's public listing shape leaves them out.
+
+`Document` = `{id, content_type, size_bytes, created_at}`. The file's name is never stored or returned.
+
+As built: every route that takes a ticket ID goes through one check, so a ticket that is not yours gets exactly the 404 a random ID gets (`tests/integration/test_ticket_access.py` proves it route by route, and fails if a new ticket route is added without being listed). The file type comes from the first bytes (`%PDF-`, the PNG signature, `FF D8 FF`), not from the name or the browser's `Content-Type`. Files go to S3-compatible storage (MinIO locally) under a random key, `ticket-documents/<32 hex>`. A request whose `Content-Length` is over 6 MiB is refused with 413 before the body is read; a body sent without one (chunked) is counted as it arrives and cut off at 6 MiB with the same 413, before any form parsing or token check finishes. The verify call is one conditional `UPDATE ... WHERE verification_status = 'PENDING'`, so only the first decision lands. Problem types: `ticket-not-found`, `ticket-already-registered`, `event-not-open`, `event-started`, `document-not-found`, `owner-only`, `ticket-not-pending`, `too-many-documents`, `file-too-large`, `unsupported-file-type`, `empty-file`, `storage-unavailable`, and `bad-cursor` on any list.
 
 ## Listings (M5, M6)
 
@@ -210,4 +218,4 @@ As built: logout ends the whole session, revoking every live token in the presen
 
 ## Endpoints added to `plan.md` section 10
 
-`plan.md` lists the core paths; these were added because the features need them: `/health`, password reset and change, `/users/me/history`, all `/admin/events`, `/admin/providers` and `/admin/tickets` routes, ticket documents, `/listings/me`, `/listings/{id}/submit`, `/interests/me`, `/listings/{id}/allocations`, `/admin/orders/{id}/refund`, reconciliation runs, transfer callbacks and abandon, all dispute routes, and admin user and audit routes.
+`plan.md` lists the core paths; these were added because the features need them: `/health`, password reset and change, `/users/me/history`, all `/admin/events` (including `GET /admin/events`, which lists every status), `/admin/providers` and `/admin/tickets` routes, ticket documents (upload, list and link), `/listings/me`, `/listings/{id}/submit`, `/interests/me`, `/listings/{id}/allocations`, `/admin/orders/{id}/refund`, reconciliation runs, transfer callbacks and abandon, all dispute routes, and admin user and audit routes.

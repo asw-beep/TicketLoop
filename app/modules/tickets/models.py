@@ -9,15 +9,28 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, UniqueConstraint, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.infrastructure.database.base import Base, Timestamps, UUIDPrimaryKey, one_of
+from app.infrastructure.database.base import Base, CreatedAt, Timestamps, UUIDPrimaryKey, one_of
+from app.modules.events.models import Event
+
+# Evidence uploads (M4): at most 5 MiB each, at most 5 per ticket.
+MAX_DOCUMENT_BYTES = 5 * 1024 * 1024  # 5_242_880
+MAX_DOCUMENTS_PER_TICKET = 5
 
 
 class VerificationStatus(StrEnum):
     PENDING = "PENDING"
     VERIFIED = "VERIFIED"
     REJECTED = "REJECTED"
+
+
+class DocumentType(StrEnum):
+    """The only file types accepted as evidence, decided from a file's bytes, never its name."""
+
+    PDF = "application/pdf"
+    PNG = "image/png"
+    JPEG = "image/jpeg"
 
 
 class TicketStatus(StrEnum):
@@ -52,3 +65,25 @@ class Ticket(UUIDPrimaryKey, Timestamps, Base):
     status: Mapped[str] = mapped_column(server_default=TicketStatus.ACTIVE)
     verified_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     verified_at: Mapped[datetime | None]
+    verification_note: Mapped[str | None]  # the admin's reason, shown to the owner
+
+    # Loaded with the ticket in the same query: every ticket response shows its event.
+    event: Mapped[Event] = relationship(lazy="joined", innerjoin=True)
+
+
+class TicketDocument(UUIDPrimaryKey, CreatedAt, Base):
+    """A pointer to one private evidence file in object storage. The file itself is never in
+    the database, and its key is random: the uploader's filename is not kept anywhere."""
+
+    __tablename__ = "ticket_documents"
+    __table_args__ = (
+        UniqueConstraint("storage_key"),
+        CheckConstraint(one_of("content_type", DocumentType), name="type"),
+        CheckConstraint(f"size_bytes BETWEEN 1 AND {MAX_DOCUMENT_BYTES}", name="size"),
+    )
+
+    ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tickets.id"), index=True)
+    uploaded_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
+    storage_key: Mapped[str]
+    content_type: Mapped[str]
+    size_bytes: Mapped[int] = mapped_column(BigInteger)

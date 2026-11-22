@@ -15,6 +15,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # with it; anyone who reads this file could forge a token for any user.
 LOCAL_JWT_SECRET = "local-development-only-jwt-secret-do-not-deploy"
 
+# MinIO's root password in docker-compose.yml, and the key the API signs storage requests
+# with on a laptop and in tests. Staging and production refuse to start with it.
+LOCAL_STORAGE_SECRET = "ticketloop-local-secret"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -54,6 +58,25 @@ class Settings(BaseSettings):
     smtp_port: int = 1025
     email_from: str = "TicketLoop <no-reply@ticketloop.local>"
 
+    # Object storage (M4): any S3-compatible server; MinIO in docker-compose.yml.
+    # The API talks to storage_endpoint_url. Download links are signed for the host the
+    # browser uses, which differs inside Docker (minio:9000 versus localhost:9000), so
+    # storage_public_url overrides the host in presigned links. Unset means the same host.
+    storage_endpoint_url: str = "http://localhost:9000"
+    storage_public_url: str | None = None
+    storage_bucket: str = "ticketloop-documents"
+    storage_access_key: str = "ticketloop"
+    storage_secret_key: SecretStr = SecretStr(LOCAL_STORAGE_SECRET)
+    storage_region: str = "us-east-1"
+    # The largest request body the API reads at all. Evidence files are up to 5 MiB, and the
+    # multipart wrapping adds a little. Anything bigger is refused before it is read.
+    max_request_bytes: int = 6 * 1024 * 1024
+
+    @property
+    def storage_public_endpoint(self) -> str:
+        """The storage host the browser reaches, used to sign download links."""
+        return self.storage_public_url or self.storage_endpoint_url
+
     @property
     def cookie_secure(self) -> bool:
         """Mark cookies Secure (HTTPS only) everywhere except a laptop and tests, which use http."""
@@ -72,6 +95,15 @@ class Settings(BaseSettings):
             raise ValueError("JWT_SECRET_KEY must be at least 32 bytes long")
         if self.environment in ("staging", "production") and secret == LOCAL_JWT_SECRET:
             raise ValueError(f"set JWT_SECRET_KEY: the built-in key is not for {self.environment}")
+        return self
+
+    @model_validator(mode="after")
+    def _check_storage_secret(self) -> Self:
+        deployed = self.environment in ("staging", "production")
+        if deployed and self.storage_secret_key.get_secret_value() == LOCAL_STORAGE_SECRET:
+            raise ValueError(
+                f"set STORAGE_SECRET_KEY: the built-in key is not for {self.environment}"
+            )
         return self
 
 

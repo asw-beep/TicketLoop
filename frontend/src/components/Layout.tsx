@@ -35,6 +35,13 @@ export function Layout({ children }: { children: ReactNode }) {
         <nav aria-label="Main">
           {status === "signed-in" && user && (
             <>
+              <NavLink to="/tickets">My tickets</NavLink>
+              {user.role === "ADMIN" && (
+                <>
+                  <NavLink to="/admin/events">Events</NavLink>
+                  <NavLink to="/admin/tickets">Verify tickets</NavLink>
+                </>
+              )}
               <NavLink to="/account">{user.full_name.split(" ")[0]}</NavLink>
               <button type="button" className="link-button" onClick={handleLogOut}>
                 Log out

@@ -1,6 +1,7 @@
 # Local stack. Two ways to use it:
-#   docker compose up --build          Postgres, Mailpit, migrations, then the API (localhost:8000)
-#   docker compose up -d db mailpit    Postgres and Mailpit only; run the API on Windows with
+#   docker compose up --build          Postgres, Mailpit, MinIO, migrations, then the API (localhost:8000)
+#   docker compose up -d db mailpit minio
+#                                      Postgres, Mailpit and MinIO only; run the API on Windows with
 #                                      uvicorn --reload, and the frontend with npm run dev
 # Values like ${POSTGRES_USER:-ticketloop} come from .env if it exists, else the default.
 
@@ -33,6 +34,23 @@ services:
       - "8025:8025" # the web inbox
       - "1025:1025" # SMTP, where the API sends
 
+  # S3-compatible object storage for ticket evidence (M4). MinIO stopped publishing its free
+  # image in Oct 2025; this is Chainguard's free rebuild. Chainguard publishes only `latest`,
+  # so the image is pinned to an exact build by digest. The app talks to it only through the
+  # S3 API (boto3), so any S3-compatible server can replace it by changing settings.
+  # Web console: http://localhost:9001 (log in with the root user and password below).
+  minio:
+    image: cgr.dev/chainguard/minio@sha256:548147b5fc95a67e3e45285dff7e0e50326c3eb1977c6218039461771156c5e7
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-ticketloop}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY:-ticketloop-local-secret}
+    ports:
+      - "9000:9000" # the S3 API, and where presigned download links point
+      - "9001:9001" # the web console
+    volumes:
+      - miniodata:/data
+
   # A one-off job: bring the schema up to date, then exit. Kept out of the API's own startup
   # so several API containers (the M8 race test, load tests) never race to migrate at once.
   migrate:
@@ -53,6 +71,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_JSON: "true"
       SMTP_HOST: mailpit
+      # The API reaches MinIO by its service name; the browser reaches it on localhost,
+      # so download links are signed for localhost.
+      STORAGE_ENDPOINT_URL: http://minio:9000
+      STORAGE_PUBLIC_URL: http://localhost:9000
+      STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-ticketloop}
+      STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-ticketloop-local-secret}
     ports:
       - "8000:8000"
     depends_on:
@@ -60,6 +84,9 @@ services:
         condition: service_healthy # wait for pg_isready, not just for the container to start
       migrate:
         condition: service_completed_successfully # start only once the schema is current
+      minio:
+        condition: service_started # the image has no shell or curl for a healthcheck
 
 volumes:
   pgdata:
+  miniodata:

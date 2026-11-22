@@ -4,6 +4,102 @@
  */
 
 export interface paths {
+  "/api/v1/admin/events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Admin List Events
+     * @description Every event in every status, soonest first.
+     */
+    get: operations["admin_list_events_api_v1_admin_events_get"];
+    put?: never;
+    /** Create Event */
+    post: operations["create_event_api_v1_admin_events_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/events/{event_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /** Update Event */
+    patch: operations["update_event_api_v1_admin_events__event_id__patch"];
+    trace?: never;
+  };
+  "/api/v1/admin/providers": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Providers */
+    get: operations["list_providers_api_v1_admin_providers_get"];
+    put?: never;
+    /** Create Provider */
+    post: operations["create_provider_api_v1_admin_providers_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/tickets/pending": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Pending Tickets
+     * @description Tickets waiting for review, oldest first.
+     */
+    get: operations["pending_tickets_api_v1_admin_tickets_pending_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/tickets/{ticket_id}/verify": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Verify Ticket
+     * @description Mark a PENDING ticket VERIFIED or REJECTED. A rejection needs a note for the owner.
+     */
+    post: operations["verify_ticket_api_v1_admin_tickets__ticket_id__verify_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/auth/login": {
     parameters: {
       query?: never;
@@ -106,6 +202,43 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List Events
+     * @description Published events, soonest first. Filters and search arrive in M6.
+     */
+    get: operations["list_events_api_v1_events_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/events/{event_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Event */
+    get: operations["get_event_api_v1_events__event_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/health": {
     parameters: {
       query?: never;
@@ -115,6 +248,108 @@ export interface paths {
     };
     /** Health */
     get: operations["health_api_v1_health_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/tickets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Register Ticket
+     * @description Register a ticket you own. It starts PENDING until an admin verifies it.
+     */
+    post: operations["register_ticket_api_v1_tickets_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/tickets/me": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * My Tickets
+     * @description Your tickets, newest first.
+     */
+    get: operations["my_tickets_api_v1_tickets_me_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/tickets/{ticket_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Ticket
+     * @description Your ticket, or any ticket for an admin. Anyone else gets 404.
+     */
+    get: operations["get_ticket_api_v1_tickets__ticket_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/tickets/{ticket_id}/documents": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Documents */
+    get: operations["list_documents_api_v1_tickets__ticket_id__documents_get"];
+    put?: never;
+    /**
+     * Upload Document
+     * @description Upload purchase evidence: a PDF, PNG or JPEG up to 5 MiB. The type is read from the
+     *     file's bytes; its name and the browser's claimed type are ignored.
+     */
+    post: operations["upload_document_api_v1_tickets__ticket_id__documents_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/tickets/{ticket_id}/documents/{document_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Document Link
+     * @description A link that opens the file for 5 minutes.
+     */
+    get: operations["document_link_api_v1_tickets__ticket_id__documents__document_id__get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -178,12 +413,163 @@ export interface components {
        */
       token_type: "bearer";
     };
+    /** Body_upload_document_api_v1_tickets__ticket_id__documents_post */
+    Body_upload_document_api_v1_tickets__ticket_id__documents_post: {
+      /** File */
+      file: string;
+    };
     /** ChangePasswordIn */
     ChangePasswordIn: {
       /** Current Password */
       current_password: string;
       /** New Password */
       new_password: string;
+    };
+    /**
+     * DocumentLinkOut
+     * @description A presigned link to open the file. Anyone holding it can, until expires_at.
+     */
+    DocumentLinkOut: {
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /** Url */
+      url: string;
+    };
+    /**
+     * DocumentOut
+     * @description What the API says about an evidence file. Never its storage key or original name.
+     */
+    DocumentOut: {
+      content_type: components["schemas"]["DocumentType"];
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Size Bytes */
+      size_bytes: number;
+    };
+    /**
+     * DocumentType
+     * @description The only file types accepted as evidence, decided from a file's bytes, never its name.
+     * @enum {string}
+     */
+    DocumentType: "application/pdf" | "image/png" | "image/jpeg";
+    /**
+     * EventCategory
+     * @enum {string}
+     */
+    EventCategory: "CONCERT" | "SPORTS" | "COLLEGE" | "OTHER";
+    /** EventIn */
+    EventIn: {
+      category: components["schemas"]["EventCategory"];
+      /** City */
+      city: string;
+      /**
+       * Description
+       * @default
+       */
+      description: string;
+      /** Name */
+      name: string;
+      /** Organizer */
+      organizer: string;
+      /**
+       * Provider Id
+       * Format: uuid
+       */
+      provider_id: string;
+      /**
+       * Starts At
+       * Format: date-time
+       */
+      starts_at: string;
+      /** Venue */
+      venue: string;
+    };
+    /** EventOut */
+    EventOut: {
+      category: components["schemas"]["EventCategory"];
+      /** City */
+      city: string;
+      /** Description */
+      description: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Name */
+      name: string;
+      /** Organizer */
+      organizer: string;
+      /**
+       * Provider Id
+       * Format: uuid
+       */
+      provider_id: string;
+      /**
+       * Starts At
+       * Format: date-time
+       */
+      starts_at: string;
+      status: components["schemas"]["EventStatus"];
+      /** Venue */
+      venue: string;
+    };
+    /**
+     * EventPatch
+     * @description Any subset of the event's fields, plus a status change checked by the state machine.
+     */
+    EventPatch: {
+      category?: components["schemas"]["EventCategory"] | null;
+      /** City */
+      city?: string | null;
+      /** Description */
+      description?: string | null;
+      /** Name */
+      name?: string | null;
+      /** Organizer */
+      organizer?: string | null;
+      /** Provider Id */
+      provider_id?: string | null;
+      /** Starts At */
+      starts_at?: string | null;
+      status?: components["schemas"]["EventStatus"] | null;
+      /** Venue */
+      venue?: string | null;
+    };
+    /**
+     * EventStatus
+     * @enum {string}
+     */
+    EventStatus: "DRAFT" | "PUBLISHED" | "CANCELLED" | "COMPLETED";
+    /** EventSummary */
+    EventSummary: {
+      /** City */
+      city: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Name */
+      name: string;
+      /**
+       * Starts At
+       * Format: date-time
+       */
+      starts_at: string;
+      /** Venue */
+      venue: string;
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -217,6 +603,20 @@ export interface components {
       /** Password */
       password: string;
     };
+    /** Page[EventOut] */
+    Page_EventOut_: {
+      /** Items */
+      items: components["schemas"]["EventOut"][];
+      /** Next Cursor */
+      next_cursor: string | null;
+    };
+    /** Page[TicketOut] */
+    Page_TicketOut_: {
+      /** Items */
+      items: components["schemas"]["TicketOut"][];
+      /** Next Cursor */
+      next_cursor: string | null;
+    };
     /** PasswordResetConfirmIn */
     PasswordResetConfirmIn: {
       /** New Password */
@@ -232,6 +632,25 @@ export interface components {
        */
       email: string;
     };
+    /** ProviderIn */
+    ProviderIn: {
+      /** Code */
+      code: string;
+      /** Name */
+      name: string;
+    };
+    /** ProviderOut */
+    ProviderOut: {
+      /** Code */
+      code: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Name */
+      name: string;
+    };
     /** RegisterIn */
     RegisterIn: {
       /**
@@ -244,6 +663,71 @@ export interface components {
       /** Password */
       password: string;
     };
+    /**
+     * TicketIn
+     * @description The owner is never in the body: it is always the caller (unknown fields are 422).
+     */
+    TicketIn: {
+      /**
+       * Event Id
+       * Format: uuid
+       */
+      event_id: string;
+      /** Original Price Paise */
+      original_price_paise: number;
+      /** Provider Reference */
+      provider_reference: string;
+      /** Purchase Reference */
+      purchase_reference: string;
+      /** Seat Details */
+      seat_details?: string | null;
+      /** Ticket Category */
+      ticket_category: string;
+    };
+    /**
+     * TicketOut
+     * @description `Ticket` in the API contract. Every M4 ticket route is for the owner or an admin, so
+     *     the private references are always included; M5's public listing shape leaves them out.
+     */
+    TicketOut: {
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      event: components["schemas"]["EventSummary"];
+      /**
+       * Event Id
+       * Format: uuid
+       */
+      event_id: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Original Price Paise */
+      original_price_paise: number;
+      /** Provider Reference */
+      provider_reference: string;
+      /** Purchase Reference */
+      purchase_reference: string;
+      /** Seat Details */
+      seat_details: string | null;
+      status: components["schemas"]["TicketStatus"];
+      /** Ticket Category */
+      ticket_category: string;
+      /** Transfer Eligible */
+      transfer_eligible: boolean;
+      /** Verification Note */
+      verification_note: string | null;
+      verification_status: components["schemas"]["VerificationStatus"];
+    };
+    /**
+     * TicketStatus
+     * @enum {string}
+     */
+    TicketStatus: "ACTIVE" | "VOID";
     /** UpdateMeIn */
     UpdateMeIn: {
       /** Full Name */
@@ -286,6 +770,29 @@ export interface components {
       /** Error Type */
       type: string;
     };
+    /**
+     * VerificationStatus
+     * @enum {string}
+     */
+    VerificationStatus: "PENDING" | "VERIFIED" | "REJECTED";
+    /**
+     * VerifyIn
+     * @description An admin's decision on a PENDING ticket. A rejection must say why: the owner sees it.
+     */
+    VerifyIn: {
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: "VERIFIED" | "REJECTED";
+      /** Note */
+      note?: string | null;
+      /**
+       * Transfer Eligible
+       * @default false
+       */
+      transfer_eligible: boolean;
+    };
   };
   responses: never;
   parameters: never;
@@ -295,6 +802,230 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+  admin_list_events_api_v1_admin_events_get: {
+    parameters: {
+      query?: {
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_EventOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_event_api_v1_admin_events_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["EventIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EventOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  update_event_api_v1_admin_events__event_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        event_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["EventPatch"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EventOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_providers_api_v1_admin_providers_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProviderOut"][];
+        };
+      };
+    };
+  };
+  create_provider_api_v1_admin_providers_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ProviderIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProviderOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  pending_tickets_api_v1_admin_tickets_pending_get: {
+    parameters: {
+      query?: {
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_TicketOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  verify_ticket_api_v1_admin_tickets__ticket_id__verify_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        ticket_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["VerifyIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TicketOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   login_api_v1_auth_login_post: {
     parameters: {
       query?: never;
@@ -483,6 +1214,71 @@ export interface operations {
       };
     };
   };
+  list_events_api_v1_events_get: {
+    parameters: {
+      query?: {
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_EventOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_event_api_v1_events__event_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        event_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["EventOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   health_api_v1_health_get: {
     parameters: {
       query?: never;
@@ -508,6 +1304,202 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HealthResponse"];
+        };
+      };
+    };
+  };
+  register_ticket_api_v1_tickets_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["TicketIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TicketOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  my_tickets_api_v1_tickets_me_get: {
+    parameters: {
+      query?: {
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_TicketOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_ticket_api_v1_tickets__ticket_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        ticket_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TicketOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_documents_api_v1_tickets__ticket_id__documents_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        ticket_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DocumentOut"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  upload_document_api_v1_tickets__ticket_id__documents_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        ticket_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "multipart/form-data": components["schemas"]["Body_upload_document_api_v1_tickets__ticket_id__documents_post"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DocumentOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  document_link_api_v1_tickets__ticket_id__documents__document_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        ticket_id: string;
+        document_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DocumentLinkOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
