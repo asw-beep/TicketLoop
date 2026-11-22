@@ -1,0 +1,69 @@
+# Runs on every push and pull request: lint, then every test against a real Postgres 17.
+# M16 grows this into the full pipeline (type checks, Redis, RabbitMQ, concurrency tests).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A newer push to the same branch cancels the run it makes obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # A service container: GitHub starts Postgres next to the job and waits for its
+    # healthcheck before running any step. The same image as docker-compose.yml.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ticketloop
+          POSTGRES_PASSWORD: ticketloop
+          POSTGRES_DB: ticketloop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ticketloop -d ticketloop"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # The job runs on the runner itself, so Postgres is at localhost, as on a laptop.
+      DATABASE_URL: postgresql+psycopg://ticketloop:ticketloop@localhost:5432/ticketloop
+      ENVIRONMENT: test
+      # Fail, don't skip, if the integration tests cannot reach Postgres.
+      REQUIRE_POSTGRES: "1"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.11.2" # the same uv as the Dockerfile
+          enable-cache: true # keyed on uv.lock, so dependencies download once
+
+      - name: Install dependencies
+        run: uv sync --locked # fails if uv.lock is out of date with pyproject.toml
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Migrate and check the models match the migrations
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
+      - name: Tests
+        run: uv run pytest

@@ -18,6 +18,8 @@ from tests.integration.database import (
 pytestmark = pytest.mark.integration
 
 M2_TABLES = {"users", "ticket_providers", "events", "tickets", "listings", "audit_logs"}
+M3_TABLES = {"refresh_tokens", "password_reset_tokens"}
+ALL_TABLES = M2_TABLES | M3_TABLES
 
 
 def tables(engine: Engine) -> set[str]:
@@ -38,14 +40,14 @@ def test_migrations_go_down_to_base_and_back_up_to_head(test_settings: Settings)
     engine = create_engine(url)
     try:
         upgrade(engine, "head")
-        assert tables(engine) >= M2_TABLES
+        assert tables(engine) >= ALL_TABLES
 
         downgrade(engine, "base")
         assert tables(engine) <= {"alembic_version"}
         assert not function_exists(engine, "forbid_update_delete")
 
         upgrade(engine, "head")
-        assert tables(engine) >= M2_TABLES
+        assert tables(engine) >= ALL_TABLES
     finally:
         engine.dispose()
 

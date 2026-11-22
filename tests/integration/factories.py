@@ -10,8 +10,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.security import hash_opaque_token, new_opaque_token
 from app.modules.events.models import Event, TicketProvider
-from app.modules.identity.models import User
+from app.modules.identity.models import PasswordResetToken, RefreshToken, User
 from app.modules.listings.models import Listing
 from app.modules.tickets.models import Ticket
 
@@ -33,6 +34,27 @@ def make_user(session: Session, **fields: Any) -> User:
         "full_name": "Test User",
     }
     return _save(session, User(**(defaults | fields)))
+
+
+def make_refresh_token(session: Session, **fields: Any) -> RefreshToken:
+    defaults: dict[str, Any] = {
+        "family_id": uuid.uuid4(),
+        "token_hash": hash_opaque_token(new_opaque_token()),
+        "expires_at": datetime.now(UTC) + timedelta(days=7),
+    }
+    if "user_id" not in fields:
+        defaults["user_id"] = make_user(session).id
+    return _save(session, RefreshToken(**(defaults | fields)))
+
+
+def make_password_reset_token(session: Session, **fields: Any) -> PasswordResetToken:
+    defaults: dict[str, Any] = {
+        "token_hash": hash_opaque_token(new_opaque_token()),
+        "expires_at": datetime.now(UTC) + timedelta(minutes=30),
+    }
+    if "user_id" not in fields:
+        defaults["user_id"] = make_user(session).id
+    return _save(session, PasswordResetToken(**(defaults | fields)))
 
 
 def make_provider(session: Session, **fields: Any) -> TicketProvider:

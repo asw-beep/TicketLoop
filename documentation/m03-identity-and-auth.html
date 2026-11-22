@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M3 Identity and Auth</title>
+  <meta name="description" content="TicketLoop M3: what was built, the decisions behind it, and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Identity and auth</h1>
+      <p class="ticket__summary">Accounts with Argon2id passwords, 15-minute JWT access tokens and 7-day refresh tokens that rotate on every use. A replayed refresh token revokes the whole session. Two dependencies guard every route: <code>get_current_user</code> and <code>require_admin</code>. CI runs the tests on every push.</p>
+      <p class="ticket__fineprint">Done when: all auth tests pass in CI, and replaying a used refresh token logs out every session in that family.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M3</span>
+      <span class="ticket__days">Days 16 to 21</span>
+      <span class="stamp">Done<br>22 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">Login gives two tokens. The access token is a JWT that lives 15 minutes; any API process can check its signature without the database. The refresh token is 32 random bytes, and the database keeps only its SHA-256. Every refresh revokes the token it used and issues a new one in the same family.</p>
+        <p class="pitch">If a revoked refresh token comes back, two parties hold tokens from one login, and I cannot tell which is the thief. So I revoke the whole family and both have to log in again. The swap is one conditional UPDATE, so two refreshes of the same token at the same instant have exactly one winner. A test fires 20 such pairs at once.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Security helpers</span><span class="built__note">Argon2id hashing (64 MiB, 3 passes, 4 lanes), HS256 access tokens with <code>sub</code>, <code>iss</code>, <code>iat</code>, <code>exp</code> and <code>jti</code>, and opaque tokens stored as SHA-256. Pure functions, no database.</span><code>app/core/security.py</code></li>
+          <li><span class="built__what">Auth settings</span><span class="built__note"><code>JWT_SECRET_KEY</code> as a SecretStr of at least 32 bytes; staging and production refuse the built-in development key. Token lifetimes are settings too.</span><code>app/core/config.py</code></li>
+          <li><span class="built__what">Two token tables</span><span class="built__note"><code>refresh_tokens</code> (family, revoked_at, replaced_by) and <code>password_reset_tokens</code> (used_at), in their own migration.</span><code>app/modules/identity/models.py</code> <code>migrations/versions/2026_11_22_…</code></li>
+          <li><span class="built__what">Nine endpoints</span><span class="built__note">register, login, refresh, logout, password-reset request and confirm, <code>GET</code> and <code>PATCH /users/me</code>, and <code>POST /users/me/password</code>.</span><code>app/modules/identity/router.py</code> <code>service.py</code></li>
+          <li><span class="built__what">Route guards</span><span class="built__note"><code>CurrentUser</code> checks the token, loads the user and refuses SUSPENDED accounts. <code>AdminUser</code> also needs <code>role = ADMIN</code>.</span><code>app/modules/identity/dependencies.py</code></li>
+          <li><span class="built__what">Strict request bodies</span><span class="built__note">Unknown fields are a 422, so <code>{"role": "ADMIN"}</code> in a sign-up is refused, not ignored. Passwords are <code>Secret[...]</code> and print as stars.</span><code>app/core/schemas.py</code> <code>app/modules/identity/schemas.py</code></li>
+          <li><span class="built__what">Email port</span><span class="built__note">An <code>EmailSender</code> protocol with an in-memory sender that tests read. It never logs a message body, because the body holds the reset code.</span><code>app/infrastructure/external_providers/email.py</code></li>
+          <li><span class="built__what">Admin tool</span><span class="built__note">No route grants ADMIN. An operator runs <code>python -m scripts.make_admin email</code>.</span><code>scripts/make_admin.py</code></li>
+          <li><span class="built__what">CI</span><span class="built__note">GitHub Actions with a Postgres 17 service container: ruff, format check, <code>alembic check</code>, then pytest with <code>REQUIRE_POSTGRES=1</code>, so a missing database fails the run instead of skipping half the tests.</span><code>.github/workflows/ci.yml</code></li>
+          <li><span class="built__what">Tests</span><span class="built__note">125 in all: 18 new unit tests for the security helpers and 74 new integration tests, covering every 401 and 403, rotation, reuse, logout, the reset flow, a log check for passwords, and the refresh race.</span><code>tests/unit/test_security.py</code> <code>tests/integration/test_auth_*.py</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">Rotation, and what reuse looks like</h2>
+      <div class="section__body">
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>Login starts a family</strong><p>The password is checked with Argon2. A new <code>family_id</code> is drawn, and the refresh token R1 is saved as its SHA-256 in that family.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>Refresh claims R1 with one UPDATE</strong><p><code>UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = :h AND revoked_at IS NULL AND expires_at &gt; now() RETURNING id, user_id, family_id</code>. One row back means R1 was live and is now spent.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>R2 is issued in the same family</strong><p>R1's <code>replaced_by</code> points at R2, so the chain can be followed. A CHECK makes sure a replaced token is always revoked.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>R1 comes back: zero rows</strong><p>The token exists but is revoked. Either the real user or a thief replayed a spent token, and both hold tokens from this family.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>Revoke the family, commit, then 401</strong><p>Every live token in the family is revoked, R2 included. This commit happens before raising, because <code>get_db</code> rolls back on any error and would undo the revocation.</p></div></li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="race">
+      <h2 id="race">The race: one token, two refreshes at once</h2>
+      <div class="section__body">
+        <p>It is the M2 lock experiment again, on a real table. Both requests send the claim UPDATE for the same token.</p>
+<pre><code>A: UPDATE … WHERE token_hash = h AND revoked_at IS NULL   <span class="c"># 1 row, row locked</span>
+B: the same UPDATE                                        <span class="c"># blocks on A's row lock</span>
+A: INSERT R2, set replaced_by, COMMIT                     <span class="c"># 200 with a new pair</span>
+B: wakes, re-checks WHERE: revoked_at is set now          <span class="c"># 0 rows</span>
+B: sees a revoked token, revokes the family (R2 too)      <span class="c"># COMMIT, then 401</span></code></pre>
+        <ul class="tight">
+          <li><strong>Exactly one winner, whatever the timing.</strong> The test registers 20 users, releases two refreshes together with a barrier each time, and expects <code>[200, 401]</code> with no live token left.</li>
+          <li><strong>I proved the test can fail.</strong> With <code>revoked_at IS NULL</code> removed from the claim, it got <code>[200, 200]</code>. It also checks that at least one pair of requests overlapped in time, so it cannot pass only because they ran one after the other.</li>
+          <li><strong>The strict rule has a cost.</strong> A client that refreshes from two tabs at once logs itself out. Auth0 offers a short grace window for this; I chose none, as FR-01 says.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+
+        <h3>Passwords</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Argon2id at RFC 9106's low-memory profile</h4>
+            <p class="decision__over">Instead of bcrypt, or a fast hash like SHA-256</p>
+            <p>Each guess costs an attacker 64 MiB of memory and about 50 ms, which takes away most of a GPU's advantage. bcrypt only ever uses the first 72 bytes of a password. The parameters live inside each stored hash, and a successful login re-hashes an old hash with today's settings.</p>
+          </div>
+          <div class="decision">
+            <h4>Length only: 12 to 128 characters</h4>
+            <p class="decision__over">Instead of rules like "one digit, one symbol"</p>
+            <p>OWASP's advice: length is what makes a password hard to guess, and composition rules push people to <code>Password1!</code>. The upper limit stops anyone making the server hash megabytes.</p>
+          </div>
+          <div class="decision">
+            <h4>One answer for "no such email" and "wrong password"</h4>
+            <p class="decision__over">Instead of telling the user which one was wrong</p>
+            <p>Login cannot be used to test which emails have accounts. For an unknown email I still run one Argon2 check against a dummy hash, so the response time does not give it away either. Suspension is only revealed after a correct password.</p>
+          </div>
+        </div>
+
+        <h3>Tokens</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A short JWT plus an opaque refresh token</h4>
+            <p class="decision__over">Instead of server sessions, or one long-lived JWT</p>
+            <p>The access token needs no lookup to verify, but a JWT cannot be revoked, so it lives 15 minutes. The refresh token is the revocable part: it lives in a table I can update. A long-lived JWT would mean a stolen token works for days.</p>
+          </div>
+          <div class="decision">
+            <h4>SHA-256 for refresh and reset tokens</h4>
+            <p class="decision__over">Instead of storing them as they are, or hashing them with Argon2</p>
+            <p>A leaked table or backup then holds nothing usable. Argon2 is for low-entropy secrets that people choose; 256 random bits cannot be brute-forced, so a fast, unsalted hash is safe and lets me find the row through a unique index.</p>
+          </div>
+          <div class="decision">
+            <h4>No role in the JWT; load the user on every request</h4>
+            <p class="decision__over">Instead of trusting claims inside the token</p>
+            <p>FR-01 says a suspended account cannot use a token it already holds. One primary-key lookup per request makes suspension and demotion apply to the very next request, not 15 minutes later.</p>
+          </div>
+          <div class="decision">
+            <h4>HS256 fixed in code</h4>
+            <p class="decision__over">Instead of reading the algorithm from config or from the token's header</p>
+            <p>Trusting the header's <code>alg</code> is how <code>"alg": "none"</code> and key-confusion attacks work. Decoding passes <code>algorithms=["HS256"]</code> and requires every claim. One shared key is fine while one service both signs and verifies; RS256 would matter once others must verify without being able to sign.</p>
+          </div>
+          <div class="decision">
+            <h4>Logout ends the whole family</h4>
+            <p class="decision__over">Instead of revoking only the token presented</p>
+            <p>With the current token the two are the same. With an older token from the session, revoking only that one would leave the live token working. Logout also locks the presented row with <code>FOR UPDATE</code>, so a refresh already in flight finishes first and its new token gets revoked too.</p>
+          </div>
+        </div>
+
+        <h3>Requests and errors</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>The unique constraint decides "email taken"</h4>
+            <p class="decision__over">Instead of checking for the email first</p>
+            <p>Two sign-ups can both pass a "does it exist?" query. I insert and turn <code>uq_users_email</code> into a 409, matched by constraint name, never by message text.</p>
+          </div>
+          <div class="decision">
+            <h4>401 versus 403, with <code>WWW-Authenticate: Bearer</code></h4>
+            <p class="decision__over">Instead of one "access denied" code</p>
+            <p>401: I do not know who you are (no token, bad token, expired). 403: I know who you are and you may not (suspended, not an admin). HTTP requires every 401 to name the auth scheme.</p>
+          </div>
+          <div class="decision">
+            <h4>One deliberate commit outside <code>get_db</code></h4>
+            <p class="decision__over">Instead of the rule "services never commit"</p>
+            <p>Reuse detection has to save the revocation and still answer 401. A 401 is an exception, and <code>get_db</code> rolls back on exceptions. I commit first, then raise, and the comment says why.</p>
+          </div>
+          <div class="decision">
+            <h4>A fake email sender behind a port</h4>
+            <p class="decision__over">Instead of logging the reset link, or adding SMTP now</p>
+            <p>Logging tokens is banned by the NFRs. The in-memory sender lets tests read the code, and a real sender later changes one line in <code>create_app</code>. From M11 the send moves into the outbox, after the commit.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>Why can you not truly log out a JWT access token, and how do you work around it?</summary>
+          <div class="qa__a">
+            <p>A JWT is valid because of its signature and its <code>exp</code>, and checking it needs no state, so there is nothing to delete. Revoking one would mean a deny-list that every request checks, which gives up the point of a JWT. I keep access tokens to 15 minutes and make the refresh token the thing I can revoke. Logout revokes the session's refresh tokens, so at most 15 minutes of access remain. For suspension I do look the user up on each request, which closes that gap for the one case where it matters.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why store a hash of the refresh token instead of the token?</summary>
+          <div class="qa__a">
+            <p>Anyone who reads the table, from a backup, a SQL injection or a support tool, would otherwise hold working tokens for every user. With SHA-256 they hold values they cannot turn back into tokens. It's the same reason passwords are hashed, but the token is 32 random bytes, so a fast hash is enough. Nobody can guess 2<sup>256</sup> values, however fast each guess is. Argon2 would only slow down every refresh.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What is refresh token rotation, and what does reuse detection add?</summary>
+          <div class="qa__a">
+            <p>Rotation means each refresh token works once: using it returns a new pair and revokes the old token. A stolen token then works for one refresh at most. Reuse detection covers the case where the thief uses it first. When the real user later presents the token the thief already spent, the server sees a revoked token come back. It cannot tell who is who, so it revokes every token in the family, and the thief's session dies with it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Two requests refresh the same token at the same moment. What happens?</summary>
+          <div class="qa__a">
+            <p>Both send the conditional UPDATE. The first locks the row and revokes it. The second blocks on that row lock until the first commits. Under Read Committed it then re-checks its WHERE clause against the new row version, finds <code>revoked_at</code> set, and updates nothing. It then sees a revoked token, so it revokes the family, including the token the first request just issued, and returns 401. One winner, and the session ends. My race test runs this 20 times with real commits.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Hashing versus encryption: which one for passwords, and why?</summary>
+          <div class="qa__a">
+            <p>Hashing. Encryption can be reversed by anyone with the key, and the server would hold that key, so one breach exposes every password. A hash only lets me check a guess. It must be slow and salted: the salt gives every user a different hash for the same password, so precomputed tables are useless, and the slowness makes each guess expensive. Argon2id adds memory-hardness, which takes away most of a GPU's advantage.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>A JWT is "signed, not encrypted". What does that mean in practice?</summary>
+          <div class="qa__a">
+            <p>Anyone can base64-decode the header and payload and read them, so a JWT must never carry secrets. The signature only proves that we issued it and nobody changed it. Change one character of the payload and the HMAC no longer matches. That's why my token carries only a user id, an issuer, timestamps and a random <code>jti</code>.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why is the login error the same for an unknown email and a wrong password?</summary>
+          <div class="qa__a">
+            <p>Different messages let an attacker list which emails have accounts, and then target them with phishing or password stuffing. The same message alone is not enough. "No such user" would answer in a millisecond while "wrong password" takes about 50 ms of Argon2, so I run a dummy verification for unknown emails too. Registration still reveals a taken email with its 409, which the contract accepts. The M14 rate limits slow that probing down.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How does <code>get_current_user</code> work, and why is it a dependency?</summary>
+          <div class="qa__a">
+            <p>It reads <code>Authorization: Bearer</code> through FastAPI's HTTPBearer, decodes the JWT with HS256 and my issuer, loads the user by id, and refuses SUSPENDED accounts with 403. A route opts in by declaring <code>user: CurrentUser</code>. That makes authentication impossible to forget halfway through a handler, easy to see in the signature, and testable once for every route. <code>require_admin</code> builds on it, so an admin route checks identity first (401), then role (403).</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How does the password reset avoid leaking which accounts exist?</summary>
+          <div class="qa__a">
+            <p>The request endpoint always answers 202 with the same body. Only a real, active account gets an email with a single-use code that lasts 30 minutes, stored as a hash. Confirming spends the code with one conditional UPDATE, cancels every other outstanding code, sets the new password and revokes every refresh token. One gap remains: the real-account path does more work, so response time could still hint. Sending from the M11 outbox, after the response, removes that.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you know the integration tests really ran in CI?</summary>
+          <div class="qa__a">
+            <p>Locally they skip when Postgres is down, which is convenient on a laptop but dangerous in CI: a broken database container would give a green run with 95 tests never executed. CI sets <code>REQUIRE_POSTGRES=1</code>, which turns that skip into a failure. I checked both ways against an unreachable port: 95 skipped without it, 95 errors with it.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>A 401 rolled back the reuse revocation.</strong> <code>get_db</code> undoes everything when the route raises, so revoking the family and then raising would revoke nothing. Fixed with an explicit commit before the raise.</li>
+          <li><strong><code>SecretStr</code> with <code>min_length</code> said "at least 12 items".</strong> Switched to <code>Secret[Annotated[str, StringConstraints(...)]]</code>, which gives the normal string message and still prints as stars.</li>
+          <li><strong>An access token sent to <code>/auth/refresh</code> got 422, not 401.</strong> A JWT is longer than the 200-character cap I had set. Raised the cap to 1,000, so every plausible token is looked up and refused like any wrong token.</li>
+          <li><strong>Real Argon2 made the test suite slow.</strong> 64 MiB and 3 passes per hash, hundreds of times. An autouse fixture swaps in argon2's CHEAPEST profile; one unit test switches the real hasher back on and checks its parameters.</li>
+          <li><strong><code>EmailStr</code> lowercases only the domain.</strong> <code>Asha@Example.IN</code> became <code>Asha@example.in</code>, which <code>ck_users_email_lowercase</code> would reject. The <code>Email</code> type trims, validates, then lowercases the whole address.</li>
+          <li><strong>A race test can pass for the wrong reason.</strong> If the two requests never overlap, the outcome is the same as a sequential replay. The test records each request's start and end, and fails if no round overlapped.</li>
+          <li><strong>Python's <code>write_text</code> on Windows writes CRLF.</strong> Git normalises on commit because of <code>.gitattributes</code>, but the working copy differed. I now edit through the editor or write bytes.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>Logout with an older token while a refresh of the newest is in flight</strong> can miss the new token, because the lock covers only the presented row.</li>
+          <li><strong>A refresh racing a password change</strong> can leave the token it just issued live. Locking the user row would close both gaps; M17's concurrency tests will measure whether that is worth it.</li>
+          <li><strong>No rate limits yet.</strong> Login, register and reset can be hammered until M14.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db
+uv run alembic upgrade head
+uv run pytest tests/unit/test_security.py            <span class="c"># 18 tests, no database</span>
+uv run pytest -k "auth or current_user"              <span class="c"># 67 tests: every 401, 403 and the race</span>
+REQUIRE_POSTGRES=1 uv run pytest                     <span class="c"># 125 tests, what CI runs</span>
+
+uv run uvicorn app.main:app --reload                 <span class="c"># /docs, then Authorize with a token</span>
+uv run python -m scripts.make_admin asha@example.in  <span class="c"># --revoke to undo</span>
+gh run list --workflow ci.yml --limit 3              <span class="c"># the CI runs on GitHub</span></code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m02-database-layer.html">Previous<strong>M2 Database layer</strong></a>
+    <span class="pager__next">Next<br><strong>M4 Events, tickets and document storage</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

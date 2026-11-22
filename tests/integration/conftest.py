@@ -8,10 +8,12 @@ sessions join it through SAVEPOINTs, so code under test can commit freely and th
 still clean for the next test.
 """
 
+import os
 from collections.abc import Iterator
 
 import pytest
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy import Connection, Engine, create_engine, make_url, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
@@ -35,6 +37,10 @@ def require_postgres(base_settings: Settings) -> None:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except OperationalError:
+        # CI sets REQUIRE_POSTGRES=1: there, a missing database is a broken pipeline, and a
+        # skip would let it pass green with half the tests never run.
+        if os.environ.get("REQUIRE_POSTGRES") == "1":
+            pytest.fail("Postgres is required (REQUIRE_POSTGRES=1) but is not reachable.")
         pytest.skip("Postgres is not running. Start it with `docker compose up -d db`.")
     finally:
         engine.dispose()
@@ -82,3 +88,10 @@ def db_app(test_settings: Settings, db_connection: Connection) -> FastAPI:
     factory.configure(join_transaction_mode="create_savepoint")
     app.state.session_factory = factory
     return app
+
+
+@pytest.fixture
+def api(db_app: FastAPI) -> Iterator[TestClient]:
+    """A client for the real app on the rolled-back test database."""
+    with TestClient(db_app) as client:
+        yield client

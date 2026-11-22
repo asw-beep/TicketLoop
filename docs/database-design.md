@@ -276,6 +276,7 @@ Application code checks every rule first, to give a helpful error. The database 
 | Rule | Constraint |
 | --- | --- |
 | One account per email | `uq_users_email` + `ck_users_email_lowercase` (so `A@x.in` and `a@x.in` cannot both exist) |
+| A token hash is stored once; a rotated refresh token is always revoked | `uq_refresh_tokens_token_hash`, `uq_password_reset_tokens_token_hash`, `ck_refresh_tokens_replaced_means_revoked` |
 | One real ticket is registered once | `uq_tickets_event_provider_reference` |
 | At most one open listing per ticket (FR-04 rule 2) | partial unique index `uq_listings_one_open_per_ticket` on `ticket_id` `WHERE status IN ('DRAFT','PENDING_VERIFICATION','ACTIVE','RESERVED')` |
 | No markup, minimum ₹1 (FR-04 rule 6) | `ck_listings_price_cap`, `ck_listings_min_price` |

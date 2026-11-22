@@ -267,7 +267,7 @@ Each module lists what to know before you start, what to watch and read, what to
 4. A `refresh_tokens` table that stores a hash of each token plus `family_id`, `revoked_at` and `replaced_by`. On refresh, issue a new pair and revoke the old one. If a revoked token is used again, revoke the whole family: someone stole it.
 5. `POST /auth/logout` revokes the current refresh token.
 6. Dependencies: `get_current_user` (decode, check expiry, load the user, reject SUSPENDED) and `require_admin`.
-7. `GET /users/me` and `PATCH /users/me`.
+7. `GET /users/me` and `PATCH /users/me`; `POST /users/me/password` and the password reset (request and confirm) from FR-01, each of which revokes every refresh token the user holds.
 8. Tests for wrong password, expired token, tampered token, reused refresh token, suspended user and a normal user calling an admin route.
 9. `.github/workflows/ci.yml` running ruff and pytest against a Postgres service container.
 

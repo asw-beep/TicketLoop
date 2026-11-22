@@ -45,10 +45,12 @@ CREATE TABLE refresh_tokens (
     revoked_at   TIMESTAMPTZ,
     replaced_by  UUID REFERENCES refresh_tokens (id),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_refresh_tokens_hash UNIQUE (token_hash)
+    CONSTRAINT uq_refresh_tokens_token_hash UNIQUE (token_hash),
+    CONSTRAINT ck_refresh_tokens_replaced_means_revoked
+        CHECK (replaced_by IS NULL OR revoked_at IS NOT NULL)
 );
-CREATE INDEX ix_refresh_tokens_family ON refresh_tokens (family_id);
-CREATE INDEX ix_refresh_tokens_user_live ON refresh_tokens (user_id) WHERE revoked_at IS NULL;
+CREATE INDEX ix_refresh_tokens_family_id ON refresh_tokens (family_id);
+CREATE INDEX ix_refresh_tokens_user_id_live ON refresh_tokens (user_id) WHERE revoked_at IS NULL;
 
 CREATE TABLE password_reset_tokens (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -57,7 +59,7 @@ CREATE TABLE password_reset_tokens (
     expires_at  TIMESTAMPTZ NOT NULL,
     used_at     TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_password_reset_tokens_hash UNIQUE (token_hash)
+    CONSTRAINT uq_password_reset_tokens_token_hash UNIQUE (token_hash)
 );
 
 

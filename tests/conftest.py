@@ -4,11 +4,21 @@ every test below this folder; a test asks for one by naming it as a parameter.""
 from collections.abc import Iterator
 
 import pytest
+from argon2 import PasswordHasher, profiles
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.core import security
 from app.core.config import Settings
 from app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def cheap_password_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The real Argon2 settings cost about 50 ms and 64 MiB per hash, on purpose. Tests hash
+    # hundreds of passwords, so they use the cheapest valid parameters instead. One unit test
+    # (test_security.py) switches the real hasher back on to check its settings.
+    monkeypatch.setattr(security, "_hasher", PasswordHasher.from_parameters(profiles.CHEAPEST))
 
 
 @pytest.fixture

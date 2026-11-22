@@ -43,7 +43,7 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 | --- | --- | --- | --- | --- |
 | `GET /health` | Public | — | 200 `{"status": "ok", "checks": {"database": "ok"}}` | 503 same shape with `"unavailable"` |
 
-## Authentication (M3)
+## Authentication (M3, built)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
@@ -54,10 +54,12 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 | `POST /auth/password-reset/request` | Public | `{email}` | 202, identical whether or not the email exists | 429 |
 | `POST /auth/password-reset/confirm` | Public | `{token, new_password}` | 204; every refresh token for the user revoked | 400 invalid or used token; 422 |
 
-`TokenPair` = `{access_token, refresh_token, token_type: "bearer", expires_in: 900}`.
+`TokenPair` = `{access_token, refresh_token, token_type: "bearer", expires_in: 900}`. The refresh token is opaque (43 random URL-safe characters), not a JWT.
+
+As built: logout ends the whole session, revoking every live token in the presented token's family. The reset request answers 202 `{"message": ...}` with the same body for every email; the code is delivered by the email sender (in memory until a real one exists). Every 401 carries `WWW-Authenticate: Bearer`. Problem types: `email-taken`, `invalid-credentials`, `account-suspended`, `invalid-refresh-token`, `wrong-password`, `invalid-reset-token`, `not-authenticated`, `admin-required`. The 429s arrive with rate limits in M14.
 `User` = `{id, email, full_name, role, account_status, created_at}`. Never `password_hash`.
 
-## Users (M3, M13)
+## Users (M3 built; history in M13)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |

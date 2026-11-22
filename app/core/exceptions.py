@@ -39,11 +39,22 @@ class AppError(Exception):
     status: int = 400
     code: str = "bad-request"
     title: str = "Bad request"
+    headers: dict[str, str] | None = None  # extra response headers, e.g. WWW-Authenticate
 
     def __init__(self, detail: str | None = None, **extensions: Any) -> None:
         super().__init__(detail or self.title)
         self.detail = detail
         self.extensions = extensions  # extra fields for the body, e.g. current_status="RESERVED"
+
+
+class UnauthorizedError(AppError):
+    """401: we do not know who you are. No token, a bad token, or wrong credentials."""
+
+    status = 401
+    code = "not-authenticated"
+    title = "Authentication required"
+    # HTTP says a 401 must name the scheme the client should use (RFC 9110, RFC 6750).
+    headers = {"WWW-Authenticate": "Bearer"}
 
 
 class NotFoundError(AppError):
@@ -53,6 +64,8 @@ class NotFoundError(AppError):
 
 
 class PermissionDeniedError(AppError):
+    """403: we know who you are, and this is not allowed for you."""
+
     status = 403
     code = "permission-denied"
     title = "You are not allowed to do this"
@@ -94,6 +107,7 @@ async def _handle_app_error(request: Request, exc: AppError) -> JSONResponse:
         title=exc.title,
         detail=exc.detail,
         type_=_TYPE_PREFIX + exc.code,
+        headers=exc.headers,
         **exc.extensions,
     )
 

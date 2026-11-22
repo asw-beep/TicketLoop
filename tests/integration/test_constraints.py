@@ -16,7 +16,13 @@ from sqlalchemy.orm import Session
 
 from app.modules.audit.models import AuditLog
 from app.modules.tickets.models import Ticket
-from tests.integration.factories import make_listing, make_ticket, make_user
+from tests.integration.factories import (
+    make_listing,
+    make_password_reset_token,
+    make_refresh_token,
+    make_ticket,
+    make_user,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -87,6 +93,35 @@ def test_two_accounts_cannot_share_an_email(db_session: Session) -> None:
 def test_an_email_must_be_stored_lowercased(db_session: Session) -> None:
     with rejected_by(db_session, "ck_users_email_lowercase"):
         make_user(db_session, email="Asha@Example.in")
+
+
+# ---------- refresh and reset tokens: FR-01 ----------
+
+
+def test_a_refresh_token_hash_is_stored_once(db_session: Session) -> None:
+    first = make_refresh_token(db_session)
+
+    with rejected_by(db_session, "uq_refresh_tokens_token_hash"):
+        make_refresh_token(db_session, token_hash=first.token_hash)
+
+
+def test_a_replaced_refresh_token_must_also_be_revoked(db_session: Session) -> None:
+    newer = make_refresh_token(db_session)
+
+    with rejected_by(db_session, "ck_refresh_tokens_replaced_means_revoked"):
+        make_refresh_token(db_session, replaced_by=newer.id)  # revoked_at left NULL
+
+
+def test_a_refresh_token_must_belong_to_a_real_user(db_session: Session) -> None:
+    with rejected_by(db_session, "fk_refresh_tokens_user_id_users"):
+        make_refresh_token(db_session, user_id=uuid.uuid4())
+
+
+def test_a_password_reset_token_hash_is_stored_once(db_session: Session) -> None:
+    first = make_password_reset_token(db_session)
+
+    with rejected_by(db_session, "uq_password_reset_tokens_token_hash"):
+        make_password_reset_token(db_session, token_hash=first.token_hash)
 
 
 # ---------- tickets: FR-03 ----------

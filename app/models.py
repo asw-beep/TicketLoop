@@ -6,8 +6,17 @@ here when it gets tables.
 
 from app.modules.audit.models import AuditLog
 from app.modules.events.models import Event, TicketProvider
-from app.modules.identity.models import User
+from app.modules.identity.models import PasswordResetToken, RefreshToken, User
 from app.modules.listings.models import Listing
 from app.modules.tickets.models import Ticket
 
-__all__ = ["AuditLog", "Event", "Listing", "Ticket", "TicketProvider", "User"]
+__all__ = [
+    "AuditLog",
+    "Event",
+    "Listing",
+    "PasswordResetToken",
+    "RefreshToken",
+    "Ticket",
+    "TicketProvider",
+    "User",
+]
