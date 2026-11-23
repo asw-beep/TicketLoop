@@ -37,10 +37,13 @@ class EventSummary(ResponseModel):
 
 class TicketOut(ResponseModel):
     """`Ticket` in the API contract. Every M4 ticket route is for the owner or an admin, so
-    the private references are always included; M5's public listing shape leaves them out."""
+    the private references are always included; M5's public listing shape leaves them out.
+    `current_owner_id` lets a page tell an admin viewing their own ticket from an admin
+    viewing someone else's (M5)."""
 
     id: uuid.UUID
     event_id: uuid.UUID
+    current_owner_id: uuid.UUID
     event: EventSummary
     ticket_category: str
     seat_details: str | None

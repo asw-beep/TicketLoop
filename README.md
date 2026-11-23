@@ -15,7 +15,8 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M2 · Database layer | Done: users, events, tickets, listings and audit log by Alembic migration; constraints that enforce the business rules; one transaction per request; a test database rolled back after every test |
 | M3 · Identity and auth | Done: register and login with Argon2id; 15-minute JWT access tokens; 7-day refresh tokens that rotate, with reuse detection that revokes the whole session; logout; password change and reset; `get_current_user` and `require_admin`; `GET` and `PATCH /users/me`; CI on every push |
 | M4 · Events, tickets and document storage | Done: admin event management with a status machine; ticket registration; proof of purchase in MinIO (S3) behind 5-minute signed links, typed by its first bytes; admin verification; one 404 for "missing" and "not yours" on every ticket route, proven by a test that enumerates them; screens for all of it |
-| M5 · Listings, verification and audit log | Next |
+| M5 · Listings, verification and audit log | Done: listing a verified ticket at no more than face value; admin review with no self-review; one state machine whose every move is a conditional `UPDATE` plus an audit row in the same transaction; listing history; the event-cancel cascade and listing expiry; races between admins proven with real concurrent transactions; screens for all of it |
+| M6 · Discovery: search, filters, pagination | Next |
 
 ## Run it
 
@@ -88,7 +89,7 @@ Set `JWT_SECRET_KEY` (at least 32 bytes) anywhere but your laptop; staging and p
 ## Try the ticket flow
 
 1. Create two accounts at http://localhost:5173/register, one for you as admin and one as a ticket holder (a private window keeps the sessions apart).
-2. Promote the first: `uv run python -m scripts.make_admin <email>`, then reload the page. **Events** and **Verify tickets** appear in the top bar.
+2. Promote the first: `uv run python -m scripts.make_admin <email>`, then reload the page. **Events**, **Verify tickets** and **Review listings** appear in the top bar.
 3. **Events → New event**: fill it in with a start time in the future, create it (it starts as a draft), then **Publish**.
 4. As the ticket holder, **My tickets → Register a ticket**: pick the event, enter the category, the price you paid in rupees, and the order and ticket numbers.
 5. On the ticket's page, upload a PDF, PNG or JPEG up to 5 MB, then **Open** it: the file comes straight from MinIO through a link that works for 5 minutes.
@@ -111,6 +112,33 @@ DOC=$(curl -s $B/tickets/$TICKET/documents -H "Authorization: Bearer $HOLDER" -F
 curl -s $B/tickets/$TICKET/documents/$DOC -H "Authorization: Bearer $HOLDER"   # {"url": "...", "expires_at": "..."}
 curl -s $B/admin/tickets/$TICKET/verify -H "Authorization: Bearer $ADMIN" \
   -H 'content-type: application/json' -d '{"decision":"VERIFIED","transfer_eligible":true}'
+```
+
+## Try the listing flow
+
+Carry on from the ticket flow, with the ticket verified as **Transfer eligible**.
+
+1. As the holder, open the ticket's page. Under **Sell this ticket**, enter an asking price no higher than what you paid and press **Submit for review** (or **Save draft** to submit later from the listing's page).
+2. The listing's page shows **Pending review**. Change the price there while you wait if you like.
+3. As the admin, **Review listings**: check the listing against **View the ticket and its evidence**, then **Approve**, or **Reject** with a reason the holder will see. An admin cannot review their own listing, so if your admin account is also the seller, approve it from a second admin account.
+4. Back as the holder, the listing is **Active**, and **History** reads: listed as a draft, submitted for review, approved by an admin. Anyone else opening the listing's address sees the ticket and the price, but no history and no controls; a draft or pending listing is "Not found" to them.
+5. **My listings** has every listing in every status. **Review listings → All listings** shows an admin everyone's.
+
+From a terminal, carrying on with the variables above:
+
+```bash
+LISTING=$(curl -s $B/listings -H "Authorization: Bearer $HOLDER" -H 'content-type: application/json' \
+  -d "{\"ticket_id\":\"$TICKET\",\"asking_price_paise\":200000}" | jq -r .id)     # a DRAFT
+curl -s -X POST $B/listings/$LISTING/submit -H "Authorization: Bearer $HOLDER"       # PENDING_VERIFICATION
+curl -s -X POST $B/admin/listings/$LISTING/approve -H "Authorization: Bearer $ADMIN" # ACTIVE
+curl -s $B/listings/$LISTING                                                         # the public view, no token
+curl -s $B/listings/$LISTING/history -H "Authorization: Bearer $HOLDER" | jq '.items[].action'
+```
+
+`ACTIVE` listings whose end has passed become `EXPIRED` when the expiry job runs. Until M11 schedules it, run it by hand:
+
+```bash
+uv run python -m scripts.expire_listings   # Expired 0 listing(s).
 ```
 
 ## Migrations
@@ -158,6 +186,8 @@ app/
     identity/              users, tokens, auth routes, get_current_user and require_admin
     events/                events, ticket providers, the event status machine, admin event routes
     tickets/               ticket registration, evidence uploads and links, admin verification
+    listings/              listings, the listing state machine, review, history, the event cascade and expiry
+    audit/                 the append-only audit log and record(), the one way to write to it
   infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory); later Redis, RabbitMQ
   workers/                 background jobs (M8 onward)
 tests/
@@ -165,7 +195,7 @@ tests/
   integration/             need Postgres
   concurrency/ failure/ load/   later modules
 migrations/                Alembic env.py and one file per schema change
-scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi
+scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi, expire_listings
 frontend/                  React + TypeScript app (Vite); each module adds its screens
   src/api/                 typed client; schema.d.ts is generated from the backend
   src/auth/                access token in memory, refresh through the HttpOnly cookie

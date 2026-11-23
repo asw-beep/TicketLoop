@@ -341,6 +341,8 @@ Each module lists what to know before you start, what to watch and read, what to
 7. Listing expiry from ACTIVE to EXPIRED as a plain query for now; it gets a schedule in M11.
 8. Tests: every illegal transition fails; a seller cannot list someone else's ticket; a second open listing for one ticket fails; the audit row rolls back together with a failed change.
 
+**As built:** the `listings` table already existed from M2, so the M5 migration adds only indexes. Create makes a `DRAFT`, and a separate `POST /listings/{id}/submit` sends it for review, so a seller can fix a draft before an admin sees it. The seller can cancel from `DRAFT`, `PENDING_VERIFICATION` or `ACTIVE`; an admin only from `ACTIVE`. The audit column is `details`, not `metadata` (see `docs/database-design.md`).
+
 **Screens:** **List this ticket** with a price, and each listing's status; an admin queue of pending listings with approve and reject; a listing's status history read from the audit log.
 
 **Done when:** a table-driven test tries every (from, to) pair and only the allowed ones succeed.

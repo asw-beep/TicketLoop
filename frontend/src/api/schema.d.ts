@@ -42,6 +42,86 @@ export interface paths {
     patch: operations["update_event_api_v1_admin_events__event_id__patch"];
     trace?: never;
   };
+  "/api/v1/admin/listings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * All Listings
+     * @description Every listing in every status, newest first.
+     */
+    get: operations["all_listings_api_v1_admin_listings_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/listings/pending": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Pending Listings
+     * @description Listings waiting for review, oldest first.
+     */
+    get: operations["pending_listings_api_v1_admin_listings_pending_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/listings/{listing_id}/approve": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Approve Listing
+     * @description Put a listing waiting for review on sale. Not your own.
+     */
+    post: operations["approve_listing_api_v1_admin_listings__listing_id__approve_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/admin/listings/{listing_id}/reject": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reject Listing
+     * @description Reject a listing waiting for review, with a reason the seller sees. Not your own.
+     */
+    post: operations["reject_listing_api_v1_admin_listings__listing_id__reject_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/admin/providers": {
     parameters: {
       query?: never;
@@ -250,6 +330,118 @@ export interface paths {
     get: operations["health_api_v1_health_get"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/listings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Create Listing
+     * @description Offer a ticket you own at no more than face value. It starts as a DRAFT; submit it to
+     *     send it for review.
+     */
+    post: operations["create_listing_api_v1_listings_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/listings/me": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * My Listings
+     * @description Your listings in every status, newest first.
+     */
+    get: operations["my_listings_api_v1_listings_me_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/listings/{listing_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Listing
+     * @description An ACTIVE listing, for anyone, in the public shape. The seller and admins see any
+     *     status, in the full shape (it has `ticket_id`). Signing in is optional.
+     */
+    get: operations["get_listing_api_v1_listings__listing_id__get"];
+    put?: never;
+    post?: never;
+    /**
+     * Cancel Listing
+     * @description Cancel a listing. The seller can while it is DRAFT, PENDING_VERIFICATION or ACTIVE;
+     *     an admin can cancel anyone's ACTIVE listing. The row is kept, as CANCELLED.
+     */
+    delete: operations["cancel_listing_api_v1_listings__listing_id__delete"];
+    options?: never;
+    head?: never;
+    /**
+     * Update Listing
+     * @description Change your listing's price or expiry while it is DRAFT, PENDING_VERIFICATION or
+     *     ACTIVE. An ACTIVE listing's price can only go down.
+     */
+    patch: operations["update_listing_api_v1_listings__listing_id__patch"];
+    trace?: never;
+  };
+  "/api/v1/listings/{listing_id}/history": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Listing History
+     * @description What happened to the listing, oldest first. For its seller and admins.
+     */
+    get: operations["listing_history_api_v1_listings__listing_id__history_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/listings/{listing_id}/submit": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Submit Listing
+     * @description Send your DRAFT listing for review.
+     */
+    post: operations["submit_listing_api_v1_listings__listing_id__submit_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -593,6 +785,141 @@ export interface components {
        */
       status: "ok" | "unavailable";
     };
+    /**
+     * HistoryEntryOut
+     * @description One line of a listing's history. Who acted is a role, never an identity: the seller
+     *     must not learn which admin reviewed their listing.
+     */
+    HistoryEntryOut: {
+      /** Action */
+      action: string;
+      /**
+       * Actor Role
+       * @enum {string}
+       */
+      actor_role: "seller" | "admin" | "system";
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Details */
+      details: {
+        [key: string]: unknown;
+      };
+      from_status: components["schemas"]["ListingStatus"] | null;
+      to_status: components["schemas"]["ListingStatus"] | null;
+    };
+    /** ListingEventSummary */
+    ListingEventSummary: {
+      /** Category */
+      category: string;
+      /** City */
+      city: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Name */
+      name: string;
+      /**
+       * Starts At
+       * Format: date-time
+       */
+      starts_at: string;
+      /** Venue */
+      venue: string;
+    };
+    /**
+     * ListingIn
+     * @description The seller is never in the body: it is always the caller (unknown fields are 422).
+     *     Without `expires_at` the listing expires when the event starts.
+     */
+    ListingIn: {
+      /** Asking Price Paise */
+      asking_price_paise: number;
+      /** Expires At */
+      expires_at?: string | null;
+      /**
+       * Ticket Id
+       * Format: uuid
+       */
+      ticket_id: string;
+    };
+    /**
+     * ListingOut
+     * @description `Listing` in the API contract: for the seller and admins only.
+     */
+    ListingOut: {
+      /** Asking Price Paise */
+      asking_price_paise: number;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      event: components["schemas"]["ListingEventSummary"];
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Original Price Paise */
+      original_price_paise: number;
+      /** Rejection Reason */
+      rejection_reason: string | null;
+      /** Reviewed At */
+      reviewed_at: string | null;
+      /** Seat Details */
+      seat_details: string | null;
+      /**
+       * Seller Id
+       * Format: uuid
+       */
+      seller_id: string;
+      status: components["schemas"]["ListingStatus"];
+      /** Ticket Category */
+      ticket_category: string;
+      /**
+       * Ticket Id
+       * Format: uuid
+       */
+      ticket_id: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
+     * ListingPatch
+     * @description Change the price, the expiry, or both. At least one, and neither may be null.
+     */
+    ListingPatch: {
+      /** Asking Price Paise */
+      asking_price_paise?: number | null;
+      /** Expires At */
+      expires_at?: string | null;
+    };
+    /**
+     * ListingStatus
+     * @enum {string}
+     */
+    ListingStatus:
+      | "DRAFT"
+      | "PENDING_VERIFICATION"
+      | "ACTIVE"
+      | "RESERVED"
+      | "SOLD"
+      | "REJECTED"
+      | "CANCELLED"
+      | "EXPIRED";
     /** LoginIn */
     LoginIn: {
       /**
@@ -607,6 +934,20 @@ export interface components {
     Page_EventOut_: {
       /** Items */
       items: components["schemas"]["EventOut"][];
+      /** Next Cursor */
+      next_cursor: string | null;
+    };
+    /** Page[HistoryEntryOut] */
+    Page_HistoryEntryOut_: {
+      /** Items */
+      items: components["schemas"]["HistoryEntryOut"][];
+      /** Next Cursor */
+      next_cursor: string | null;
+    };
+    /** Page[ListingOut] */
+    Page_ListingOut_: {
+      /** Items */
+      items: components["schemas"]["ListingOut"][];
       /** Next Cursor */
       next_cursor: string | null;
     };
@@ -651,6 +992,32 @@ export interface components {
       /** Name */
       name: string;
     };
+    /**
+     * PublicListingOut
+     * @description `PublicListing` in the API contract.
+     */
+    PublicListingOut: {
+      /** Asking Price Paise */
+      asking_price_paise: number;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      event: components["schemas"]["ListingEventSummary"];
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Original Price Paise */
+      original_price_paise: number;
+      /** Seat Details */
+      seat_details: string | null;
+      status: components["schemas"]["ListingStatus"];
+      /** Ticket Category */
+      ticket_category: string;
+    };
     /** RegisterIn */
     RegisterIn: {
       /**
@@ -662,6 +1029,14 @@ export interface components {
       full_name: string;
       /** Password */
       password: string;
+    };
+    /**
+     * RejectIn
+     * @description Why the listing was rejected. The seller sees it. Trimmed, so "   " is a 422.
+     */
+    RejectIn: {
+      /** Reason */
+      reason: string;
     };
     /**
      * TicketIn
@@ -688,6 +1063,8 @@ export interface components {
      * TicketOut
      * @description `Ticket` in the API contract. Every M4 ticket route is for the owner or an admin, so
      *     the private references are always included; M5's public listing shape leaves them out.
+     *     `current_owner_id` lets a page tell an admin viewing their own ticket from an admin
+     *     viewing someone else's (M5).
      */
     TicketOut: {
       /**
@@ -695,6 +1072,11 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /**
+       * Current Owner Id
+       * Format: uuid
+       */
+      current_owner_id: string;
       event: components["schemas"]["EventSummary"];
       /**
        * Event Id
@@ -891,6 +1273,142 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["EventOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  all_listings_api_v1_admin_listings_get: {
+    parameters: {
+      query?: {
+        status?: components["schemas"]["ListingStatus"] | null;
+        ticket_id?: string | null;
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_ListingOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  pending_listings_api_v1_admin_listings_pending_get: {
+    parameters: {
+      query?: {
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_ListingOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  approve_listing_api_v1_admin_listings__listing_id__approve_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        listing_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListingOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  reject_listing_api_v1_admin_listings__listing_id__reject_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        listing_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RejectIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListingOut"];
         };
       };
       /** @description Validation Error */
@@ -1304,6 +1822,240 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HealthResponse"];
+        };
+      };
+    };
+  };
+  create_listing_api_v1_listings_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ListingIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListingOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  my_listings_api_v1_listings_me_get: {
+    parameters: {
+      query?: {
+        status?: components["schemas"]["ListingStatus"] | null;
+        ticket_id?: string | null;
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_ListingOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_listing_api_v1_listings__listing_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        listing_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json":
+            components["schemas"]["ListingOut"] | components["schemas"]["PublicListingOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  cancel_listing_api_v1_listings__listing_id__delete: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        listing_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListingOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  update_listing_api_v1_listings__listing_id__patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        listing_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ListingPatch"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListingOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  listing_history_api_v1_listings__listing_id__history_get: {
+    parameters: {
+      query?: {
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        listing_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_HistoryEntryOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  submit_listing_api_v1_listings__listing_id__submit_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        listing_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ListingOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };

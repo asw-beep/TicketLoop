@@ -1,0 +1,616 @@
+# M5 · Listings, verification and audit log: implementation plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Owners list verified tickets at no more than face value, admins approve or reject them, every listing status change goes through one `transition()` that writes an audit row in the same transaction, and every existing admin action is audited too.
+
+**Architecture:** A new `listings` module in the M3/M4 shape plus `state.py` (the `ALLOWED` table and `transition()`) and `rules.py` (pure price and expiry checks); an `audit.record()` helper in `app/modules/audit/service.py` that reads the request ID from structlog's context. The `listings` and `audit_logs` tables already exist; one migration adds indexes. Events and tickets services gain audit rows, a self-review block, and an event-cancel cascade. Four screens change or arrive in `frontend/`.
+
+**Tech Stack:** FastAPI, SQLAlchemy 2, Alembic, Postgres 17, structlog, pytest; React 19 + TanStack Query + react-router + openapi-fetch, Vitest, Playwright.
+
+**Spec:** `docs/superpowers/specs/2026-11-23-m5-listings-verification-audit-design.md`
+
+## Global Constraints
+
+- All paths under `/api/v1`; every admin route under `/admin`.
+- Request bodies extend `RequestModel` (unknown fields are 422); responses extend `ResponseModel`.
+- Money is integer paise. Asking price is 100 to the ticket's `original_price_paise` inclusive; the schema bound is 1 to 10_000_000, and `check_price` gives the 422 `price-out-of-range` below 100.
+- Lists take `limit` (default 20, max 100) and `cursor`, and return `Page[T]` (`{items, next_cursor}`), built with `app.core.pagination.paginate`.
+- A listing that exists but is not visible to the caller is **404** `listing-not-found` with the fixed detail `Listing not found.`, the same body as an unknown ID. 403 only when the caller can already see the resource: `seller-only`, `owner-only`, `own-listing-review`, `own-ticket-review`.
+- Services never commit; `get_db` commits. Errors are `AppError` subclasses; the problem `type` is `urn:ticketloop:problem:<code>`.
+- Every listing status change goes through `transition()`. The only listing audit rows written outside it are `listing.created`, `listing.price_changed` and `listing.expiry_changed`.
+- `audit.record()` never commits. Audit `details` never contain tokens, presigned URLs, purchase or provider references, or email addresses.
+- A `SELECT ... FOR UPDATE` on `Listing` uses `with_for_update(of=Listing)`: the model's joined eager loads would otherwise lock ticket and event rows too.
+- Race tests commit for real and delete their rows afterwards, except audit rows: the append-only trigger refuses DELETE, they have no foreign keys, and the test database is rebuilt each run.
+- No AI-tool credit anywhere: no tool or vendor names, no co-author trailers, in any file or commit. Before every commit, grep the staged diff (case-insensitive) for the assistant's name, its vendor's name and co-author trailers, and expect no output.
+- Per-task commits are local checkpoints titled `M5 wip: <task>`. Task 11 squashes everything since `8f63e40` into one commit, `M5: Listings, verification and audit log`, and pushes.
+
+**Resolved spec inconsistency:** the spec's create rules say any non-PUBLISHED event is 409 `event-not-open`, while its test list says "draft event 404". A verified ticket can never belong to a DRAFT event (registration requires PUBLISHED, and events never return to DRAFT), so the plan follows the rules: every non-PUBLISHED status is 409.
+
+**Small addition:** `ListingOut` (the seller-and-admin shape) also carries `seller_id`, so the listing page can tell an admin viewing someone else's listing from an admin viewing their own. It is not sensitive to either audience. Task 11 adds it to the contract.
+
+## Review Focus
+
+1. `expires_at` sent without a timezone (`"2027-01-15T18:30:00"`) must be 422, never read as UTC. Test in Task 3.
+2. A rejection reason of only whitespace (`"   "`) must be 422 after trimming. Test in Task 5.
+3. `PATCH` with `{}`, or with an explicit `null` (`{"asking_price_paise": null}`), must be 422, not a 500 from a NULL reaching the database. Test in Task 4.
+4. Query filters with bad values (`?status=BOGUS`, `?ticket_id=not-a-uuid`) on `/listings/me` and `/admin/listings` must be 422. Test in Task 3 (and Task 5 for the admin route).
+5. A pending listing whose event starts while it waits must refuse approval (409 `listing-not-approvable`) and stay PENDING_VERIFICATION. Test in Task 5.
+
+---
+
+### Task 1: Audit helper, indexes and listing relationships
+
+**Files:**
+- Create: `app/modules/audit/service.py`
+- Modify: `app/modules/audit/models.py`, `app/modules/listings/models.py`
+- Create: `migrations/versions/2026_11_23_<rev>_listing_and_audit_indexes.py` (autogenerated)
+- Test: `tests/integration/test_audit.py`
+
+**Interfaces:**
+- Produces:
+  - `app.modules.audit.service.record(db: Session, *, actor_id: uuid.UUID | None, entity_type: str, entity_id: uuid.UUID, action: str, details: Mapping[str, Any] | None = None) -> AuditLog`. Adds and flushes; never commits.
+  - `AuditLog` index `ix_audit_logs_entity (entity_type, entity_id, created_at)`.
+  - `Listing` indexes: `ix_listings_review_queue (created_at, id) WHERE status = 'PENDING_VERIFICATION'`, `ix_listings_active_expiry (expires_at) WHERE status = 'ACTIVE'`, `ix_listings_seller (seller_id, created_at, id)`, `ix_listings_event (event_id)`.
+  - `Listing.ticket: Mapped[Ticket]` and `Listing.event: Mapped[Event]`, both `relationship(lazy="joined", innerjoin=True)`; read-only properties `Listing.ticket_category -> str` and `Listing.seat_details -> str | None` that return the ticket's values (so `model_validate(listing)` fills them).
+
+- [ ] **Step 1: Write the failing tests** in `tests/integration/test_audit.py` (mark `integration`):
+
+```python
+def test_record_reads_the_request_id_from_the_log_context(db_session):
+    structlog.contextvars.bind_contextvars(request_id="req-123")
+    try:
+        row = record(
+            db_session,
+            actor_id=None,
+            entity_type="listing",
+            entity_id=uuid.uuid4(),
+            action="listing.created",
+        )
+    finally:
+        structlog.contextvars.clear_contextvars()
+    assert row.request_id == "req-123"
+
+
+def test_outside_a_request_the_request_id_is_null(db_session):
+    structlog.contextvars.clear_contextvars()
+    row = record(
+        db_session,
+        actor_id=None,
+        entity_type="listing",
+        entity_id=uuid.uuid4(),
+        action="listing.expired",
+    )
+    assert row.request_id is None
+
+
+def test_details_are_stored_as_plain_json(db_session):
+    some_id, when = uuid.uuid4(), datetime(2027, 1, 15, 13, 0, tzinfo=UTC)
+    row = record(
+        db_session,
+        actor_id=None,
+        entity_type="listing",
+        entity_id=uuid.uuid4(),
+        action="listing.created",
+        details={"ticket": some_id, "at": when, "n": 3},
+    )
+    db_session.expire(row)
+    assert row.details == {"ticket": str(some_id), "at": when.isoformat(), "n": 3}
+
+
+def test_a_rolled_back_savepoint_takes_its_audit_row_with_it(db_session):
+    entity_id = uuid.uuid4()
+    savepoint = db_session.begin_nested()
+    record(
+        db_session,
+        actor_id=None,
+        entity_type="listing",
+        entity_id=entity_id,
+        action="listing.created",
+    )
+    savepoint.rollback()
+    count = db_session.scalar(select(func.count()).where(AuditLog.entity_id == entity_id))
+    assert count == 0
+```
+
+- [ ] **Step 2: Run them and see them fail.** `uv run pytest tests/integration/test_audit.py -v` → FAIL (`ImportError: record`).
+
+- [ ] **Step 3: Implement `record()`.** `request_id` comes from `structlog.contextvars.get_contextvars().get("request_id")`. Make `details` JSON-safe one level deep: `uuid.UUID` → `str`, `datetime` → `.isoformat()`, everything else as given. Docstring states the never-commit and never-secrets rules.
+
+- [ ] **Step 4: Run them.** Same command → 4 PASS.
+
+- [ ] **Step 5: Indexes and relationships.** Add the indexes above to the two models' `__table_args__` (`postgresql_where=text(...)` for the partial ones), the two relationships and the two properties on `Listing`. Run `uv run alembic revision --autogenerate -m "listing and audit indexes"`, check the file creates exactly those five indexes and its downgrade drops them, and add a module docstring saying what they serve.
+
+- [ ] **Step 6: Check migrations.** `uv run alembic upgrade head && uv run alembic check` → "No new upgrade operations detected." `uv run pytest tests/integration/test_migrations.py -v` → PASS.
+
+- [ ] **Step 7: Full check and commit.** `uv run ruff check . && uv run ruff format --check . && uv run pytest` → all pass. Attribution grep → no output. Commit `M5 wip: audit helper and indexes`.
+
+---
+
+### Task 2: State machine, rules and errors
+
+**Files:**
+- Create: `app/modules/listings/errors.py`, `app/modules/listings/state.py`, `app/modules/listings/rules.py`
+- Modify: `tests/integration/factories.py`, `tests/integration/api.py`
+- Test: `tests/unit/test_listing_rules.py`, `tests/integration/test_listing_transitions.py`
+
+**Interfaces:**
+- Consumes: `record()` (Task 1).
+- Produces:
+  - `app.modules.listings.errors`, each with the status and code shown (titles are the builder's):
+    | Class | Base | Code |
+    | --- | --- | --- |
+    | `ListingNotFoundError` | `NotFoundError` | `listing-not-found` (fixed detail `Listing not found.`) |
+    | `IllegalListingTransitionError` | `ConflictError` | `illegal-listing-transition` |
+    | `ListingChangedError` | `ConflictError` | `listing-changed` |
+    | `PriceOutOfRangeError` | `AppError`, 422 | `price-out-of-range` |
+    | `PriceIncreaseError` | `ConflictError` | `price-increase-not-allowed` |
+    | `BadExpiryError` | `AppError`, 422 | `bad-expiry` |
+    | `TicketNotListableError` | `ConflictError` | `ticket-not-listable` |
+    | `ListingAlreadyOpenError` | `ConflictError` | `listing-already-open` |
+    | `ListingNotEditableError` | `ConflictError` | `listing-not-editable` |
+    | `ListingNotDraftError` | `ConflictError` | `listing-not-draft` |
+    | `ListingNotCancellableError` | `ConflictError` | `listing-not-cancellable` |
+    | `ListingNotPendingError` | `ConflictError` | `listing-not-pending` |
+    | `ListingNotApprovableError` | `ConflictError` | `listing-not-approvable` |
+    | `SellerOnlyError` | `PermissionDeniedError` | `seller-only` |
+    | `OwnListingReviewError` | `PermissionDeniedError` | `own-listing-review` |
+  - `app.modules.listings.state.ALLOWED: dict[ListingStatus, frozenset[ListingStatus]]`, the spec's table.
+  - `app.modules.listings.state.ACTION: dict[tuple[ListingStatus, ListingStatus], str]`, one entry per allowed pair: `(DRAFT, PENDING_VERIFICATION)` `listing.submitted`; `(PENDING_VERIFICATION, ACTIVE)` `listing.approved`; `(PENDING_VERIFICATION, REJECTED)` `listing.rejected`; `(ACTIVE, RESERVED)` `listing.reserved`; `(RESERVED, ACTIVE)` `listing.released`; `(RESERVED, SOLD)` `listing.sold`; any `→ EXPIRED` `listing.expired`; any `→ CANCELLED` `listing.cancelled`.
+  - `transition(db: Session, listing: Listing, to: ListingStatus, *, actor_id: uuid.UUID | None, values: Mapping[str, Any] | None = None, details: Mapping[str, Any] | None = None) -> Listing`
+  - `app.modules.listings.rules`: `MIN_PRICE_PAISE = 100`; `check_price(asking: int, original: int, *, current: int | None = None, status: ListingStatus | None = None) -> None`; `check_expiry(expires_at: datetime, event_starts_at: datetime, now: datetime) -> None`.
+  - Test factory `make_verified_ticket(session, **fields) -> Ticket`: `make_ticket` with `verification_status="VERIFIED"`, `transfer_eligible=True`. `make_listing` gains a default `rejection_reason="Test reason."` when `status="REJECTED"` and none is given.
+  - Test helper `tests.integration.api.problem_code(response) -> str` (the `type` with `urn:ticketloop:problem:` removed).
+
+- [ ] **Step 1: Write the failing rule tests** in `tests/unit/test_listing_rules.py`:
+
+```python
+@pytest.mark.parametrize("asking", [100, 250_000])
+def test_prices_from_one_rupee_to_face_value_pass(asking):
+    check_price(asking, 250_000)
+
+
+@pytest.mark.parametrize("asking", [99, 250_001])
+def test_prices_outside_the_range_are_refused(asking):
+    with pytest.raises(PriceOutOfRangeError):
+        check_price(asking, 250_000)
+
+
+def test_an_active_listing_may_not_get_dearer():
+    with pytest.raises(PriceIncreaseError):
+        check_price(200_001, 250_000, current=200_000, status=ListingStatus.ACTIVE)
+    check_price(200_000, 250_000, current=200_000, status=ListingStatus.ACTIVE)  # equal is fine
+    check_price(240_000, 250_000, current=200_000, status=ListingStatus.DRAFT)  # only ACTIVE
+
+
+NOW = datetime(2027, 1, 1, tzinfo=UTC)
+START = NOW + timedelta(days=10)
+
+
+@pytest.mark.parametrize("expires_at", [NOW + timedelta(seconds=1), START])
+def test_expiry_between_now_and_the_event_start_passes(expires_at):
+    check_expiry(expires_at, START, NOW)
+
+
+@pytest.mark.parametrize("expires_at", [NOW, START + timedelta(seconds=1)])
+def test_expiry_at_now_or_after_the_start_is_refused(expires_at):
+    with pytest.raises(BadExpiryError):
+        check_expiry(expires_at, START, NOW)
+```
+
+- [ ] **Step 2: Write the failing transition tests** in `tests/integration/test_listing_transitions.py`. The state-machine doc's table is written out by hand in the test, so changing either side alone fails it:
+
+```python
+DOC_TABLE = {
+    "DRAFT": {"PENDING_VERIFICATION", "CANCELLED"},
+    "PENDING_VERIFICATION": {"ACTIVE", "REJECTED", "CANCELLED"},
+    "ACTIVE": {"RESERVED", "CANCELLED", "EXPIRED"},
+    "RESERVED": {"ACTIVE", "EXPIRED", "SOLD", "CANCELLED"},
+    "SOLD": set(),
+    "REJECTED": set(),
+    "CANCELLED": set(),
+    "EXPIRED": set(),
+}
+
+
+def test_allowed_matches_docs_state_machines_md():
+    assert {k.value: {s.value for s in v} for k, v in ALLOWED.items()} == DOC_TABLE
+
+
+def test_every_allowed_move_has_an_audit_action():
+    assert set(ACTION) == {(f, t) for f, tos in ALLOWED.items() for t in tos}
+
+
+@pytest.mark.parametrize("from_, to", itertools.product(ListingStatus, ListingStatus))
+def test_only_allowed_moves_succeed(db_session, from_, to):
+    listing = make_listing(db_session, status=from_)
+    before = audit_count(db_session, listing.id)
+    # ck_listings_rejection_reason: a move to REJECTED must carry its reason.
+    values = {"rejection_reason": "Test reason."} if to == "REJECTED" else None
+    if to in ALLOWED[from_]:
+        transition(db_session, listing, to, actor_id=None, values=values)
+        assert listing.status == to
+        rows = audit_rows(db_session, listing.id)
+        assert len(rows) == before + 1
+        assert rows[-1].action == ACTION[(from_, to)]
+        assert rows[-1].details["from"] == from_ and rows[-1].details["to"] == to
+    else:
+        with pytest.raises(IllegalListingTransitionError):
+            transition(db_session, listing, to, actor_id=None, values=values)
+        db_session.refresh(listing)
+        assert listing.status == from_
+        assert audit_count(db_session, listing.id) == before
+
+
+def test_a_listing_changed_underneath_gives_listing_changed(db_session):
+    listing = make_listing(db_session, status="ACTIVE")
+    db_session.execute(  # another transaction got there first; our object still says ACTIVE
+        update(Listing).where(Listing.id == listing.id).values(status="CANCELLED"),
+        execution_options={"synchronize_session": False},
+    )
+    with pytest.raises(ListingChangedError) as caught:
+        transition(db_session, listing, ListingStatus.EXPIRED, actor_id=None)
+    assert caught.value.extensions["current_status"] == "CANCELLED"
+
+
+def test_a_failure_later_in_the_transaction_undoes_the_change_and_its_audit_row(db_session):
+    listing = make_listing(db_session, status="PENDING_VERIFICATION")
+    savepoint = db_session.begin_nested()
+    transition(db_session, listing, ListingStatus.ACTIVE, actor_id=None)
+    with pytest.raises(IntegrityError):  # ck_listings_min_price
+        db_session.execute(
+            update(Listing).where(Listing.id == listing.id).values(asking_price_paise=1)
+        )
+    savepoint.rollback()
+    db_session.refresh(listing)
+    assert listing.status == "PENDING_VERIFICATION"
+    assert audit_count(db_session, listing.id) == 0
+```
+
+`audit_rows` and `audit_count` are small local helpers over `AuditLog` filtered by `entity_type="listing"` and `entity_id`, ordered `created_at, id`.
+
+- [ ] **Step 3: Run them and see them fail.** `uv run pytest tests/unit/test_listing_rules.py tests/integration/test_listing_transitions.py -v` → FAIL (import errors).
+
+- [ ] **Step 4: Implement errors, rules and the state machine.** `transition()` follows the spec's five steps exactly. The UPDATE is `update(Listing).where(Listing.id == listing.id, Listing.status == seen).values(status=to, updated_at=func.now(), **values).returning(Listing.id)`. When it returns no row, `db.refresh(listing)` and raise `ListingChangedError(f"The listing is now {listing.status}.", current_status=listing.status)`. Both 409s carry `current_status`. The audit row is `record(db, actor_id=actor_id, entity_type="listing", entity_id=listing.id, action=ACTION[(seen, to)], details={"from": seen, "to": to, **(details or {})})`. Docstrings explain why the status check lives in the WHERE clause and that `transition()` knows nothing about who may act.
+
+- [ ] **Step 5: Run them.** Same command → all PASS (64 parametrised cases included).
+
+- [ ] **Step 6: Full check and commit.** Same checks as Task 1. Commit `M5 wip: listing state machine`.
+
+---
+
+### Task 3: Create and read listings
+
+**Files:**
+- Create: `app/modules/listings/schemas.py`, `app/modules/listings/service.py`, `app/modules/listings/router.py`
+- Modify: `app/modules/identity/dependencies.py`, `app/api/router.py`, `tests/integration/conftest.py`
+- Test: `tests/integration/test_listings_create.py`, `tests/integration/test_listing_reads.py`, `tests/integration/test_optional_user.py`
+
+**Interfaces:**
+- Consumes: `transition`, `record`, the errors, `check_price`, `check_expiry` (Tasks 1 and 2); `get_visible_ticket`, `EventNotOpenError`, `EventStartedError`, `OwnerOnlyError` (M4).
+- Produces:
+  - `get_optional_user(...) -> User | None` and `OptionalUser = Annotated[User | None, Depends(get_optional_user)]` in `app/modules/identity/dependencies.py`. No header gives `None`; a bad or expired token is 401 as in `get_current_user` (share the token-to-user code; don't copy it).
+  - Schemas: `ListingEventSummary` (`id, name, category, city, venue, starts_at`); `PublicListingOut` (`id, event: ListingEventSummary, ticket_category, seat_details, asking_price_paise, original_price_paise, status: ListingStatus, created_at`); `ListingOut(PublicListingOut)` adds `ticket_id, seller_id, expires_at, reviewed_at, rejection_reason, updated_at`; `ListingIn` (`ticket_id: uuid.UUID`, `asking_price_paise: int` 1 to 10_000_000, `expires_at: AwareDatetime | None = None`).
+  - Service: `get_listing_for(db: Session, listing_id: uuid.UUID, user: User | None) -> Listing`; `can_see_everything(listing: Listing, user: User | None) -> bool` (seller or admin); `check_listable(ticket: Ticket, now: datetime) -> None` (raises `TicketNotListableError`, naming which check failed, `EventNotOpenError` or `EventStartedError`); `create_listing(db: Session, seller: User, data: ListingIn) -> Listing`; `list_my_listings(db: Session, seller: User, status: ListingStatus | None, ticket_id: uuid.UUID | None, cursor: str | None, limit: int) -> tuple[list[Listing], str | None]`.
+  - Routers: `listings_router` (prefix `/listings`, tag `listings`) and `admin_listings_router` (prefix `/admin/listings`, tag `admin: listings`), both mounted in `build_api_router`. Routes: `POST /listings` (201 `ListingOut`), `GET /listings/me` (`Page[ListingOut]`, declared before `/{listing_id}`), `GET /listings/{listing_id}` (`ListingOut | PublicListingOut`).
+  - Test fixture `verified_ticket(db_session, user, published_event) -> Ticket` in `tests/integration/conftest.py`, owned by `user`.
+
+- [ ] **Step 1: Write the failing optional-user tests** in `tests/integration/test_optional_user.py`, using a small probe app as `test_current_user.py` does: no header gives `None`; a valid token gives the user; a garbage token gives 401 `not-authenticated`.
+
+- [ ] **Step 2: Write the failing create tests** in `tests/integration/test_listings_create.py`. Each refusal asserts its status and `problem_code`:
+
+| Test | Setup | Expect |
+| --- | --- | --- |
+| `test_creates_a_draft_copying_event_and_price_from_the_ticket` | `verified_ticket`, price 200_000 | 201; `status == "DRAFT"`, `seller_id == user.id`, `original_price_paise == 250_000`, `event.id == ticket.event_id`, `expires_at == event.starts_at` |
+| `test_writes_listing_created_with_the_request_id` | same | one audit row `listing.created`, actor the user, `request_id == response.headers["X-Request-ID"]` |
+| `test_someone_elses_ticket_is_404` | another user's verified ticket | 404 `ticket-not-found` |
+| `test_an_admin_listing_another_users_ticket_is_403` | admin, user's ticket | 403 `owner-only` |
+| `test_unlistable_tickets_are_409` (parametrised) | PENDING; REJECTED; `transfer_eligible=False`; `status="VOID"` | 409 `ticket-not-listable` |
+| `test_closed_events_are_409` (parametrised) | event CANCELLED; COMPLETED | 409 `event-not-open` |
+| `test_a_started_event_is_422` | event `starts_at` an hour ago | 422 `event-started` |
+| `test_prices_outside_one_rupee_to_face_value_are_422` (parametrised) | 99; 250_001 | 422 `price-out-of-range` |
+| `test_expiry_after_the_event_start_is_422` | `expires_at = starts_at + 1 min` | 422 `bad-expiry` |
+| `test_expiry_without_a_timezone_is_422` | `"2027-01-15T18:30:00"` | 422 |
+| `test_a_second_open_listing_for_one_ticket_is_409` | create twice | second 409 `listing-already-open` |
+| `test_a_ticket_can_be_listed_again_after_its_listing_is_cancelled` | `make_listing(status="CANCELLED", ticket=...)` first | 201 |
+| `test_seller_and_status_cannot_be_sent` (parametrised) | extra `seller_id`; extra `status` | 422 |
+
+- [ ] **Step 3: Write the failing read tests** in `tests/integration/test_listing_reads.py`:
+  - `test_anyone_sees_an_active_listing_in_its_public_shape`: anonymous and another user get 200 whose keys are exactly `PublicListingOut`'s (no `ticket_id`, `seller_id`, `expires_at`, `rejection_reason`).
+  - `test_other_statuses_are_404_to_everyone_but_seller_and_admin` (parametrised over the 7 non-ACTIVE statuses): anonymous and another user get 404 with a body equal to the one for an unknown ID (ignoring `instance` and `request_id`); the seller and an admin get 200 with `ticket_id`.
+  - `test_a_bad_token_is_401_not_the_public_view`.
+  - `test_my_listings_are_mine_newest_first_and_filter_by_status_and_ticket`.
+  - `test_bad_filters_are_422` (parametrised): `?status=BOGUS`, `?ticket_id=not-a-uuid`.
+
+- [ ] **Step 4: Run them and see them fail.** `uv run pytest tests/integration/test_optional_user.py tests/integration/test_listings_create.py tests/integration/test_listing_reads.py -v` → FAIL.
+
+- [ ] **Step 5: Implement.**
+  - `create_listing` follows the spec's create rules 1 to 6 in order. `now = datetime.now(UTC)`. The insert runs in `with db.begin_nested(): db.flush()`, and `violated_constraint(error) == "uq_listings_one_open_per_ticket"` becomes `ListingAlreadyOpenError`, the M4 pattern.
+  - `get_listing_for`: `db.get(Listing, listing_id)`. Missing, or not ACTIVE when the caller is neither seller nor admin, raises `ListingNotFoundError()`.
+  - The `GET /listings/{listing_id}` route returns `ListingOut.model_validate(listing)` when `can_see_everything`, else `PublicListingOut.model_validate(listing)`.
+  - `list_my_listings` orders `created_at DESC, id DESC`.
+
+- [ ] **Step 6: Run them.** Same command → all PASS.
+
+- [ ] **Step 7: Full check and commit.** Same checks. Commit `M5 wip: create and read listings`.
+
+---
+
+### Task 4: Seller actions and history
+
+**Files:**
+- Modify: `app/modules/listings/{schemas,service,router}.py`
+- Create: `tests/integration/committed.py` (shared committing fixtures)
+- Test: `tests/integration/test_listings_seller.py`, `tests/integration/test_listing_history.py`, `tests/integration/test_listing_races.py`
+
+**Interfaces:**
+- Consumes: Tasks 1 to 3.
+- Produces:
+  - Schemas: `ListingPatch` (`asking_price_paise: int | None` 1 to 10_000_000, `expires_at: AwareDatetime | None`; a validator refuses an empty body and any field sent as an explicit `null`, using `model_fields_set`); `HistoryEntryOut` (`action: str, from_status: ListingStatus | None, to_status: ListingStatus | None, actor_role: Literal["seller", "admin", "system"], details: dict[str, Any], created_at: AwareDatetime`).
+  - Service: `require_seller(listing: Listing, user: User) -> None` (raises `SellerOnlyError` for an admin who is not the seller, `ListingNotFoundError` for anyone else); `update_listing(db, listing_id, user, data: ListingPatch) -> Listing`; `submit_listing(db, listing_id, user) -> Listing`; `cancel_listing(db, listing_id, user) -> Listing`; `list_history(db, listing_id, user, cursor, limit) -> tuple[list[HistoryEntryOut], str | None]`; `SAFE_HISTORY_KEYS = frozenset({"reason", "old_price_paise", "new_price_paise", "old_expires_at", "new_expires_at", "asking_price_paise", "expires_at"})`.
+  - Routes: `PATCH /listings/{listing_id}`, `POST /listings/{listing_id}/submit`, `DELETE /listings/{listing_id}` (all `ListingOut`), `GET /listings/{listing_id}/history` (`Page[HistoryEntryOut]`).
+  - `tests/integration/committed.py`: fixture `committing_api` (a `TestClient` over `create_app(test_settings)`, so requests really commit) and fixture `committed_rows`, which yields a `Session` on `test_engine` plus a cleanup that deletes, in this order, listings, ticket documents, tickets, events, providers, refresh tokens and users created during the test. Audit rows stay (see Global Constraints). Task 5 reuses both.
+
+- [ ] **Step 1: Write the failing seller tests** in `tests/integration/test_listings_seller.py`:
+  - Edit: price and expiry change in DRAFT, PENDING_VERIFICATION and ACTIVE; ACTIVE price down 200; ACTIVE price up 409 `price-increase-not-allowed`; above face value 422 `price-out-of-range`; REJECTED, CANCELLED and EXPIRED 409 `listing-not-editable`; `{}`, `{"asking_price_paise": null}` and `{"expires_at": null}` each 422; same price again 200 with no new audit row; a change writes `listing.price_changed` with `old_price_paise` and `new_price_paise`, and an expiry change writes `listing.expiry_changed`.
+  - Submit: DRAFT goes to PENDING_VERIFICATION with `listing.submitted`; from PENDING_VERIFICATION 409 `listing-not-draft`; after the ticket's event is cancelled (set directly) 409 `event-not-open`; with `expires_at` in the past (set directly) 422 `bad-expiry`.
+  - `test_if_the_audit_write_fails_the_status_change_does_not_commit`: monkeypatch `app.modules.listings.state.record` to raise `RuntimeError`, then submit a DRAFT through a `TestClient(db_app, raise_server_exceptions=False)`. Expect a 500, and the listing (re-read with `db_session.expire_all()`) is still DRAFT. This is the spec's rollback check through HTTP: a change never commits without its audit row.
+  - Cancel: the seller cancels from DRAFT, PENDING_VERIFICATION and ACTIVE (audit `by: "seller"`); RESERVED, SOLD and EXPIRED are 409 `listing-not-cancellable` with the status in the detail; an admin cancels ACTIVE (`by: "admin"`) but gets 409 `listing-not-cancellable` on PENDING_VERIFICATION.
+  - Who: another user gets 404 on PATCH, submit and DELETE, even for an ACTIVE listing; an admin gets 403 `seller-only` on PATCH and submit of someone else's listing; an admin who is the seller edits, submits and cancels their own DRAFT and the rows say `by: "seller"`.
+
+- [ ] **Step 2: Write the failing history tests** in `tests/integration/test_listing_history.py`:
+  - `test_history_tells_the_story_in_order`: create, price change, submit, reject (by an admin, set up through the service) → actions `listing.created`, `listing.price_changed`, `listing.submitted`, `listing.rejected`, with `actor_role` `seller, seller, seller, admin`, the rejection `reason` in details, and `to_status` `DRAFT, None, PENDING_VERIFICATION, REJECTED`.
+  - `test_a_system_change_reads_as_system`: a `transition(..., actor_id=None)` row has `actor_role == "system"`.
+  - `test_details_keep_only_safe_keys`: a row written with an extra `{"email": "x@example.in"}` detail comes back without it.
+  - `test_strangers_get_404_and_admins_can_read`.
+  - `test_no_entry_names_the_admin`: every entry's keys are exactly `HistoryEntryOut`'s (no `actor_id`), and the admin's id and email appear nowhere in the response text.
+
+- [ ] **Step 3: Write the failing race test** in `tests/integration/test_listing_races.py`, using `committing_api` and `committed_rows` with a two-thread barrier as in `test_auth_refresh_race.py`, 10 rounds:
+  - `test_two_price_cuts_at_once_one_wins`: ACTIVE listing at 200_000; cuts to 190_000 and 180_000 at once. Exactly one 200 and one 409 `listing-changed`; the final price equals the winner's; exactly one `listing.price_changed` row for the round.
+
+- [ ] **Step 4: Run them and see them fail.** `uv run pytest tests/integration/test_listings_seller.py tests/integration/test_listing_history.py tests/integration/test_listing_races.py -v` → FAIL.
+
+- [ ] **Step 5: Implement.**
+  - Every seller route: `get_listing_for`, then `require_seller`.
+  - `update_listing`: allowed only in DRAFT, PENDING_VERIFICATION and ACTIVE. Run `check_price` (with `current` and `status`) and `check_expiry` on whatever changes. The UPDATE pins `status`, `asking_price_paise` and `expires_at` to the values read, and zero rows is `ListingChangedError`. Write one audit row per field that actually changed.
+  - `submit_listing`: DRAFT only (`ListingNotDraftError`), then `check_listable` and `expires_at > now` (`BadExpiryError`), then `transition`.
+  - `cancel_listing`: the seller may cancel from `{DRAFT, PENDING_VERIFICATION, ACTIVE}`; an admin who is not the seller only from `{ACTIVE}`. Anything else is `ListingNotCancellableError(f"The listing is {status}.")`. Then `transition(..., details={"by": "seller" | "admin"})`.
+  - `list_history`: seller or admin (`get_listing_for` plus `can_see_everything`, else 404). Page over `AuditLog` rows for the listing ordered `created_at, id`. Map each row: `from_status` and `to_status` come from details `from` and `to`, except that `listing.created` has `to_status = DRAFT`. `actor_role` is `system` when the actor is NULL, `seller` when the actor is the listing's seller, and `admin` otherwise. `details` keeps only `SAFE_HISTORY_KEYS`.
+
+- [ ] **Step 6: Run them.** Same command → all PASS.
+
+- [ ] **Step 7: Full check and commit.** Same checks. Commit `M5 wip: seller actions and history`.
+
+---
+
+### Task 5: Admin review
+
+**Files:**
+- Modify: `app/modules/listings/{schemas,service,router}.py`
+- Test: `tests/integration/test_listing_review.py`, `tests/integration/test_listing_races.py`
+
+**Interfaces:**
+- Consumes: Tasks 1 to 4.
+- Produces:
+  - Schema `RejectIn` (`reason`: trimmed, 1 to 500 chars).
+  - Service: `list_pending_listings(db, cursor, limit)` (PENDING_VERIFICATION, `created_at, id`); `list_all_listings(db, status: ListingStatus | None, ticket_id: uuid.UUID | None, cursor, limit)` (`created_at DESC, id DESC`); `approve_listing(db, listing_id, admin: User) -> Listing`; `reject_listing(db, listing_id, admin: User, reason: str) -> Listing`.
+  - Routes (all `AdminUser`): `GET /admin/listings/pending` and `GET /admin/listings` (`Page[ListingOut]`), `POST /admin/listings/{listing_id}/approve`, `POST /admin/listings/{listing_id}/reject` (`ListingOut`).
+
+- [ ] **Step 1: Write the failing review tests** in `tests/integration/test_listing_review.py`:
+  - Approve moves PENDING_VERIFICATION to ACTIVE, sets `reviewed_by` and `reviewed_at`, and writes `listing.approved` with the admin as actor.
+  - Reject sets REJECTED and `rejection_reason`, and writes `listing.rejected` with the `reason`. A missing reason, `""` and `"   "` are each 422; 501 chars is 422.
+  - From-states: approve and reject on DRAFT, ACTIVE, and RESERVED (inserted directly) are 409 `listing-not-pending`; the RESERVED listing stays RESERVED even though `ALLOWED` has `RESERVED → ACTIVE`.
+  - Approve refuses (409 `listing-not-approvable`, still PENDING_VERIFICATION) when `expires_at` has passed, when the event has started (set `starts_at` an hour ago directly), and when the ticket is now VOID.
+  - Self-review: an admin approving or rejecting their own listing gets 403 `own-listing-review` with no status change and no audit row; a second admin can approve it.
+  - Queues: pending is oldest first and holds only PENDING_VERIFICATION; `GET /admin/listings` filters by `status` and `ticket_id`; `?status=BOGUS` is 422; an unknown ID on approve is 404.
+
+- [ ] **Step 2: Add the failing race tests** to `tests/integration/test_listing_races.py` (10 rounds each):
+  - `test_two_approvals_at_once_one_wins`: two admins approve the same listing. Statuses are `{200, 409}` and the 409 is `listing-changed`; exactly one `listing.approved` row.
+  - `test_approve_and_cancel_at_once_exactly_one_wins`: an admin approves while the seller cancels. Exactly one 200; the final status is ACTIVE or CANCELLED to match the winner; the round has exactly one of `listing.approved` or `listing.cancelled`, never both.
+
+- [ ] **Step 3: Run them and see them fail.** `uv run pytest tests/integration/test_listing_review.py tests/integration/test_listing_races.py -v` → FAIL.
+
+- [ ] **Step 4: Implement.** Approve and reject load with `db.get` (404 if missing), then check in this order: self-review (`listing.seller_id == admin.id` → `OwnListingReviewError`), then the from-state (`ListingNotPendingError`), then for approve only `check_listable` and `expires_at > now`, where any failure becomes `ListingNotApprovableError` with the reason as detail. Then `transition(..., values={"reviewed_by": admin.id, "reviewed_at": func.now()})`; reject also passes `rejection_reason` in `values` and `{"reason": reason}` in `details`.
+
+- [ ] **Step 5: Run them.** Same command → all PASS.
+
+- [ ] **Step 6: Full check and commit.** Same checks. Commit `M5 wip: admin listing review`.
+
+---
+
+### Task 6: Audit retrofits and no self-verification
+
+**Files:**
+- Modify: `app/modules/tickets/{errors,service,router}.py`, `app/modules/events/{service,router}.py`
+- Modify: existing tests whose calls change signature (`tests/integration/test_events.py`, `tests/integration/test_verification.py` only if they call the services directly)
+- Test: `tests/integration/test_audit_retrofits.py`
+
+**Interfaces:**
+- Consumes: `record()` (Task 1).
+- Produces:
+  - `OwnTicketReviewError(PermissionDeniedError)`, code `own-ticket-review`, in `app/modules/tickets/errors.py`.
+  - New signatures (the admin becomes the audit actor): `create_event(db: Session, data: EventIn, admin: User) -> Event`; `update_event(db: Session, event_id: uuid.UUID, data: EventPatch, admin: User) -> Event`; `create_provider(db: Session, data: ProviderIn, admin: User) -> TicketProvider`. `verify_ticket` keeps its signature.
+  - Audit actions and details exactly as the spec's retrofit table. `update_event` builds its details in one place, so Task 7 can add `cancelled_listings` and `listings_expiry_moved` to them.
+
+- [ ] **Step 1: Write the failing tests** in `tests/integration/test_audit_retrofits.py`, each through the HTTP API with an admin:
+  - Verifying writes `ticket.verified` with `{"transfer_eligible": True, "note": None}`; rejecting writes `ticket.rejected` with the note.
+  - An admin verifying a ticket they own gets 403 `own-ticket-review`: still PENDING, no audit row. A second admin can verify it.
+  - Creating an event writes `event.created` with `name` and `starts_at`. A field edit writes `event.updated` with `{"changed": ["name", "venue"]}` (sorted). Publishing writes `event.published` with `from` and `to`, and an edit that both changes fields and publishes writes one row, `event.published`. Cancelling writes `event.cancelled`.
+  - Creating a provider writes `provider.created` with `code`.
+  - A refused change (an illegal event transition, 409) writes no row.
+
+- [ ] **Step 2: Run them and see them fail.** `uv run pytest tests/integration/test_audit_retrofits.py -v` → FAIL.
+
+- [ ] **Step 3: Implement.** `verify_ticket` now loads the ticket first (404 if missing), then checks `ticket.current_owner_id == admin.id` → `OwnTicketReviewError`, then runs its existing conditional UPDATE, then records. In `update_event` the audit row is written after the conditional UPDATE succeeds; a call that changes nothing writes none. Routers pass the admin through.
+
+- [ ] **Step 4: Run them and the M4 suites.** `uv run pytest tests/integration/test_audit_retrofits.py tests/integration/test_events.py tests/integration/test_verification.py -v` → all PASS.
+
+- [ ] **Step 5: Full check and commit.** Same checks. Commit `M5 wip: audit retrofits and no self-verification`.
+
+---
+
+### Task 7: Event cascade and listing expiry
+
+**Files:**
+- Modify: `app/modules/listings/service.py`, `app/modules/events/service.py`
+- Create: `scripts/expire_listings.py`
+- Test: `tests/integration/test_event_cascade.py`, `tests/integration/test_listing_expiry.py`
+
+**Interfaces:**
+- Consumes: `transition` (Task 2), the `update_event` audit details (Task 6).
+- Produces:
+  - `cancel_open_listings_for_event(db: Session, event_id: uuid.UUID, actor_id: uuid.UUID) -> int`. It locks the event's DRAFT, PENDING_VERIFICATION and ACTIVE listings with `with_for_update(of=Listing)` and calls `transition(..., CANCELLED, details={"reason": "event_cancelled"})` on each. Its docstring says M8 must decide what happens to RESERVED listings.
+  - `pull_back_listing_expiry(db: Session, event_id: uuid.UUID, starts_at: datetime) -> int`: one UPDATE over the event's open listings (all four open statuses) with `expires_at > :starts_at`, setting `expires_at = :starts_at`.
+  - `expire_listings(db: Session, now: datetime | None = None) -> int`: ACTIVE listings with `expires_at <= now`, `with_for_update(of=Listing, skip_locked=True)`, each through `transition(..., EXPIRED, actor_id=None)`.
+  - `scripts/expire_listings.py`: `main(argv: list[str] | None = None) -> int`, shaped like `scripts/make_admin.py`. It opens a session, runs `expire_listings`, commits, prints `Expired N listing(s).` and returns 0. Run it with `uv run python -m scripts.expire_listings`.
+
+- [ ] **Step 1: Write the failing cascade tests** in `tests/integration/test_event_cascade.py`:
+  - An event with one listing in each of the 8 statuses (separate tickets) is cancelled through `PATCH /admin/events/{id}`: DRAFT, PENDING_VERIFICATION and ACTIVE become CANCELLED, each with a `listing.cancelled` row whose actor is the admin and whose details include `reason: "event_cancelled"`. The other five keep their status. The `event.cancelled` row has `cancelled_listings == 3`.
+  - Another event's listings are untouched.
+  - Moving `starts_at` earlier than an open listing's `expires_at` sets that listing's `expires_at` to the new start. A listing that already expires before the new start keeps its own value. The event's audit details have `listings_expiry_moved == 1`.
+
+- [ ] **Step 2: Write the failing expiry tests** in `tests/integration/test_listing_expiry.py`:
+  - ACTIVE listings with past expiry become EXPIRED with a `listing.expired` row whose `actor_id` is NULL. ACTIVE listings with a future expiry, and a DRAFT and a PENDING_VERIFICATION listing with past expiry, are untouched. The function returns the count.
+  - A second run returns 0 and writes no rows.
+  - `test_the_script_runs`: monkeypatch `scripts.expire_listings.get_settings` to return `test_settings`, call `main([])`, and expect 0 plus a printed line matching `Expired \d+ listing\(s\)\.`. The script opens its own connection, so it cannot see this test's rolled-back rows; the expiry logic itself is covered by the tests above.
+
+- [ ] **Step 3: Run them and see them fail.** `uv run pytest tests/integration/test_event_cascade.py tests/integration/test_listing_expiry.py -v` → FAIL.
+
+- [ ] **Step 4: Implement.** `update_event` calls `cancel_open_listings_for_event` after its own conditional UPDATE when the new status is CANCELLED. It calls `pull_back_listing_expiry` when `starts_at` changes. Both counts go into the event's audit details. If importing `listings.service` from `events.service` creates a cycle, import inside the function and say why in a comment.
+
+- [ ] **Step 5: Run them.** Same command → all PASS. Then `uv run python -m scripts.expire_listings` against the dev database → `Expired 0 listing(s).`
+
+- [ ] **Step 6: Full check and commit.** Same checks. Commit `M5 wip: event cascade and expiry`.
+
+---
+
+### Task 8: Route guard tests
+
+**Files:**
+- Test: `tests/integration/test_listing_access.py`, `tests/integration/test_admin_routes.py`
+
+**Interfaces:**
+- Consumes: every route from Tasks 3 to 7.
+
+- [ ] **Step 1: Write the listing access guard** in `tests/integration/test_listing_access.py`, modelled on `test_ticket_access.py`:
+  - `LISTING_ROUTES` lists every `(method, path)` containing `{listing_id}`: `GET /listings/{listing_id}`, `PATCH /listings/{listing_id}`, `POST /listings/{listing_id}/submit`, `DELETE /listings/{listing_id}`, `GET /listings/{listing_id}/history`, `POST /admin/listings/{listing_id}/approve`, `POST /admin/listings/{listing_id}/reject`.
+  - `test_every_listing_route_is_covered` collects the app's `APIRoute`s whose path contains `{listing_id}` and asserts the set equals `LISTING_ROUTES`.
+  - For a DRAFT listing owned by alice: bob gets 404 `listing-not-found` on every non-admin route (body identical to an unknown ID's) and 403 on the two admin routes; a guest gets 404 on `GET /listings/{listing_id}` and 401 on the rest.
+  - For an ACTIVE listing: bob gets 200 on `GET` and 404 on PATCH, submit, DELETE and history.
+  - Bodies: PATCH sends `{"asking_price_paise": 100}`, reject sends `{"reason": "x"}`, and the rest send none.
+
+- [ ] **Step 2: Write the admin guard** in `tests/integration/test_admin_routes.py`:
+  - `test_every_admin_route_refuses_a_user`: for each `APIRoute` in the app whose path starts with `/api/v1/admin`, and each of its methods, call it as a USER with every path parameter set to `00000000-0000-4000-8000-000000000000` and body `{}`. Expect 403. The admin dependency runs before body and path validation, so 403 wins.
+  - `test_the_guard_sees_the_m5_routes`: the collected set includes `/api/v1/admin/listings` and `/api/v1/admin/listings/{listing_id}/approve`, so the test cannot pass on an empty list.
+
+- [ ] **Step 3: Run them.** `uv run pytest tests/integration/test_listing_access.py tests/integration/test_admin_routes.py -v` → all PASS. If one fails, the bug is in the route, not in the test.
+
+- [ ] **Step 4: Full check and commit.** Same checks. Commit `M5 wip: route guards`.
+
+---
+
+### Task 9: Seller screens
+
+**Files:**
+- Modify: `frontend/openapi.json`, `frontend/src/api/schema.d.ts` (generated), `frontend/src/api/types.ts`, `frontend/src/components/Badges.tsx`, `frontend/src/components/Layout.tsx`, `frontend/src/App.tsx`, `frontend/src/pages/TicketPage.tsx`
+- Create: `frontend/src/lib/listings.ts`, `frontend/src/pages/MyListingsPage.tsx`, `frontend/src/pages/ListingPage.tsx`
+- Test: `frontend/src/lib/listings.test.ts`
+
+**Interfaces:**
+- Consumes: the API from Tasks 3 to 5.
+- Produces:
+  - `types.ts`: `Listing = Schemas["ListingOut"]`, `PublicListing = Schemas["PublicListingOut"]`, `ListingIn`, `ListingPatch`, `ListingStatus = Listing["status"]`, `HistoryEntry = Schemas["HistoryEntryOut"]`, `RejectIn`.
+  - `lib/listings.ts`: `OPEN_STATUSES: ListingStatus[]` (DRAFT, PENDING_VERIFICATION, ACTIVE, RESERVED); `isFullListing(l: Listing | PublicListing): l is Listing` (`"ticket_id" in l`); `sellerActions(status: ListingStatus): Array<"submit" | "edit" | "cancel">` (DRAFT gives all three; PENDING_VERIFICATION and ACTIVE give edit and cancel; every other status gives none); `historyLabel(entry: HistoryEntry): string`.
+  - `Badges.tsx`: `ListingBadge({ status })` with `LISTING_NAMES`: Draft, Pending review, Active, Reserved, Sold, Rejected, Cancelled, Expired.
+  - Routes: `/listings` (inside `RequireSession`), `/listings/:listingId` (no guard). Nav link **My listings** for everyone signed in.
+
+- [ ] **Step 1: Regenerate types.** `cd frontend && npm run api:types` → `schema.d.ts` has `ListingOut`, `PublicListingOut`, `HistoryEntryOut`. Add the aliases to `types.ts`.
+
+- [ ] **Step 2: Write the failing unit tests** in `src/lib/listings.test.ts`: `sellerActions` for all 8 statuses; `isFullListing` true for an object with `ticket_id` and false without; `historyLabel` gives `"Listed as a draft"`, `"Submitted for review"`, `"Approved"`, `"Rejected: Seat number missing"`, `"Price changed from ₹2,500 to ₹2,000"`, `"Cancelled because the event was cancelled"` and `"Expired"` for the matching entries.
+
+- [ ] **Step 3: Run them and see them fail.** `npm test -- listings` → FAIL.
+
+- [ ] **Step 4: Implement `lib/listings.ts`.** Prices go through `formatPaise`. Run again → PASS.
+
+- [ ] **Step 5: Ticket page.** When the ticket is VERIFIED, transfer-eligible and ACTIVE, and `GET /listings/me?ticket_id=` returns nothing in `OPEN_STATUSES`, show a form with accessible name **List this ticket**. It has `Asking price (₹)` (prefilled with the original price, with a hint naming the cap) and `Listing ends` (`datetime-local`, empty means the event start), plus buttons **Submit for review** (create, then submit) and **Save draft** (create only). Both navigate to the listing page. When an open listing exists, show "Listed" with its `ListingBadge` and a **View listing** link instead. Prices go through `rupeesToPaise`; API errors use the existing problem display.
+
+- [ ] **Step 6: My listings page** (`/listings`): heading **My listings**, a `Status` select (All plus the 8 statuses) feeding `?status=`, and one list item per listing (accessible name: the event name) with event, date, price, `ListingBadge` and a link to its page. Includes an empty state and a "Load more" button that follows `next_cursor`.
+
+- [ ] **Step 7: Listing page** (`/listings/:listingId`). Fetch `GET /listings/{id}`. A 404 renders the existing not-found page.
+  - **Seller** (`isFullListing` and `seller_id` equals the signed-in user's id): details, `ListingBadge`, the rejection reason when REJECTED, and the actions from `sellerActions`. The actions are **Submit for review**, a **Change price** form (`Asking price (₹)`, `Listing ends`, **Save changes**) and **Cancel listing**, which asks for confirmation inline with **Yes, cancel it** (no `window.confirm`). Below, a **History** section: an ordered list of `historyLabel` plus "by you", "by an admin" or "automatically", and the time.
+  - **Admin, not the seller**: the same details and history, a link to the ticket, and **Cancel listing** only when ACTIVE.
+  - **Everyone else**: the public view (event, category, seat, asking price against the original price).
+  - Mutations invalidate the listing and history queries.
+
+- [ ] **Step 8: Check by hand.** Run `docker compose up -d db mailpit minio`, the API and `npm run dev`. As a user with a verified ticket: list it, change the price, submit, cancel. Every screen behaves, and the browser console shows no errors.
+
+- [ ] **Step 9: Frontend checks and commit.** `npm test && npm run typecheck && npm run lint && npm run format:check && npm run build` → all pass. Commit `M5 wip: seller screens`.
+
+---
+
+### Task 10: Admin screens and browser tests
+
+**Files:**
+- Create: `frontend/src/pages/AdminListingsPage.tsx`, `frontend/e2e/listings.spec.ts`
+- Modify: `frontend/src/App.tsx`, `frontend/src/components/Layout.tsx`, `frontend/src/pages/TicketPage.tsx`, `frontend/e2e/helpers.ts`, `frontend/e2e/tickets.spec.ts`
+- Create: `documentation/assets/m05-*.png`
+
+**Interfaces:**
+- Consumes: Task 9's types, `ListingBadge` and `lib/listings.ts`; the admin routes from Task 5.
+- Produces:
+  - Route `/admin/listings` inside `RequireAdmin`; nav link **Review listings** for admins.
+  - `e2e/helpers.ts` gains `signInAsAdmin(page)`, `publishEvent(page, name)`, `registerTicket(page, eventName)` and `verifyTicket(page, eventName, { eligible: boolean })`, moved out of `tickets.spec.ts`, which then imports them.
+
+- [ ] **Step 1: Admin listings page.** Two tabs (`role="tab"`): **Pending review** and **All listings**.
+  - **Pending review** lists the queue oldest first. Each list item is named by the event and shows category, seat, asking and original price, and the expiry (marked "Expired" when past). It links to the ticket (where the evidence opens) and has **Approve**, plus a **Reject** button that reveals a `Reason` textarea and **Reject listing**.
+  - **All listings** has a `Status` select. Each row links to its listing page.
+  - Both tabs include empty states and "Load more".
+
+- [ ] **Step 2: Admin on the ticket page.** When an admin who is not the owner views a ticket, fetch `GET /admin/listings?ticket_id=` and show its open listing with a link, as Task 9 does for the owner.
+
+- [ ] **Step 3: Move the shared e2e steps** into `helpers.ts`. `npx playwright test tickets` → still PASS.
+
+- [ ] **Step 4: Write `e2e/listings.spec.ts`**, the spec's six-step flow:
+  1. A user registers a ticket and an admin verifies it as transfer-eligible.
+  2. The user lists it for `2,000` with **Submit for review** and sees "Pending review".
+  3. The admin approves it from **Review listings**.
+  4. The user's listing page shows "Active", and **History** shows "Listed as a draft", "Submitted for review" and "Approved" in that order.
+  5. A second user opens the listing's address and sees the asking price, but no **History** and no **Cancel listing**.
+  6. The user lists a second ticket with **Save draft**. The second user opens that address and sees the not-found page.
+
+- [ ] **Step 5: Run the browser tests.** `npm run e2e` (Postgres, Mailpit and MinIO up) → all PASS, M3 and M4 specs included.
+
+- [ ] **Step 6: Screenshots.** With Playwright driving installed Chrome, capture the ticket page's **List this ticket** form, **My listings**, the seller's listing page with history, the public listing view and **Review listings**, each in light, dark and at 390 px. Fix anything broken or unreadable. Save the light desktop ones as `documentation/assets/m05-<screen>.png` for Task 11.
+
+- [ ] **Step 7: Frontend checks and commit.** Same checks as Task 9 plus `npm run e2e`. Commit `M5 wip: admin screens and browser tests`.
+
+---
+
+### Task 11: Docs, revision page, one commit, push
+
+**Files:**
+- Modify: `docs/api-contract.md`, `docs/state-machines.md`, `docs/database-design.md`, `README.md`, `build-and-learn-plan.md` (only if a fact in M5's section changed)
+- Create: `documentation/m05-listings-verification-and-audit-log.html`
+- Modify: `documentation/index.html`, `documentation/m04-events-tickets-and-document-storage.html` (pager "Next" becomes a link)
+
+- [ ] **Step 1: Contract.**
+  - Add `GET /listings/{listing_id}/history` with `HistoryEntry`, `GET /admin/listings` with its filters, and the `ticket_id` filter on `/listings/me`.
+  - Add `seller_id` to `Listing`.
+  - Document the 403 rules: `seller-only`, `own-listing-review`, and `own-ticket-review` on `POST /admin/tickets/{id}/verify`.
+  - Add every new problem code.
+  - Note that the event cancel cascades to listings.
+  - Update the "added beyond plan.md" sentence.
+- [ ] **Step 2: State machines and database design.** In `state-machines.md`: the event-cancel cascade, the expiry pull-back, that PENDING_VERIFICATION does not expire, and that each action checks its own from-states. In `database-design.md`: mark the five indexes and `audit_logs` as built in M5.
+- [ ] **Step 3: README.** Status table (M5 done, M6 next). A "Try the listing flow" walk-through: verify a ticket, list it, approve it as a second admin, read the history. How to run `uv run python -m scripts.expire_listings`.
+- [ ] **Step 4: Revision page.** Follow the module-page rules: copy M4's page structure and shared assets, and base every claim on the code. Include:
+  - Screens, with the Task 10 screenshots.
+  - The transition flow as a numbered diagram: check `ALLOWED`, conditional UPDATE, row count, audit row, one commit.
+  - Decisions: one `transition()` over a library or trigger; an explicit `record()` over listeners; DRAFT plus submit; the event-cancel cascade; from-states per action; pinning the price in the PATCH; no self-review; `FOR UPDATE OF listings`.
+  - The two "Explain it" answers as interview questions.
+  - Traps and fixes met during the build.
+  - "Check it still works" commands.
+
+  Mark M5 done and M6 next in the index. Check the page with headless Chrome in light, dark and 390 px.
+- [ ] **Step 5: Final verification.** `uv run ruff check . && uv run ruff format --check . && uv run alembic check && REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 uv run pytest` → all pass, no skips. In `frontend/`: `npm test && npm run typecheck && npm run lint && npm run format:check && npm run build && npm run e2e` → all pass. Attribution grep over the staged diff → no output.
+- [ ] **Step 6: Squash and push.** `git reset --soft 8f63e40` (the last pushed commit; this folds the spec, the plan and every `M5 wip` commit together), then `git commit` titled `M5: Listings, verification and audit log` with a body listing what it built and no trailers. Then `git push origin main`.
+- [ ] **Step 7: Watch CI.** `gh run watch <id> --exit-status` → all jobs pass, and the `test` log shows the listing, race and guard tests ran rather than skipped.

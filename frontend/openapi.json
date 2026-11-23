@@ -408,6 +408,270 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "HistoryEntryOut": {
+        "description": "One line of a listing's history. Who acted is a role, never an identity: the seller\nmust not learn which admin reviewed their listing.",
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_role": {
+            "enum": ["seller", "admin", "system"],
+            "title": "Actor Role",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "from_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ListingStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ListingStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["action", "from_status", "to_status", "actor_role", "details", "created_at"],
+        "title": "HistoryEntryOut",
+        "type": "object"
+      },
+      "ListingEventSummary": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "city": {
+            "title": "City",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "starts_at": {
+            "format": "date-time",
+            "title": "Starts At",
+            "type": "string"
+          },
+          "venue": {
+            "title": "Venue",
+            "type": "string"
+          }
+        },
+        "required": ["id", "name", "category", "city", "venue", "starts_at"],
+        "title": "ListingEventSummary",
+        "type": "object"
+      },
+      "ListingIn": {
+        "additionalProperties": false,
+        "description": "The seller is never in the body: it is always the caller (unknown fields are 422).\nWithout `expires_at` the listing expires when the event starts.",
+        "properties": {
+          "asking_price_paise": {
+            "maximum": 10000000.0,
+            "minimum": 1.0,
+            "title": "Asking Price Paise",
+            "type": "integer"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "ticket_id": {
+            "format": "uuid",
+            "title": "Ticket Id",
+            "type": "string"
+          }
+        },
+        "required": ["ticket_id", "asking_price_paise"],
+        "title": "ListingIn",
+        "type": "object"
+      },
+      "ListingOut": {
+        "description": "`Listing` in the API contract: for the seller and admins only.",
+        "properties": {
+          "asking_price_paise": {
+            "title": "Asking Price Paise",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "event": {
+            "$ref": "#/components/schemas/ListingEventSummary"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "original_price_paise": {
+            "title": "Original Price Paise",
+            "type": "integer"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Reason"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "seat_details": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seat Details"
+          },
+          "seller_id": {
+            "format": "uuid",
+            "title": "Seller Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ListingStatus"
+          },
+          "ticket_category": {
+            "title": "Ticket Category",
+            "type": "string"
+          },
+          "ticket_id": {
+            "format": "uuid",
+            "title": "Ticket Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event",
+          "ticket_category",
+          "seat_details",
+          "asking_price_paise",
+          "original_price_paise",
+          "status",
+          "created_at",
+          "ticket_id",
+          "seller_id",
+          "expires_at",
+          "reviewed_at",
+          "rejection_reason",
+          "updated_at"
+        ],
+        "title": "ListingOut",
+        "type": "object"
+      },
+      "ListingPatch": {
+        "additionalProperties": false,
+        "description": "Change the price, the expiry, or both. At least one, and neither may be null.",
+        "properties": {
+          "asking_price_paise": {
+            "anyOf": [
+              {
+                "maximum": 10000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asking Price Paise"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "title": "ListingPatch",
+        "type": "object"
+      },
+      "ListingStatus": {
+        "enum": [
+          "DRAFT",
+          "PENDING_VERIFICATION",
+          "ACTIVE",
+          "RESERVED",
+          "SOLD",
+          "REJECTED",
+          "CANCELLED",
+          "EXPIRED"
+        ],
+        "title": "ListingStatus",
+        "type": "string"
+      },
       "LoginIn": {
         "additionalProperties": false,
         "properties": {
@@ -450,6 +714,56 @@
         },
         "required": ["items", "next_cursor"],
         "title": "Page[EventOut]",
+        "type": "object"
+      },
+      "Page_HistoryEntryOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntryOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": ["items", "next_cursor"],
+        "title": "Page[HistoryEntryOut]",
+        "type": "object"
+      },
+      "Page_ListingOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ListingOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": ["items", "next_cursor"],
+        "title": "Page[ListingOut]",
         "type": "object"
       },
       "Page_TicketOut_": {
@@ -549,6 +863,62 @@
         "title": "ProviderOut",
         "type": "object"
       },
+      "PublicListingOut": {
+        "description": "`PublicListing` in the API contract.",
+        "properties": {
+          "asking_price_paise": {
+            "title": "Asking Price Paise",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "event": {
+            "$ref": "#/components/schemas/ListingEventSummary"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "original_price_paise": {
+            "title": "Original Price Paise",
+            "type": "integer"
+          },
+          "seat_details": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seat Details"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ListingStatus"
+          },
+          "ticket_category": {
+            "title": "Ticket Category",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event",
+          "ticket_category",
+          "seat_details",
+          "asking_price_paise",
+          "original_price_paise",
+          "status",
+          "created_at"
+        ],
+        "title": "PublicListingOut",
+        "type": "object"
+      },
       "RegisterIn": {
         "additionalProperties": false,
         "properties": {
@@ -572,6 +942,21 @@
         },
         "required": ["email", "password", "full_name"],
         "title": "RegisterIn",
+        "type": "object"
+      },
+      "RejectIn": {
+        "additionalProperties": false,
+        "description": "Why the listing was rejected. The seller sees it. Trimmed, so \"   \" is a 422.",
+        "properties": {
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": ["reason"],
+        "title": "RejectIn",
         "type": "object"
       },
       "TicketIn": {
@@ -631,11 +1016,16 @@
         "type": "object"
       },
       "TicketOut": {
-        "description": "`Ticket` in the API contract. Every M4 ticket route is for the owner or an admin, so\nthe private references are always included; M5's public listing shape leaves them out.",
+        "description": "`Ticket` in the API contract. Every M4 ticket route is for the owner or an admin, so\nthe private references are always included; M5's public listing shape leaves them out.\n`current_owner_id` lets a page tell an admin viewing their own ticket from an admin\nviewing someone else's (M5).",
         "properties": {
           "created_at": {
             "format": "date-time",
             "title": "Created At",
+            "type": "string"
+          },
+          "current_owner_id": {
+            "format": "uuid",
+            "title": "Current Owner Id",
             "type": "string"
           },
           "event": {
@@ -703,6 +1093,7 @@
         "required": [
           "id",
           "event_id",
+          "current_owner_id",
           "event",
           "ticket_category",
           "seat_details",
@@ -1024,6 +1415,281 @@
         ],
         "summary": "Update Event",
         "tags": ["admin: events"]
+      }
+    },
+    "/api/v1/admin/listings": {
+      "get": {
+        "description": "Every listing in every status, newest first.",
+        "operationId": "all_listings_api_v1_admin_listings_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ListingStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ticket_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ticket Id"
+            }
+          },
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ListingOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "All Listings",
+        "tags": ["admin: listings"]
+      }
+    },
+    "/api/v1/admin/listings/pending": {
+      "get": {
+        "description": "Listings waiting for review, oldest first.",
+        "operationId": "pending_listings_api_v1_admin_listings_pending_get",
+        "parameters": [
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ListingOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Pending Listings",
+        "tags": ["admin: listings"]
+      }
+    },
+    "/api/v1/admin/listings/{listing_id}/approve": {
+      "post": {
+        "description": "Put a listing waiting for review on sale. Not your own.",
+        "operationId": "approve_listing_api_v1_admin_listings__listing_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "listing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Listing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Approve Listing",
+        "tags": ["admin: listings"]
+      }
+    },
+    "/api/v1/admin/listings/{listing_id}/reject": {
+      "post": {
+        "description": "Reject a listing waiting for review, with a reason the seller sees. Not your own.",
+        "operationId": "reject_listing_api_v1_admin_listings__listing_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "listing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Listing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejectIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reject Listing",
+        "tags": ["admin: listings"]
       }
     },
     "/api/v1/admin/providers": {
@@ -1558,6 +2224,434 @@
         },
         "summary": "Health",
         "tags": ["health"]
+      }
+    },
+    "/api/v1/listings": {
+      "post": {
+        "description": "Offer a ticket you own at no more than face value. It starts as a DRAFT; submit it to\nsend it for review.",
+        "operationId": "create_listing_api_v1_listings_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListingIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Listing",
+        "tags": ["listings"]
+      }
+    },
+    "/api/v1/listings/me": {
+      "get": {
+        "description": "Your listings in every status, newest first.",
+        "operationId": "my_listings_api_v1_listings_me_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ListingStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ticket_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ticket Id"
+            }
+          },
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ListingOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Listings",
+        "tags": ["listings"]
+      }
+    },
+    "/api/v1/listings/{listing_id}": {
+      "delete": {
+        "description": "Cancel a listing. The seller can while it is DRAFT, PENDING_VERIFICATION or ACTIVE;\nan admin can cancel anyone's ACTIVE listing. The row is kept, as CANCELLED.",
+        "operationId": "cancel_listing_api_v1_listings__listing_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "listing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Listing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Listing",
+        "tags": ["listings"]
+      },
+      "get": {
+        "description": "An ACTIVE listing, for anyone, in the public shape. The seller and admins see any\nstatus, in the full shape (it has `ticket_id`). Signing in is optional.",
+        "operationId": "get_listing_api_v1_listings__listing_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "listing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Listing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ListingOut"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PublicListingOut"
+                    }
+                  ],
+                  "title": "Response Get Listing Api V1 Listings  Listing Id  Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Listing",
+        "tags": ["listings"]
+      },
+      "patch": {
+        "description": "Change your listing's price or expiry while it is DRAFT, PENDING_VERIFICATION or\nACTIVE. An ACTIVE listing's price can only go down.",
+        "operationId": "update_listing_api_v1_listings__listing_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "listing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Listing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListingPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Listing",
+        "tags": ["listings"]
+      }
+    },
+    "/api/v1/listings/{listing_id}/history": {
+      "get": {
+        "description": "What happened to the listing, oldest first. For its seller and admins.",
+        "operationId": "listing_history_api_v1_listings__listing_id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "listing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Listing Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_HistoryEntryOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Listing History",
+        "tags": ["listings"]
+      }
+    },
+    "/api/v1/listings/{listing_id}/submit": {
+      "post": {
+        "description": "Send your DRAFT listing for review.",
+        "operationId": "submit_listing_api_v1_listings__listing_id__submit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "listing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Listing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListingOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Submit Listing",
+        "tags": ["listings"]
       }
     },
     "/api/v1/tickets": {

@@ -92,6 +92,13 @@ def make_ticket(session: Session, **fields: Any) -> Ticket:
     return _save(session, Ticket(**(defaults | fields)))
 
 
+def make_verified_ticket(session: Session, **fields: Any) -> Ticket:
+    """A ticket an admin has verified as transfer-eligible: one that can be listed."""
+    return make_ticket(
+        session, **({"verification_status": "VERIFIED", "transfer_eligible": True} | fields)
+    )
+
+
 def make_document(session: Session, **fields: Any) -> TicketDocument:
     defaults: dict[str, Any] = {
         "storage_key": f"ticket-documents/{uuid.uuid4().hex}",
@@ -117,4 +124,6 @@ def make_listing(session: Session, **fields: Any) -> Listing:
         "original_price_paise": ticket.original_price_paise,
         "expires_at": datetime.now(UTC) + timedelta(days=29),
     }
+    if fields.get("status") == "REJECTED":  # ck_listings_rejection_reason
+        defaults["rejection_reason"] = "Test reason."
     return _save(session, Listing(**(defaults | fields)))

@@ -72,13 +72,19 @@
             </a>
           </li>
           <li>
-            <div class="mod mod--next">
+            <a class="mod mod--done" href="m05-listings-verification-and-audit-log.html">
               <span class="mod__num">M5</span>
-              <span class="mod__body"><span class="mod__title">Listings, verification and audit log</span><span class="mod__goal">Listing state machine, admin review, partial unique index, audit helper</span></span>
+              <span class="mod__body"><span class="mod__title">Listings, verification and audit log</span><span class="mod__goal">One state machine with a conditional UPDATE, an audit row in the same transaction, admin review with no self-review, races proven on real transactions</span></span>
+              <span class="mod__status">Done 23 Nov</span>
+            </a>
+          </li>
+          <li>
+            <div class="mod mod--next">
+              <span class="mod__num">M6</span>
+              <span class="mod__body"><span class="mod__title">Discovery</span><span class="mod__goal">Search, filters, keyset pagination, indexes checked with EXPLAIN ANALYZE</span></span>
               <span class="mod__status">Up next</span>
             </div>
           </li>
-          <li><div class="mod mod--later"><span class="mod__num">M6</span><span class="mod__body"><span class="mod__title">Discovery</span><span class="mod__goal">Search, filters, keyset pagination, indexes checked with EXPLAIN ANALYZE</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M7</span><span class="mod__body"><span class="mod__title">Interests and allocation</span><span class="mod__goal">One active interest per buyer, three allocation strategies</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M8</span><span class="mod__body"><span class="mod__title">Reservations and concurrency</span><span class="mod__goal">Atomic reservation, the 100-buyer race test, expiry</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M9</span><span class="mod__body"><span class="mod__title">Orders and idempotency</span><span class="mod__goal">Order state machine, Idempotency-Key handling</span></span></div></li>

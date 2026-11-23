@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M5 Listings and Audit</title>
+  <meta name="description" content="TicketLoop M5: listings, admin review, one state machine with a conditional UPDATE, and an audit row in the same transaction. What was built, the decisions behind it, and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Listings, verification and audit log</h1>
+      <p class="ticket__summary">A user lists a verified ticket at no more than they paid. An admin who isn't the seller approves or rejects it, and only then can anyone else see it. Every status change goes through one function: it checks the move against a table, applies it with a conditional UPDATE, and writes an audit row in the same transaction. The seller reads that log back as the listing's history.</p>
+      <p class="ticket__fineprint">Done when: a table-driven test tries every (from, to) pair and only the allowed ones succeed.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M5</span>
+      <span class="ticket__days">Days 27 to 31</span>
+      <span class="stamp">Done<br>23 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">A seller turns a verified, transfer-eligible ticket into a listing at any price from ₹1 to what they paid. It starts as a draft; they submit it, and an admin approves or rejects it. Only an approved listing is visible to anyone but the seller and admins, and an admin can never review their own.</p>
+        <p class="pitch">Every status change goes through one <code>transition()</code> function. It checks the move against an <code>ALLOWED</code> table, then runs <code>UPDATE … WHERE id = :id AND status = :seen</code>, so if two admins act at once Postgres picks one winner and the other gets a 409. The audit row is written in the same transaction, so a change and its record commit together or not at all.</p>
+        <p class="pitch">The race tests use real committed transactions, released together by a barrier, not mocks. A test tries all 64 (from, to) pairs. Cancelling an event takes its open listings with it, and listings past their end expire through the same function.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Audit helper</span><span class="built__note"><code>record(db, actor_id=…, entity_type=…, entity_id=…, action=…, details=…)</code> adds a row to <code>audit_logs</code> in the caller's transaction and flushes. It takes the request ID from the logging context and turns UUIDs and datetimes into strings. <code>created_at</code> is <code>clock_timestamp()</code>, so rows from one transaction keep their order.</span><code>app/modules/audit/service.py</code></li>
+          <li><span class="built__what">State machine</span><span class="built__note"><code>ALLOWED</code> maps each of the 8 statuses to the ones it may move to. <code>transition()</code> checks it, runs the conditional UPDATE, raises <code>illegal-listing-transition</code> or <code>listing-changed</code> (409s), records <code>listing.&lt;action&gt;</code> with <code>{from, to}</code>, and returns the refreshed row.</span><code>app/modules/listings/state.py</code></li>
+          <li><span class="built__what">Price and expiry rules</span><span class="built__note">Pure functions. The price runs from ₹1 to face value, and an <code>ACTIVE</code> listing's price may only go down. The expiry must be in the future and no later than the event start. The database CHECKs stay as the last line of defence.</span><code>app/modules/listings/rules.py</code></li>
+          <li><span class="built__what">Seller routes</span><span class="built__note">Create (a <code>DRAFT</code>), submit, <code>PATCH</code> price or expiry, cancel, my listings (filter by status or ticket), and the history. Create and submit both re-check that the ticket is verified, eligible and active and that the event is open.</span><code>app/modules/listings/router.py</code> <code>service.py</code></li>
+          <li><span class="built__what">Reading a listing</span><span class="built__note"><code>GET /listings/{id}</code> works with or without a token. Anyone gets an <code>ACTIVE</code> listing in the public shape, with no seller and no references. The seller and admins get any status in the full shape. Everything else is the same 404 as a random ID, decided in one function, <code>get_listing_for()</code>.</span><code>app/modules/listings/service.py</code></li>
+          <li><span class="built__what">Admin review</span><span class="built__note">The pending queue (oldest first), every listing with status and ticket filters, approve, and reject with a reason. Approve re-checks the ticket, the event and the expiry. Reviewing your own listing is 403 <code>own-listing-review</code>.</span><code>/api/v1/admin/listings</code></li>
+          <li><span class="built__what">Audit retrofits</span><span class="built__note">M4's ticket verification, event create and change, and provider create now each write one audit row. Verifying a ticket you own is 403 <code>own-ticket-review</code>. An event <code>PATCH</code> that changes nothing writes nothing.</span><code>app/modules/tickets/service.py</code> <code>app/modules/events/service.py</code></li>
+          <li><span class="built__what">Event cascade</span><span class="built__note">Cancelling an event cancels its draft, pending and active listings in the same transaction, locked in id order, one audit row each. Moving its start earlier pulls any later listing expiry back to the new start; putting it back carries listings that ended at the old start forward.</span><code>cancel_open_listings_for_event</code> <code>pull_back_listing_expiry</code> <code>push_forward_listing_expiry</code></li>
+          <li><span class="built__what">Expiry</span><span class="built__note"><code>ACTIVE</code> listings past their end become <code>EXPIRED</code> through <code>transition()</code>, as the system (no actor), with <code>SKIP LOCKED</code>. Run by hand until M11 schedules it.</span><code>scripts/expire_listings.py</code></li>
+          <li><span class="built__what">Indexes</span><span class="built__note">The review queue and active-expiry indexes are partial, so each only holds the rows its query needs. Seller listings by time, the event's listings, and an audit log index for one entity's history.</span><code>migrations/versions/2026_11_23_de549881b56f_…</code></li>
+          <li><span class="built__what">Frontend</span><span class="built__note"><strong>Sell this ticket</strong> on the ticket page, <strong>My listings</strong>, the listing page (status, price change, cancel, history), the public view, and <strong>Review listings</strong> for admins with Pending and All tabs. The ticket page also shows an admin the open listing.</span><code>frontend/src/pages/</code> <code>frontend/src/components/TicketListing.tsx</code></li>
+          <li><span class="built__what">Tests</span><span class="built__note">516 backend tests (224 new): all 64 pairs of statuses, 20 route-by-route access checks, a guard that every admin route needs an admin, 3 race tests on committed transactions, the cascade, expiry and the retrofits. 78 frontend unit tests (29 new) and 13 browser tests (4 new).</span><code>tests/</code> <code>frontend/e2e/listings.spec.ts</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">A transition, step by step</h2>
+      <div class="section__body">
+        <p>Two admins press Approve on the same listing at the same moment. Each request runs these steps in its own transaction.</p>
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>Who may act, and from where</strong><p>The service checks the caller first: an admin who isn't the seller (403 <code>own-listing-review</code> otherwise), and a listing in <code>PENDING_VERIFICATION</code>, the only state review acts from. It also checks the ticket, the event and the expiry again.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>Is the move legal at all?</strong><p><code>transition()</code> looks up <code>ALLOWED[seen]</code>, where <code>seen</code> is the status it read. <code>PENDING_VERIFICATION → ACTIVE</code> is there. A move that isn't, like <code>SOLD → ACTIVE</code>, is 409 <code>illegal-listing-transition</code> before anything is written.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The conditional UPDATE</strong><p><code>UPDATE listings SET status = 'ACTIVE', reviewed_by = …, updated_at = now() WHERE id = :id AND status = 'PENDING_VERIFICATION' RETURNING id</code>. The first admin's UPDATE takes the row lock. The second waits for it, then re-checks its <code>WHERE</code> against the committed row.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>Count the rows</strong><p>The first gets its id back. The second finds the status is now <code>ACTIVE</code>, updates nothing, and gets no row: 409 <code>listing-changed</code>, carrying the current status. Its transaction rolls back.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>The audit row</strong><p>For the winner, <code>record()</code> adds <code>listing.approved</code> with <code>{"from": "PENDING_VERIFICATION", "to": "ACTIVE"}</code>, the admin's id and the request ID, in the same transaction.</p></div></li>
+          <li><span class="flow__n">6</span><div class="flow__text"><strong>One commit</strong><p><code>get_db</code> commits once at the end of the request, so the status change and its audit row land together. If anything after the UPDATE fails, both roll back, and the log never claims a change that didn't happen.</p></div></li>
+        </ol>
+<pre><code>moved = db.execute(                                     <span class="c"># app/modules/listings/state.py</span>
+    update(Listing)
+    .where(Listing.id == listing.id, Listing.status == seen)
+    .values(status=to, updated_at=func.now(), **(values or {}))
+    .returning(Listing.id)
+).scalar_one_or_none()
+if moved is None:                                       <span class="c"># someone else got there first</span>
+    db.refresh(listing)
+    raise ListingChangedError(f"The listing is now {listing.status}.", current_status=listing.status)
+record(db, actor_id=actor_id, entity_type="listing", entity_id=listing.id,
+       action=ACTION[(seen, to)], details={"from": seen, "to": to, **(details or {})})</code></pre>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="proofs">
+      <h2 id="proofs">What the tests prove</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>The whole machine, pair by pair.</strong> <code>test_listing_transitions.py</code> builds a listing in each of the 8 statuses and calls <code>transition()</code> to each of the 8. The allowed moves succeed and write one audit row. The other moves are 409 and leave both the row and the log unchanged. The test keeps its own copy of the table, so changing <code>ALLOWED</code> without meaning to fails it.</li>
+          <li><strong>Races between real transactions.</strong> The usual test session runs every request inside one rolled-back transaction, on one connection, where nothing can contend for a lock. The race tests use <code>committing_api</code>: each request gets its own connection and commits. A <code>threading.Barrier(2)</code> releases both requests together. Two approvals, an approval against a cancel, and two price cuts: whenever the requests truly overlap exactly one wins, and the audit log always matches the final row.</li>
+          <li><strong>Timing is honest.</strong> When two "simultaneous" requests happen not to overlap, the right answer is what two requests one after the other produce. Each round accepts either correct outcome, and the test fails unless at least one round was a real race.</li>
+          <li><strong>Every route that takes a listing ID</strong> is listed in <code>test_listing_access.py</code>. It checks that a stranger gets the same 404 as a random ID, and that an admin on a seller-only action gets 403 <code>seller-only</code>. The list comes from the app's own OpenAPI schema, so a new route that isn't listed fails the test.</li>
+          <li><strong>Every <code>/admin</code> route refuses a non-admin.</strong> I proved the guard can fail by switching one admin route to <code>CurrentUser</code>: the test caught it.</li>
+          <li><strong>In a real browser:</strong> list, approve, history in order, a second user sees the price but no history, and a draft is "Not found" to them.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>Run <code>docker compose up -d db mailpit minio</code>, the API, and <code>npm run dev</code> in <code>frontend/</code>, then open <code>localhost:5173</code>. The README's "Try the listing flow" walks through it.</p>
+        <ul class="built">
+          <li><span class="built__what">Sell this ticket</span><span class="built__note">On a verified, eligible ticket's page: asking price (checked against what you paid before it's sent), an optional end time, then <strong>Submit for review</strong> or <strong>Save draft</strong>. Once listed, the panel shows the listing's status and a link to it.</span><code>/tickets/:id</code></li>
+          <li><span class="built__what">My listings</span><span class="built__note">Every listing you've made, newest first, with its status. Filter by status.</span><code>/listings</code></li>
+          <li><span class="built__what">Listing (seller)</span><span class="built__note">The listing on a stub, its status with what it means, <strong>Submit for review</strong> for a draft, <strong>Change price</strong> while it's open, <strong>Cancel listing</strong> behind a confirm, and the history.</span><code>/listings/:id</code></li>
+          <li><span class="built__what">Listing (anyone else)</span><span class="built__note">An active listing's event, seat and prices. No history, no controls. Any other status is the not-found page.</span><code>/listings/:id</code></li>
+          <li><span class="built__what">Review listings (admin)</span><span class="built__note"><strong>Pending review</strong>, oldest first: approve, or reject with a reason; a link to the ticket and its evidence; an expired listing is flagged and can only be rejected. <strong>All listings</strong>: every listing, filtered by status.</span><code>/admin/listings</code></li>
+        </ul>
+        <figure class="shot">
+          <img src="assets/m05-listing.png" alt="A seller's listing page: a blue stub reading Listing beside the event, venue, date, category, seat, asking price ₹1,950, face value ₹2,500 and the listing's end; a Status heading with an Active badge and a Cancel listing button; a Change price form; and a History list reading Listed as a draft by you, Submitted for review by you, Price changed from ₹2,000 to ₹1,950 by you, Approved by an admin." loading="lazy" width="1280" height="1636">
+          <figcaption>The seller's view of an active listing. The history comes straight from the audit log; the admin shows only as "an admin".</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m05-review-listings.png" alt="The Review listings page with Pending review and All listings tabs. Two pending listings, each with event, venue, date, category, seat, asking price, face value and end time, a View the ticket and its evidence link, and Approve and Reject buttons." loading="lazy" width="1280" height="1038">
+          <figcaption>The admin queue, oldest first. Asking price and face value sit side by side.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m05-list-ticket.png" alt="A verified ticket's page with a Sell this ticket panel: an asking price field filled with 2500, a hint saying at most ₹2,500, an optional Listing ends field, and Submit for review and Save draft buttons." loading="lazy" width="1280" height="1334">
+          <figcaption>Listing a verified ticket. The price defaults to what was paid, the most it can be.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m05-my-listings.png" alt="My listings: three listings marked Pending review, Draft and Active, each with the event date, asking price and when it was last updated, and a Status filter set to All." loading="lazy" width="1280" height="900">
+          <figcaption>My listings in three different statuses.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m05-public-listing.png" alt="Another user's view of the same listing: the stub, event, venue, date, category, seat, asking price and face value, and nothing else on the page." loading="lazy" width="1280" height="900">
+          <figcaption>What anyone else sees of an active listing: no seller, no end time, no history.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+
+        <h3>The state machine</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>One hand-written <code>transition()</code></h4>
+            <p class="decision__over">Instead of a state-machine library, or a Postgres trigger</p>
+            <p>A library (<code>transitions</code>, <code>python-statemachine</code>) hides the mechanics this module is meant to teach, and still needs the conditional UPDATE to be correct under concurrency, which it doesn't provide. A trigger would be a strong last line of defence, but it can't see who is acting or the request ID without extra plumbing, and it moves the rules out of the code the tests read. <code>ALLOWED</code> fits on one screen, and the table-driven test reads straight off it.</p>
+          </div>
+          <div class="decision">
+            <h4>Each action names its own from-states</h4>
+            <p class="decision__over">Instead of relying on <code>ALLOWED</code> alone</p>
+            <p><code>ALLOWED</code> describes the whole machine, including <code>RESERVED → ACTIVE</code> for a released reservation in M8. If approve relied on <code>ALLOWED</code> alone, it would happily "approve" a reserved listing back to active. So each action checks first: review only from pending, edits and seller cancels only from draft, pending or active, admin cancels only from active. Each refusal is its own 409 naming the current status.</p>
+          </div>
+          <div class="decision">
+            <h4>The price edit pins what it checked</h4>
+            <p class="decision__over">Instead of <code>WHERE id = :id</code>, or only the status</p>
+            <p>A price cut is checked against the price it read: an active listing may only get cheaper. If two cuts both read ₹2,000 and pass, an UPDATE on id alone lets the last one win, possibly raising the price the first had just cut. The <code>PATCH</code> repeats the status, price and expiry it read in its <code>WHERE</code>, so the second finds the row changed and gets <code>listing-changed</code>. It also can't land on a listing an admin rejected a moment ago.</p>
+          </div>
+          <div class="decision">
+            <h4><code>FOR UPDATE OF listings</code></h4>
+            <p class="decision__over">Instead of a bare <code>FOR UPDATE</code></p>
+            <p>A listing loads its ticket and event in the same query (joined eager loading). A bare <code>FOR UPDATE</code> locks every row in the result, so the expiry job would also lock events and block an admin editing one. <code>with_for_update(of=Listing)</code> locks only the listing rows. The cascade locks in id order, so two callers can't deadlock. Expiry uses <code>SKIP LOCKED</code>, so a listing someone is changing waits for the next run instead of holding the job up. <code>populate_existing</code> makes the locked read replace any stale copy in the session.</p>
+          </div>
+        </div>
+
+        <h3>The audit log</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>An explicit <code>record()</code> call</h4>
+            <p class="decision__over">Instead of SQLAlchemy event listeners, or triggers</p>
+            <p>Listeners fire on ORM flushes, and a conditional UPDATE is a Core <code>update()</code> that bypasses them, which is exactly the statement I most need audited. Explicit calls are visible at every call site and testable one by one. Because <code>record()</code> only adds to the caller's session, the row shares the change's transaction: a rolled-back change takes its audit row with it, and a test proves that.</p>
+          </div>
+          <div class="decision">
+            <h4><code>clock_timestamp()</code> for <code>created_at</code></h4>
+            <p class="decision__over">Instead of the column default <code>now()</code></p>
+            <p>Postgres <code>now()</code> is the transaction's start time. An event cancel writes the event's row and then one per listing in one transaction, so those rows had identical times, and a listing's history could come back in any order. <code>clock_timestamp()</code> is the time of the write itself. No schema change.</p>
+          </div>
+          <div class="decision">
+            <h4>The history shows a role, not a person</h4>
+            <p class="decision__over">Instead of returning audit rows as they are</p>
+            <p>The seller sees "approved by an admin", never which one: knowing who reviewed you invites pressure on that person. <code>actor_role</code> is worked out per row (seller, admin or system), and only a fixed list of detail keys (reason, prices, expiries) leaves the log. Anything else an audit row holds stays there, for M13's admin audit view.</p>
+          </div>
+        </div>
+
+        <h3>The rules</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A draft, then submit</h4>
+            <p class="decision__over">Instead of create going straight to review</p>
+            <p>The build plan's wording had create send the listing for review. The API contract and the state-machine doc start at <code>DRAFT</code>, and so does <code>plan.md</code>'s lifecycle, so the contract won. A seller can fix a draft before an admin sees it. The ticket page's <strong>Submit for review</strong> makes two calls; if the second fails, the draft stays and its page says why.</p>
+          </div>
+          <div class="decision">
+            <h4>No self-review</h4>
+            <p class="decision__over">Instead of trusting admins to recuse themselves</p>
+            <p>An admin approving their own listing, or verifying their own ticket, is exactly what an audit log exists to catch, so it's refused outright: 403 <code>own-listing-review</code> or <code>own-ticket-review</code>. Nothing changes and no row is written. A second admin can still review it. This was the project owner's call; I'm the project owner.</p>
+          </div>
+          <div class="decision">
+            <h4>Cancelling an event cancels its listings</h4>
+            <p class="decision__over">Instead of refusing the cancel while listings are open</p>
+            <p>An event that isn't happening shouldn't stay on sale, and a seller shouldn't be able to block an admin by keeping a listing open. Refusing would only make the admin cancel listings one by one first. The cascade runs in the event's transaction with an audit row per listing (<code>reason: event_cancelled</code>), and the event's own row counts them. Reserved listings can't exist yet; M8 decides what happens to one whose buyer is mid-payment.</p>
+          </div>
+          <div class="decision">
+            <h4>Pending listings don't expire</h4>
+            <p class="decision__over">Instead of a <code>PENDING_VERIFICATION → EXPIRED</code> move</p>
+            <p>Nobody can buy a pending listing, so its end passing harms nobody. Instead, approve refuses one whose end has passed (409 <code>listing-not-approvable</code>). The seller can move the end and it can be approved, or the admin rejects it. The review screen flags it and offers only Reject.</p>
+          </div>
+          <div class="decision">
+            <h4>403 for an admin, 404 for everyone else</h4>
+            <p class="decision__over">Instead of one answer for every non-seller</p>
+            <p>An admin can already see the listing, so hiding it behind a 404 when they try to change its price would be pointless: they get 403 <code>seller-only</code>. A stranger can't see a non-active listing, so they get exactly the 404 a random ID gets, as in M4. An admin who is the seller is treated as the seller on their own listing.</p>
+          </div>
+        </div>
+
+        <h3>Frontend</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Who is looking is part of the cache key</h4>
+            <p class="decision__over">Instead of caching a listing by its id alone</p>
+            <p>The same address answers in two shapes: the public one, or the full one for the seller and admins. Cached under the id alone, a guest's public copy could be shown to the seller after they log in, with no controls. The key is <code>["listing", id, userId or "guest"]</code>, and the request waits until the app knows whether anyone is signed in.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>Why check the current state inside the UPDATE's WHERE clause instead of reading it first in Python?</summary>
+          <div class="qa__a">
+            <p>Because a read followed by a write leaves a gap. Two admins both read <code>PENDING_VERIFICATION</code>, both decide the move is fine, and both write: one approves, the other's reject lands on top, and the log shows two decisions for one listing. With <code>WHERE id = :id AND status = :seen</code>, the database makes the check and the write one atomic step. The first UPDATE takes the row lock; the second waits, and under Read Committed re-checks its WHERE against the committed row, finds the status changed, and updates zero rows. Zero rows back means someone got there first, so I answer 409 with the current status. A <code>SELECT … FOR UPDATE</code> first would also work, but it costs an extra round trip and holds a lock while Python thinks. The conditional UPDATE is the same pattern M8 uses to stop two buyers reserving one ticket.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What happens to the audit row when the listing update fails?</summary>
+          <div class="qa__a">
+            <p>It never exists. <code>record()</code> adds the row to the same session as the change, and nothing commits until the request ends. If the conditional UPDATE finds zero rows, <code>transition()</code> raises before it even calls <code>record()</code>. If something fails after the row is added, like a later check or the commit itself, the whole transaction rolls back and the audit row goes with it. So the log can't claim a change that didn't happen, and a change can't land without its row. One test moves a listing, makes a later step in the same transaction fail, and checks the status change and its audit row are both gone. The other half is the append-only trigger: once committed, an audit row can't be updated or deleted.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why not use a state-machine library?</summary>
+          <div class="qa__a">
+            <p>A library answers "is this move legal", which is the easy part: a dictionary does it in 8 lines. The hard part is applying the move safely when two requests race, and libraries do that in memory, on an object. Two processes each holding their own copy would both pass. I'd still need the conditional UPDATE, plus glue to make the library's callbacks write the audit row in the right transaction. Hand-written, the whole machine fits on a screen and the tests read straight off the table.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you test a race condition?</summary>
+          <div class="qa__a">
+            <p>With real concurrency against the real database. My normal tests run each test in one rolled-back transaction on one connection, so two "requests" can't contend for a lock at all. A race test passing there proves nothing. The race tests give each request its own connection that commits. Two threads wait on a barrier and fire together. Then I check the outcome and the audit log agree: one approval row, the final status matching the winner. Timing isn't guaranteed, so each round accepts any correct outcome, including the one-after-the-other result, and the test fails unless at least one round really raced. Cleanup deletes what the test created, except audit rows, which the append-only trigger protects.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why can't an admin approve their own listing?</summary>
+          <div class="qa__a">
+            <p>Review exists so that someone other than the seller checks the listing against the evidence. An admin approving their own listing defeats that, and an audit log would only record it after the fact. So it's refused before anything changes: 403 <code>own-listing-review</code>, and the same rule for verifying a ticket you own. It's a 403, not a 404, because the admin can plainly see the listing. Another admin can still review it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What happens to listings when an event is cancelled?</summary>
+          <div class="qa__a">
+            <p>They're cancelled in the same transaction as the event. The cascade selects the event's draft, pending and active listings with <code>FOR UPDATE OF listings</code>, in id order so two callers can't deadlock, and moves each through <code>transition()</code>. That gives an audit row per listing with <code>reason: event_cancelled</code>, and the seller's history reads "Cancelled because the event was cancelled". If anything fails, the event stays published and every listing stays as it was. Reserved listings can't exist yet. When they can, a buyer may be mid-payment, so M8 has to decide whether to refund or wait.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why lock with <code>FOR UPDATE OF listings</code> rather than plain <code>FOR UPDATE</code>?</summary>
+          <div class="qa__a">
+            <p>The listing query joins in the ticket and the event, because the model loads them eagerly. Plain <code>FOR UPDATE</code> locks every row the query returns, from every table. So the expiry job would also lock event rows, and an admin editing that event would wait for the job. With an outer join Postgres refuses outright: it can't lock the nullable side. <code>OF listings</code> locks only the rows I'm about to change. The expiry job adds <code>SKIP LOCKED</code>, so a listing that's mid-change is simply left for the next run.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does the seller see "an admin" instead of the admin's name?</summary>
+          <div class="qa__a">
+            <p>Least privilege for the reviewer. A seller who knows which admin rejected them can lean on that person, and nothing they need depends on the name. The audit row keeps the real <code>actor_id</code> for other admins and later investigations. The history endpoint turns it into a role and passes through only a fixed list of detail keys, so a future audit field can't leak to sellers by accident.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you stop one ticket being listed twice?</summary>
+          <div class="qa__a">
+            <p>The database decides, not a check in Python. A partial unique index, <code>uq_listings_one_open_per_ticket</code>, covers <code>ticket_id</code> only for draft, pending, active and reserved rows. Closed listings don't count, so a ticket can be listed again after one is cancelled or expires. Create flushes inside a savepoint. If the index refuses the insert, the service checks which constraint fired and answers 409 <code>listing-already-open</code>. A check-then-insert would let two simultaneous requests both pass the check.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>The history came back shuffled.</strong> Audit rows written in one transaction all had the transaction's start time from <code>now()</code>, so ordering by time was a coin toss. <code>record()</code> now stamps <code>clock_timestamp()</code>; a test writes two rows in one transaction and checks the second is later.</li>
+          <li><strong>The first race test was flaky, and "fixing" it would have hidden real bugs.</strong> It demanded one 200 and one 409 every round. When the two requests didn't overlap, it legitimately got two 200s, or a different 409. It now accepts every correct outcome per round, checks the final row and the log agree, and requires at least one real race.</li>
+          <li><strong>A race test can't run in a rolled-back transaction.</strong> On one connection, the second request just sees the first one's uncommitted change, and nothing waits on a lock. The race tests commit for real, and clean up by deleting what they made, except audit rows, which the trigger rightly refuses to delete.</li>
+          <li><strong>An event <code>PATCH</code> that changed nothing wrote an audit row.</strong> Sending the same name again ran an UPDATE with identical values and recorded <code>event.updated</code>. It now compares values first and returns early when nothing differs.</li>
+          <li><strong>A new factory default broke an M2 test.</strong> <code>make_listing</code> now gives a rejected listing a reason, which the CHECK needs. The M2 test that proves a rejection without a reason is refused had relied on the old default; it now passes <code>rejection_reason=None</code> itself.</li>
+          <li><strong>"Saved." never appeared after a price change.</strong> The form is keyed by <code>updated_at</code> so it resets to the saved values. But the save changes <code>updated_at</code>, which remounted the form and threw away the save's success state with it. The save now lives outside the keyed form. I found it while taking the screenshots, and a browser test now pins it.</li>
+          <li><strong>A postponed event cut its listings short.</strong> A listing created without an end gets the event's start, copied at that moment. Moving the start earlier pulled later ends back, but moving it later left them at the old time, so a listing whose form said "ends when the event starts" would have expired days early. The final review caught it. Putting an event back now carries every open listing that ended at the old start forward with it.</li>
+          <li><strong>The savepoint wasn't one.</strong> Create added the row, then opened <code>begin_nested()</code> and flushed. But <code>begin_nested()</code> flushes whatever is pending <em>before</em> it issues <code>SAVEPOINT</code>, so the INSERT ran outside it, and a duplicate took the whole transaction down. Over HTTP the answer was still a 409, which hid it; in a session joined to an outer transaction the duplicate surfaced as <code>PendingRollbackError</code> instead. The row is now added inside the block, here and at M4's two sites, and a test per site checks that the session carries on after a refused duplicate.</li>
+          <li><strong>A loop of lambdas tripped the linter.</strong> Ruff's B023 flags a lambda that captures a loop variable, because each one sees the variable's last value. The race tests use <code>functools.partial</code>, which binds the value at once.</li>
+          <li><strong>Every Vitest suite failed with "failed to find the current suite".</strong> On Windows, running from <code>e:\</code> instead of <code>E:\</code> made Node load two copies of Vitest, one per spelling of the path. Running from the uppercase path fixed it; CI never sees it.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>Expiry runs by hand.</strong> Until M11 schedules it, an active listing past its end stays visible until someone runs <code>scripts.expire_listings</code>.</li>
+          <li><strong>No notifications.</strong> The seller finds out about an approval or rejection by looking. Notifications arrive in M12.</li>
+          <li><strong>No public browsing.</strong> An active listing is reachable by its address only. Search, filters and the event's listings come in M6.</li>
+          <li><strong>The review queue orders by when the listing was created,</strong> not when it was submitted, to avoid a new column. A draft that sat for a week jumps the queue when submitted.</li>
+          <li><strong>Editing a pending listing doesn't send it back to the start of review.</strong> The admin sees the current price when they decide, and the history shows the change.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db mailpit minio
+uv run alembic upgrade head
+uv run pytest tests/unit/test_listing_rules.py                       <span class="c"># 9 tests, no services</span>
+uv run pytest tests/integration/test_listing_transitions.py          <span class="c"># 68 tests: all 64 pairs, and the table</span>
+uv run pytest tests/integration/test_listing_races.py                <span class="c"># 3 races on committed transactions</span>
+uv run pytest tests/integration/test_listing_access.py tests/integration/test_admin_routes.py   <span class="c"># the route guards</span>
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 uv run pytest                   <span class="c"># 516 tests, what CI runs</span>
+
+uv run uvicorn app.main:app --reload                 <span class="c"># /docs</span>
+uv run python -m scripts.make_admin you@example.in   <span class="c"># unlocks Review listings</span>
+uv run python -m scripts.expire_listings             <span class="c"># Expired N listing(s).</span>
+cd frontend &amp;&amp; npm run dev                           <span class="c"># localhost:5173</span>
+npm test                                             <span class="c"># 78 unit tests</span>
+npm run e2e                                          <span class="c"># 13 browser tests, 4 for this module</span>
+gh run list --workflow ci.yml --limit 3              <span class="c"># the CI runs on GitHub</span></code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m04-events-tickets-and-document-storage.html">Previous<strong>M4 Events, tickets and document storage</strong></a>
+    <span class="pager__next">Next<br><strong>M6 Discovery: search, filters, pagination</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

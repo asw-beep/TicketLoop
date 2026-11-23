@@ -14,12 +14,14 @@ from sqlalchemy.orm import Session
 
 from app.core.pagination import paginate
 from app.infrastructure.database.errors import violated_constraint
+from app.modules.audit.service import record
 from app.modules.events.errors import EventNotFoundError
 from app.modules.events.models import Event, EventStatus
 from app.modules.identity.models import User, UserRole
 from app.modules.tickets.errors import (
     EventNotOpenError,
     EventStartedError,
+    OwnTicketReviewError,
     TicketAlreadyRegisteredError,
     TicketNotFoundError,
     TicketNotPendingError,
@@ -51,11 +53,13 @@ def register_ticket(db: Session, owner: User, data: TicketIn) -> Ticket:
         original_owner_id=owner.id,
         current_owner_id=owner.id,
     )
-    db.add(ticket)
     try:
         # The unique constraint decides duplicates, not a check-then-insert: two people
-        # registering the same ticket at the same instant cannot both succeed.
+        # registering the same ticket at the same instant cannot both succeed. The row is
+        # added inside the SAVEPOINT (begin_nested flushes anything already pending before
+        # it starts), so a duplicate rolls back only the savepoint.
         with db.begin_nested():
+            db.add(ticket)
             db.flush()
     except IntegrityError as error:
         if violated_constraint(error) == "uq_tickets_event_provider_reference":
@@ -92,8 +96,14 @@ def verify_ticket(db: Session, ticket_id: uuid.UUID, admin: User, data: VerifyIn
     """Record an admin's decision. It happens once: the UPDATE applies only while the ticket
     is still PENDING, so two admins deciding at the same instant cannot both succeed.
 
-    A rejected ticket is never transfer-eligible, whatever the request says.
+    A rejected ticket is never transfer-eligible, whatever the request says. No admin
+    verifies a ticket they own.
     """
+    ticket = db.get(Ticket, ticket_id)
+    if ticket is None:
+        raise TicketNotFoundError()
+    if ticket.current_owner_id == admin.id:
+        raise OwnTicketReviewError()
     decided = db.execute(
         update(Ticket)
         .where(Ticket.id == ticket_id, Ticket.verification_status == VerificationStatus.PENDING)
@@ -107,10 +117,15 @@ def verify_ticket(db: Session, ticket_id: uuid.UUID, admin: User, data: VerifyIn
         )
         .returning(Ticket.id)
     ).scalar_one_or_none()
-    ticket = db.get(Ticket, ticket_id)
-    if ticket is None:
-        raise TicketNotFoundError()
+    db.refresh(ticket)
     if decided is None:
         raise TicketNotPendingError(f"The ticket is already {ticket.verification_status}.")
-    db.refresh(ticket)
+    record(
+        db,
+        actor_id=admin.id,
+        entity_type="ticket",
+        entity_id=ticket.id,
+        action="ticket.verified" if data.decision == "VERIFIED" else "ticket.rejected",
+        details={"transfer_eligible": ticket.transfer_eligible, "note": ticket.verification_note},
+    )
     return ticket

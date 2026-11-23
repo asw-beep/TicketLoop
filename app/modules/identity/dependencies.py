@@ -28,15 +28,29 @@ from app.modules.identity.models import AccountStatus, User, UserRole
 bearer_scheme = HTTPBearer(auto_error=False, description="The access_token from /auth/login")
 
 
-def get_current_user(
-    db: DbSession,
-    settings: AppSettings,
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
-) -> User:
+Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
+
+
+def get_current_user(db: DbSession, settings: AppSettings, credentials: Credentials) -> User:
     if credentials is None:
         raise UnauthorizedError("Send the access token as 'Authorization: Bearer <token>'.")
+    return _user_from_token(db, settings, credentials.credentials)
+
+
+def get_optional_user(
+    db: DbSession, settings: AppSettings, credentials: Credentials
+) -> User | None:
+    """For routes anyone may call, whose answer depends on who is calling. No header means a
+    guest. A header with a bad or expired token is still a 401: the client should refresh,
+    not be shown the guest's view without knowing why."""
+    if credentials is None:
+        return None
+    return _user_from_token(db, settings, credentials.credentials)
+
+
+def _user_from_token(db: DbSession, settings: AppSettings, token: str) -> User:
     try:
-        claims = decode_access_token(credentials.credentials, settings)
+        claims = decode_access_token(token, settings)
     except InvalidAccessTokenError:
         raise UnauthorizedError("The access token is invalid or has expired.") from None
 
@@ -52,6 +66,7 @@ def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]
 
 
 def require_admin(user: CurrentUser) -> User:

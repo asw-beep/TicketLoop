@@ -36,10 +36,12 @@ export function Layout({ children }: { children: ReactNode }) {
           {status === "signed-in" && user && (
             <>
               <NavLink to="/tickets">My tickets</NavLink>
+              <NavLink to="/listings">My listings</NavLink>
               {user.role === "ADMIN" && (
                 <>
                   <NavLink to="/admin/events">Events</NavLink>
                   <NavLink to="/admin/tickets">Verify tickets</NavLink>
+                  <NavLink to="/admin/listings">Review listings</NavLink>
                 </>
               )}
               <NavLink to="/account">{user.full_name.split(" ")[0]}</NavLink>

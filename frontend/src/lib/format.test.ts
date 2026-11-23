@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatPaise, isoToLocalInput, localInputToIso, rupeesToPaise } from "./format";
+import {
+  formatPaise,
+  isoToLocalInput,
+  localInputToIso,
+  paiseToRupeesInput,
+  rupeesToPaise,
+} from "./format";
 
 describe("formatPaise", () => {
   it("shows whole rupees without paise", () => {
@@ -46,5 +52,16 @@ describe("datetime-local conversion", () => {
 
   it("sends UTC with a Z, never a local time without a zone", () => {
     expect(localInputToIso("2027-01-15T18:30")).toMatch(/Z$/);
+  });
+});
+
+describe("paiseToRupeesInput", () => {
+  it.each<[number, string]>([
+    [250_000, "2500"],
+    [199_950, "1999.50"],
+    [100, "1"],
+  ])("shows %i paise as %s, ready to edit", (paise, text) => {
+    expect(paiseToRupeesInput(paise)).toBe(text);
+    expect(rupeesToPaise(text)).toBe(paise);
   });
 });

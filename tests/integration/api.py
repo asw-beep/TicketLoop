@@ -61,3 +61,8 @@ def registered_and_logged_in(client: TestClient) -> tuple[dict[str, Any], dict[s
 
 def bearer(access_token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {access_token}"}
+
+
+def problem_code(response: Any) -> str:
+    """The problem+json `type` without its prefix: "listing-not-found"."""
+    return response.json()["type"].removeprefix("urn:ticketloop:problem:")

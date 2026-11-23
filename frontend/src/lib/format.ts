@@ -31,6 +31,11 @@ export function rupeesToPaise(input: string): number | null {
   return paise > 0 ? paise : null;
 }
 
+/** Paise as rupees to put back in a price field: 250000 → "2500", 199950 → "1999.50". */
+export function paiseToRupeesInput(paise: number): string {
+  return (paise / 100).toFixed(paise % 100 === 0 ? 0 : 2);
+}
+
 const pad = (n: number) => String(n).padStart(2, "0");
 
 /** A UTC instant as the value of <input type="datetime-local">, in the browser's time zone. */

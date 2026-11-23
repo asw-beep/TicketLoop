@@ -37,14 +37,14 @@ def admin_list_events(
 
 @admin_events_router.post("/events", response_model=EventOut, status_code=status.HTTP_201_CREATED)
 def create_event(body: EventIn, admin: AdminUser, db: DbSession) -> EventOut:
-    return EventOut.model_validate(service.create_event(db, body))
+    return EventOut.model_validate(service.create_event(db, body, admin))
 
 
 @admin_events_router.patch("/events/{event_id}", response_model=EventOut)
 def update_event(
     event_id: uuid.UUID, body: EventPatch, admin: AdminUser, db: DbSession
 ) -> EventOut:
-    return EventOut.model_validate(service.update_event(db, event_id, body))
+    return EventOut.model_validate(service.update_event(db, event_id, body, admin))
 
 
 @admin_events_router.get("/providers", response_model=list[ProviderOut])
@@ -56,4 +56,4 @@ def list_providers(admin: AdminUser, db: DbSession) -> list[ProviderOut]:
     "/providers", response_model=ProviderOut, status_code=status.HTTP_201_CREATED
 )
 def create_provider(body: ProviderIn, admin: AdminUser, db: DbSession) -> ProviderOut:
-    return ProviderOut.model_validate(service.create_provider(db, body))
+    return ProviderOut.model_validate(service.create_provider(db, body, admin))

@@ -9,9 +9,11 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.base import Base, Timestamps, UUIDPrimaryKey, one_of
+from app.modules.events.models import Event
+from app.modules.tickets.models import Ticket
 
 
 class ListingStatus(StrEnum):
@@ -52,6 +54,23 @@ class Listing(UUIDPrimaryKey, Timestamps, Base):
             unique=True,
             postgresql_where=text(one_of("status", OPEN_LISTING_STATUSES)),
         ),
+        # The admin review queue, oldest first.
+        Index(
+            "ix_listings_review_queue",
+            "created_at",
+            "id",
+            postgresql_where=text("status = 'PENDING_VERIFICATION'"),
+        ),
+        # expire_listings(): ACTIVE listings whose expiry has passed.
+        Index(
+            "ix_listings_active_expiry",
+            "expires_at",
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+        # A seller's own listings, newest first.
+        Index("ix_listings_seller", "seller_id", "created_at", "id"),
+        # The event-cancel cascade and the expiry pull-back. Postgres does not index foreign keys.
+        Index("ix_listings_event", "event_id"),
     )
 
     ticket_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tickets.id"))
@@ -67,3 +86,16 @@ class Listing(UUIDPrimaryKey, Timestamps, Base):
     reviewed_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     reviewed_at: Mapped[datetime | None]
     rejection_reason: Mapped[str | None]
+
+    # Joined eagerly, so a listing always arrives with what its responses show. A SELECT ...
+    # FOR UPDATE on listings must say `with_for_update(of=Listing)`, or it locks these rows too.
+    ticket: Mapped[Ticket] = relationship(lazy="joined", innerjoin=True)
+    event: Mapped[Event] = relationship(lazy="joined", innerjoin=True)
+
+    @property
+    def ticket_category(self) -> str:
+        return self.ticket.ticket_category
+
+    @property
+    def seat_details(self) -> str | None:
+        return self.ticket.seat_details

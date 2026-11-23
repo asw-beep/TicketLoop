@@ -20,8 +20,10 @@ class TicketAlreadyRegisteredError(ConflictError):
 
 
 class EventNotOpenError(ConflictError):
+    """The event is not PUBLISHED: tickets for it cannot be registered (M4) or listed (M5)."""
+
     code = "event-not-open"
-    title = "Tickets cannot be registered for this event"
+    title = "The event is not open"
 
 
 class EventStartedError(AppError):
@@ -41,6 +43,13 @@ class OwnerOnlyError(PermissionDeniedError):
 
     code = "owner-only"
     title = "Only the ticket's owner can do this"
+
+
+class OwnTicketReviewError(PermissionDeniedError):
+    """Self-review is exactly what an audit log exists to catch, so it is refused outright."""
+
+    code = "own-ticket-review"
+    title = "You cannot verify a ticket you own"
 
 
 class TicketNotPendingError(ConflictError):

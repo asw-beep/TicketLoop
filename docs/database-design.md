@@ -4,7 +4,7 @@ PostgreSQL 17 is the single source of truth for inventory and money. This docume
 
 The draft is the target. From M2, each module's Alembic migration builds its own tables from it: M3 builds identity, M4 the catalogue, and so on.
 
-**Built so far (M4):** the M2 migration created `users`, `ticket_providers`, `events`, `tickets`, `listings` and `audit_logs`; M3 added `refresh_tokens` and `password_reset_tokens`; M4 added `ticket_documents`, the column `tickets.verification_note`, and one seeded row in `ticket_providers` (`fakeprovider`, FakeProvider) so an admin can create events on a fresh database. Its downgrade removes that row only if no event uses it.
+**Built so far (M5):** the M2 migration created `users`, `ticket_providers`, `events`, `tickets`, `listings` and `audit_logs`; M3 added `refresh_tokens` and `password_reset_tokens`; M4 added `ticket_documents`, the column `tickets.verification_note`, and one seeded row in `ticket_providers` (`fakeprovider`, FakeProvider) so an admin can create events on a fresh database. Its downgrade removes that row only if no event uses it. M5 added no tables: its migration added five indexes (four on `listings`, one on `audit_logs`, marked below), and M5 is the first module to write `listings` and `audit_logs` rows.
 
 ## Conventions
 
@@ -258,7 +258,7 @@ erDiagram
 | `events` | What people go to. Admin-managed. | M4 (built) |
 | `tickets` | One entitlement to attend. `current_owner_id` changes only when a transfer completes. `verification_note` holds the admin's reason for a decision. | M4 (built) |
 | `ticket_documents` | Pointers to private evidence files in object storage: a random `storage_key` (`ticket-documents/<32 hex>`), the type read from the file's first bytes, and its size. The file name is never stored. At most 5 per ticket, enforced by the service. | M4 (built) |
-| `listings` | One ticket offered at one fixed price. Its row is the lock that decides who gets the ticket. | M5 |
+| `listings` | One ticket offered at one fixed price. Its row is the lock that decides who gets the ticket. | M5 (built) |
 | `interests` | "I would like this ticket", the input to allocation | M7 |
 | `reservations` | A 10-minute hold on a listing for one buyer | M8 |
 | `orders` | One purchase attempt, created from a reservation | M9 |
@@ -272,7 +272,7 @@ erDiagram
 | `transfers` | Handing the ticket to the buyer through the provider | M12 |
 | `notifications` | In-app messages | M12 |
 | `disputes`, `dispute_events`, `dispute_evidence` | A contested order, its append-only history, and its evidence files | M13 |
-| `audit_logs` | Append-only record of every important state change and admin action | M5 |
+| `audit_logs` | Append-only record of every important state change and admin action. Written only through `app/modules/audit/service.record()`, which stamps `created_at` with `clock_timestamp()` so rows from one transaction keep their order. | M5 (built) |
 
 ## Business rules enforced by the database
 
@@ -309,12 +309,12 @@ Every index costs write time and disk space, so each one names its query. M6 che
 
 | Index | Query it serves |
 | --- | --- |
-| `ix_listings_event_status (event_id, status)` | `GET /events/{id}/listings` |
-| `ix_listings_seller_status (seller_id, status)` | `GET /listings/me` |
+| `ix_listings_event (event_id)`, **built in M5** | the event-cancel cascade and the expiry pull-back. Postgres does not index foreign keys on its own. M6 may widen it to `(event_id, status)` for `GET /events/{id}/listings`. |
+| `ix_listings_seller (seller_id, created_at, id)`, **built in M5** | `GET /listings/me`, newest first. Built in place of the draft's `(seller_id, status)`: the list is sorted by time, and one seller's rows are few enough to filter by status. |
 | `ix_listings_active_by_price (asking_price_paise, id) WHERE status = 'ACTIVE'` | search sorted by price, keyset cursor on `(price, id)` |
 | `ix_listings_active_by_created (created_at, id) WHERE status = 'ACTIVE'` | search sorted by newest |
-| `ix_listings_active_expiry (expires_at) WHERE status = 'ACTIVE'` | listing expiry job |
-| `ix_listings_review_queue (created_at) WHERE status = 'PENDING_VERIFICATION'` | `GET /admin/listings/pending` |
+| `ix_listings_active_expiry (expires_at) WHERE status = 'ACTIVE'`, **built in M5** | `scripts/expire_listings.py` |
+| `ix_listings_review_queue (created_at, id) WHERE status = 'PENDING_VERIFICATION'`, **built in M5** | `GET /admin/listings/pending`, oldest first |
 | `ix_events_name_trgm` (GIN, trigram) | `WHERE name ILIKE '%coldplay%'`, which a B-tree cannot serve |
 | `ix_events_status_starts (status, starts_at)` | `GET /events`, upcoming published events |
 | `ix_interests_fcfs (listing_id, created_at, id) WHERE status = 'ACTIVE'` | FCFS allocation, `ORDER BY created_at, id LIMIT 1` |
@@ -322,7 +322,7 @@ Every index costs write time and disk space, so each one names its query. M6 che
 | `ix_orders_buyer (buyer_id, created_at, id)` | `GET /orders/me` with keyset pagination |
 | `ix_payments_unresolved (created_at) WHERE status IN ('CREATED','PENDING')` | reconciliation |
 | `ix_outbox_unpublished (created_at) WHERE published_at IS NULL` | the outbox relay. Partial, so it stays tiny no matter how many events were already published. |
-| `ix_audit_logs_entity (entity_type, entity_id, created_at)` | the history of one listing or order |
+| `ix_audit_logs_entity (entity_type, entity_id, created_at)`, **built in M5** | `GET /listings/{id}/history`; later the history of one order |
 
 Composite index column order matters: an index on `(a, b)` helps `WHERE a = ?` and `WHERE a = ? ORDER BY b`, but not `WHERE b = ?` alone. Think of a phone book sorted by surname, then first name.
 

@@ -4,9 +4,12 @@ import { GuestOnly, RequireAdmin, RequireSession } from "./components/Guards";
 import { Layout } from "./components/Layout";
 import { AccountPage } from "./pages/AccountPage";
 import { AdminEventsPage } from "./pages/AdminEventsPage";
+import { AdminListingsPage } from "./pages/AdminListingsPage";
 import { AdminTicketsPage } from "./pages/AdminTicketsPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
+import { ListingPage } from "./pages/ListingPage";
 import { LoginPage } from "./pages/LoginPage";
+import { MyListingsPage } from "./pages/MyListingsPage";
 import { MyTicketsPage } from "./pages/MyTicketsPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
@@ -66,6 +69,16 @@ export function App() {
             }
           />
           <Route
+            path="/listings"
+            element={
+              <RequireSession>
+                <MyListingsPage />
+              </RequireSession>
+            }
+          />
+          {/* Not behind RequireSession: anyone may open an ACTIVE listing's address. */}
+          <Route path="/listings/:listingId" element={<ListingPage />} />
+          <Route
             path="/admin/events"
             element={
               <RequireAdmin>
@@ -78,6 +91,14 @@ export function App() {
             element={
               <RequireAdmin>
                 <AdminTicketsPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/admin/listings"
+            element={
+              <RequireAdmin>
+                <AdminListingsPage />
               </RequireAdmin>
             }
           />

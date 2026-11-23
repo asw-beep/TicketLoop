@@ -7,6 +7,7 @@ import type { Document, Ticket } from "../api/types";
 import { VerificationBadge } from "../components/Badges";
 import { FormError, Notice, SubmitButton } from "../components/Form";
 import { Ticket as TicketCard } from "../components/Ticket";
+import { TicketListing } from "../components/TicketListing";
 import { ACCEPT_ATTRIBUTE, checkFile, openDocument, uploadDocument } from "../lib/documents";
 import { formatPaise, formatWhen } from "../lib/format";
 import { NotFoundPage } from "./StatusPages";
@@ -99,6 +100,8 @@ function TicketDetails({ ticket }: { ticket: Ticket }) {
         </h2>
         <ReviewSummary ticket={ticket} />
       </section>
+
+      <TicketListing ticket={ticket} />
 
       <Evidence ticket={ticket} />
     </>

@@ -178,6 +178,17 @@ def test_the_owner_and_an_admin_can_read_a_ticket(
     assert as_admin.json()["provider_reference"] == "FP-TKT-0001"
 
 
+def test_a_ticket_names_its_owner_so_a_page_can_tell_owner_from_admin(
+    api: TestClient, user: dict[str, str], admin: dict[str, str], published_event: Event
+) -> None:
+    ticket = register_ticket(api, user, published_event).json()
+
+    as_admin = api.get(f"{TICKETS}/{ticket['id']}", headers=bearer(admin["token"]))
+
+    assert ticket["current_owner_id"] == user["id"]
+    assert as_admin.json()["current_owner_id"] == user["id"]
+
+
 def test_an_unknown_ticket_id_is_404(api: TestClient, user: dict[str, str]) -> None:
     response = api.get(f"{TICKETS}/{UNKNOWN_ID}", headers=bearer(user["token"]))
 

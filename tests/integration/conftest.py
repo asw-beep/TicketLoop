@@ -29,7 +29,7 @@ from app.modules.tickets.models import Ticket
 from scripts.make_admin import set_role
 from tests.integration.api import login, register
 from tests.integration.database import database_url_with_name, recreate_database, upgrade
-from tests.integration.factories import make_event, make_ticket
+from tests.integration.factories import make_event, make_ticket, make_verified_ticket
 
 TEST_BUCKET = "ticketloop-documents-test"
 
@@ -165,6 +165,17 @@ def published_event(db_session: Session) -> Event:
 def owned_ticket(db_session: Session, user: dict[str, str], published_event: Event) -> Ticket:
     """A PENDING ticket owned by `user`."""
     return make_ticket(
+        db_session,
+        event_id=published_event.id,
+        original_owner_id=user["id"],
+        current_owner_id=user["id"],
+    )
+
+
+@pytest.fixture
+def verified_ticket(db_session: Session, user: dict[str, str], published_event: Event) -> Ticket:
+    """A ticket owned by `user`, verified as transfer-eligible: ready to be listed."""
+    return make_verified_ticket(
         db_session,
         event_id=published_event.id,
         original_owner_id=user["id"],

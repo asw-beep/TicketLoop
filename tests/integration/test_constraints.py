@@ -64,7 +64,7 @@ def test_a_ticket_can_be_listed_again_once_its_listing_is_closed(db_session: Ses
     [
         ({"asking_price_paise": 250_001}, "ck_listings_price_cap"),
         ({"asking_price_paise": 99}, "ck_listings_min_price"),
-        ({"status": "REJECTED"}, "ck_listings_rejection_reason"),
+        ({"status": "REJECTED", "rejection_reason": None}, "ck_listings_rejection_reason"),
         ({"status": "ON_HOLD"}, "ck_listings_status"),
     ],
     ids=[
