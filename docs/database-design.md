@@ -2,7 +2,7 @@
 
 PostgreSQL 17 is the single source of truth for inventory and money. This document explains the schema; the exact DDL is [`schema-draft.sql`](schema-draft.sql), which loads cleanly into Postgres 17, and [`schema-checks.sql`](schema-checks.sql) proves the key constraints reject bad data.
 
-The draft is the target. From M2, each module's Alembic migration builds its own tables from it: M3 builds identity, M4 the catalogue, and so on.
+The draft is the target. From M2, each module's Alembic migration builds its own tables from it: M3 builds identity, M4 the catalogue, and so on. On 23 Nov 2026 the roadmap was slimmed: `interests`, `refunds`, `disputes`, `dispute_events` and `dispute_evidence` will never be built and are gone from the draft.
 
 **Built so far (M5):** the M2 migration created `users`, `ticket_providers`, `events`, `tickets`, `listings` and `audit_logs`; M3 added `refresh_tokens` and `password_reset_tokens`; M4 added `ticket_documents`, the column `tickets.verification_note`, and one seeded row in `ticket_providers` (`fakeprovider`, FakeProvider) so an admin can create events on a fresh database. Its downgrade removes that row only if no event uses it. M5 added no tables: its migration added five indexes (four on `listings`, one on `audit_logs`, marked below), and M5 is the first module to write `listings` and `audit_logs` rows.
 
@@ -101,37 +101,26 @@ erDiagram
     }
 ```
 
-### Purchase path (M7 to M12)
+### Purchase path (M7 to M9)
 
 ```mermaid
 erDiagram
-    listings ||--o{ interests : "attracts"
-    users ||--o{ interests : "registers"
     listings ||--o{ reservations : "is held by"
     users ||--o{ reservations : "holds"
-    interests |o--o| reservations : "won"
     reservations ||--o| orders : "becomes"
     listings ||--o{ orders : "sold through"
     users ||--o{ orders : "buys or sells"
     users ||--o{ idempotency_keys : "sends"
     orders ||--o{ payments : "paid by"
     payments ||--o{ payment_events : "receives"
-    payments ||--o{ refunds : "refunded by"
     orders ||--o| transfers : "delivered by"
     tickets ||--o{ transfers : "moves in"
     ticket_providers ||--o{ transfers : "performs"
 
-    interests {
-        uuid id PK
-        uuid listing_id FK
-        uuid buyer_id FK
-        text status
-    }
     reservations {
         uuid id PK
         uuid listing_id FK
         uuid buyer_id FK
-        uuid interest_id FK "UK"
         text status
         timestamptz expires_at
     }
@@ -165,13 +154,6 @@ erDiagram
         jsonb payload
         text processing_status
     }
-    refunds {
-        uuid id PK
-        uuid payment_id FK
-        uuid order_id FK
-        text status
-        text idempotency_key UK
-    }
     transfers {
         uuid id PK
         uuid order_id FK "UK"
@@ -184,34 +166,12 @@ erDiagram
     }
 ```
 
-### Support: disputes, notifications, messaging, audit (M5, M10 to M13)
+### Support: notifications, messaging, audit (M5, M8, M9)
 
 ```mermaid
 erDiagram
-    orders ||--o{ disputes : "contested in"
-    users ||--o{ disputes : "opens"
-    disputes ||--o{ dispute_events : "history"
-    disputes ||--o{ dispute_evidence : "evidence"
     users ||--o{ notifications : "receives"
 
-    disputes {
-        uuid id PK
-        uuid order_id FK
-        uuid opened_by FK
-        text reason
-        text status
-    }
-    dispute_events {
-        uuid id PK
-        uuid dispute_id FK
-        uuid actor_id FK
-        text event_type "append-only"
-    }
-    dispute_evidence {
-        uuid id PK
-        uuid dispute_id FK
-        text storage_key UK
-    }
     notifications {
         uuid id PK
         uuid user_id FK
@@ -259,19 +219,16 @@ erDiagram
 | `tickets` | One entitlement to attend. `current_owner_id` changes only when a transfer completes. `verification_note` holds the admin's reason for a decision. | M4 (built) |
 | `ticket_documents` | Pointers to private evidence files in object storage: a random `storage_key` (`ticket-documents/<32 hex>`), the type read from the file's first bytes, and its size. The file name is never stored. At most 5 per ticket, enforced by the service. | M4 (built) |
 | `listings` | One ticket offered at one fixed price. Its row is the lock that decides who gets the ticket. | M5 (built) |
-| `interests` | "I would like this ticket", the input to allocation | M7 |
-| `reservations` | A 10-minute hold on a listing for one buyer | M8 |
-| `orders` | One purchase attempt, created from a reservation | M9 |
-| `idempotency_keys` | The stored response for each `Idempotency-Key`, so a retried request is answered from here instead of done twice | M9 |
-| `payments` | One attempt to collect money for one order | M10 |
-| `payment_events` | Every verified webhook, kept forever. Its unique key is the webhook dedupe. | M10 |
-| `refunds` | Money going back, with its own lifecycle | M10 |
-| `reconciliation_runs` | One row per reconciliation job: what it checked and what it fixed | M10 |
-| `outbox_events` | Events written in the same transaction as the change, waiting to be published to RabbitMQ | M11 |
-| `processed_events` | Which consumer has already handled which event, so redelivery is harmless | M11 |
-| `transfers` | Handing the ticket to the buyer through the provider | M12 |
-| `notifications` | In-app messages | M12 |
-| `disputes`, `dispute_events`, `dispute_evidence` | A contested order, its append-only history, and its evidence files | M13 |
+| `reservations` | A 10-minute hold on a listing for one buyer | M7 |
+| `orders` | One purchase attempt, created from a reservation | M8 |
+| `idempotency_keys` | The stored response for each `Idempotency-Key`, so a retried request is answered from here instead of done twice | M8 |
+| `payments` | One attempt to collect money for one order | M8 |
+| `payment_events` | Every verified webhook, kept forever. Its unique key is the webhook dedupe. | M8 |
+| `reconciliation_runs` | One row per reconciliation job: what it checked and what it fixed | M8 |
+| `outbox_events` | Events written in the same transaction as the change, waiting to be published to RabbitMQ. `headers` carries trace context from M11. | M9 |
+| `processed_events` | Which consumer has already handled which event, so redelivery is harmless | M9 |
+| `transfers` | Handing the ticket to the buyer through the provider adapter | M9 |
+| `notifications` | In-app messages, read through the API | M9 |
 | `audit_logs` | Append-only record of every important state change and admin action. Written only through `app/modules/audit/service.record()`, which stamps `created_at` with `clock_timestamp()` so rows from one transaction keep their order. | M5 (built) |
 
 ## Business rules enforced by the database
@@ -286,19 +243,16 @@ Application code checks every rule first, to give a helpful error. The database 
 | At most one open listing per ticket (FR-04 rule 2) | partial unique index `uq_listings_one_open_per_ticket` on `ticket_id` `WHERE status IN ('DRAFT','PENDING_VERIFICATION','ACTIVE','RESERVED')` |
 | No markup, minimum ₹1 (FR-04 rule 6) | `ck_listings_price_cap`, `ck_listings_min_price` |
 | A rejection always has a reason | `ck_listings_rejection_reason` |
-| One live interest per buyer per listing (FR-06) | partial unique `uq_interests_one_live_per_buyer` `WHERE status IN ('ACTIVE','SELECTED')` |
 | One live reservation per listing (FR-07) | partial unique `uq_reservations_one_live_per_listing` `WHERE status IN ('CREATED','PAYMENT_PENDING','CONFIRMED')` |
 | One order per reservation (FR-08) | `uq_orders_reservation` |
 | A seller cannot buy their own listing (FR-04 rule 4) | `ck_orders_not_own_listing` |
 | One live payment per order (FR-09 rule 4) | partial unique `uq_payments_one_live_per_order` |
 | A gateway transaction maps to one payment | `uq_payments_provider_transaction` |
 | A webhook event is applied once (FR-09 rule 3) | `uq_payment_events_provider_event` |
-| One live refund per payment | partial unique `uq_refunds_one_live_per_payment` |
 | One transfer per order | `uq_transfers_order` |
 | An event is consumed once per consumer | `pk_processed_events (consumer, event_id)` |
 | One notification per event per user | `uq_notifications_event_user` |
-| One open dispute per order | partial unique `uq_disputes_one_open_per_order` |
-| Audit and dispute history cannot be edited | `forbid_update_delete()` trigger on `audit_logs` and `dispute_events` |
+| Audit history cannot be edited | `forbid_update_delete()` trigger on `audit_logs` |
 | Only known statuses | a `ck_<table>_status` CHECK on every status column |
 
 **Partial unique index.** A normal unique index on `listings(ticket_id)` would let a ticket be listed only once, ever, even after the listing was cancelled. A partial index only covers rows that match its `WHERE` clause, so uniqueness applies to open listings only and closed ones are ignored.
@@ -317,7 +271,6 @@ Every index costs write time and disk space, so each one names its query. M6 che
 | `ix_listings_review_queue (created_at, id) WHERE status = 'PENDING_VERIFICATION'`, **built in M5** | `GET /admin/listings/pending`, oldest first |
 | `ix_events_name_trgm` (GIN, trigram) | `WHERE name ILIKE '%coldplay%'`, which a B-tree cannot serve |
 | `ix_events_status_starts (status, starts_at)` | `GET /events`, upcoming published events |
-| `ix_interests_fcfs (listing_id, created_at, id) WHERE status = 'ACTIVE'` | FCFS allocation, `ORDER BY created_at, id LIMIT 1` |
 | `ix_reservations_due (expires_at) WHERE status IN ('CREATED','PAYMENT_PENDING')` | the expiry worker |
 | `ix_orders_buyer (buyer_id, created_at, id)` | `GET /orders/me` with keyset pagination |
 | `ix_payments_unresolved (created_at) WHERE status IN ('CREATED','PENDING')` | reconciliation |
@@ -344,10 +297,10 @@ Composite index column order matters: an index on `(a, b)` helps `WHERE a = ?` a
 | `orders.listing_id` added; `orders.reservation_id` made UNIQUE | FR-08 lists `listing_id`; the unique constraint is the second layer against duplicate orders. |
 | `payments.idempotency_key`, `provider_response`, `provider`, `failure_reason` added | FR-09 lists the first two. `provider` makes adding Razorpay a data change, not a schema change. |
 | `tickets.current_owner_id`, `purchase_reference`, `verified_by`, `verified_at` added; `UNIQUE (event_id, provider_reference)` | A resale changes the owner; FR-03 lists the purchase reference; the unique key stops one real ticket being sold twice. |
-| `reservations.status` gains `CANCELLED`; `interest_id` added | Buyers can cancel a `CREATED` reservation (M8); allocation records which interest won. |
+| `reservations.status` gains `CANCELLED` | Buyers can cancel a `CREATED` reservation (M7). |
 | `events.event_date` became `starts_at TIMESTAMPTZ`; `organizer_id` became `organizer TEXT`; `provider_id` references `ticket_providers` | Concerts have start times, not just dates. Organizers have no accounts or behaviour, so a text field is enough. Providers do have behaviour (they perform transfers). |
 | `audit_logs.metadata` renamed `details`; `request_id` added | SQLAlchemy's declarative base reserves the attribute name `metadata`. `request_id` links an audit row to that request's log lines. |
 | `outbox_events.next_attempt_at`, `last_error` added | The relay backs off after a failed publish instead of hammering a dead broker. |
 | `notifications.source_event_id` added | One event produces one notification per user, even if delivered twice. |
 | Money columns renamed `*_paise BIGINT` | The unit is in the name, so nobody stores rupees by mistake. |
-| New tables: `refresh_tokens`, `password_reset_tokens`, `ticket_providers`, `ticket_documents`, `idempotency_keys`, `refunds`, `reconciliation_runs`, `processed_events`, `disputes`, `dispute_events`, `dispute_evidence` | The features in FR-01, FR-03, FR-08, FR-09, FR-12 and section 9 need them. |
+| New tables: `refresh_tokens`, `password_reset_tokens`, `ticket_providers`, `ticket_documents`, `idempotency_keys`, `reconciliation_runs`, `processed_events` | The features in FR-01, FR-03, FR-08, FR-09 and section 9 need them. |

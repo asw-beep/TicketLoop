@@ -1,1 +1,1 @@
-"""Redis client for caching and rate limiting (M14)."""
+"""Redis client for caching and rate limiting (M10)."""

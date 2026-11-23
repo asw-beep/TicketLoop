@@ -48,7 +48,7 @@ class SmtpEmailSender:
     """Sends each message over a fresh SMTP connection.
 
     Plain SMTP, no TLS or login: Mailpit needs neither. A real provider would add STARTTLS
-    and credentials when the app is deployed (M15).
+    and credentials if the app were ever deployed.
     """
 
     def __init__(self, *, host: str, port: int, sender: str, timeout_seconds: float = 5) -> None:

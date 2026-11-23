@@ -8,7 +8,7 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 | --- | --- |
 | Base path | `/api/v1`. All paths below are relative to it. |
 | Auth | `Authorization: Bearer <access token>`. "Public" means no token needed. |
-| Roles | **Public**: anyone. **User**: any logged-in, non-suspended account. **Owner**: the user the resource belongs to. **Admin**: `role = ADMIN`. Every admin route lives under `/admin`, so one test can enumerate them all (M13). |
+| Roles | **Public**: anyone. **User**: any logged-in, non-suspended account. **Owner**: the user the resource belongs to. **Admin**: `role = ADMIN`. Every admin route lives under `/admin`, so one test can enumerate them all (built in M5). |
 | Bodies | JSON, `snake_case` fields. Unknown fields are rejected (422). |
 | IDs | UUID strings. |
 | Money | Integer paise, field names end in `_paise`: `{"asking_price_paise": 125000}` is ₹1,250. Currency is `"INR"`. |
@@ -34,7 +34,7 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 | 409 | Valid request that conflicts with current state: illegal transition, already reserved, duplicate |
 | 413, 415 | Upload too large, wrong file type |
 | 422 | Body or query failed validation, or an `Idempotency-Key` reused with a different body |
-| 429 | Rate limit hit (M14); `Retry-After` header says when to try again |
+| 429 | Rate limit hit (M10); `Retry-After` header says when to try again |
 | 503 | A dependency is down (health check) |
 
 ## Health (M1, built)
@@ -56,17 +56,16 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 
 `AccessToken` = `{access_token, token_type: "bearer", expires_in: 900}`. The refresh token never appears in a body: it travels only in the `refresh_token` cookie (`HttpOnly`, `SameSite=Strict`, `Path=/api/v1/auth`, `Max-Age` 7 days, `Secure` in staging and production). It is opaque (43 random URL-safe characters), not a JWT. Page scripts cannot read the cookie, and other sites cannot make the browser send it.
 
-As built: logout ends the whole session, revoking every live token in the presented token's family. The reset request answers 202 `{"message": ...}` with the same body for every email; the email carries a link to the frontend's `/reset-password#token=...`; after `#`, so the token never reaches a server log or a `Referer` header. Locally it goes to Mailpit; in tests, to an in-memory list. Changing the password also clears the refresh cookie. Every 401 carries `WWW-Authenticate: Bearer`. Problem types: `email-taken`, `invalid-credentials`, `account-suspended`, `invalid-refresh-token`, `wrong-password`, `invalid-reset-token`, `not-authenticated`, `admin-required`. The 429s arrive with rate limits in M14.
+As built: logout ends the whole session, revoking every live token in the presented token's family. The reset request answers 202 `{"message": ...}` with the same body for every email; the email carries a link to the frontend's `/reset-password#token=...`; after `#`, so the token never reaches a server log or a `Referer` header. Locally it goes to Mailpit; in tests, to an in-memory list. Changing the password also clears the refresh cookie. Every 401 carries `WWW-Authenticate: Bearer`. Problem types: `email-taken`, `invalid-credentials`, `account-suspended`, `invalid-refresh-token`, `wrong-password`, `invalid-reset-token`, `not-authenticated`, `admin-required`. The 429s arrive with rate limits in M10.
 `User` = `{id, email, full_name, role, account_status, created_at}`. Never `password_hash`.
 
-## Users (M3 built; history in M13)
+## Users (M3, built)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `GET /users/me` | User | — | 200 `User` | 401 |
 | `PATCH /users/me` | User | `{full_name}` | 200 `User` | 422 |
 | `POST /users/me/password` | User | `{current_password, new_password}` | 204; all refresh tokens revoked | 401 wrong current password |
-| `GET /users/me/history` | User | `cursor`, `limit` | 200 page of `{kind: order, payment or transfer, id, status, amount_paise, at}` | — |
 
 ## Events (M4 built; filters in M6)
 
@@ -126,34 +125,26 @@ As built: every route that takes a ticket ID goes through one check, so a ticket
 
 As built: one function, `get_listing_for()`, decides who sees a listing, and every route that takes a listing ID goes through it (`tests/integration/test_listing_access.py` checks each route, and fails if a new one is added without being listed). An admin reaching a seller-only action gets 403 `seller-only`, because they can already see the listing; anyone else gets the 404. Every status change goes through `transition()` in `app/modules/listings/state.py`: an `ALLOWED` table, then one conditional `UPDATE ... WHERE id = :id AND status = :seen`, then an audit row in the same transaction. Two admins approving at once get one 200 and one 409 `listing-changed`. A `PATCH` also pins the price and expiry it was checked against, so two price cuts racing on an `ACTIVE` listing cannot end with the higher one written last. Submit and approve re-check the ticket and the event, since either may have changed since the draft. Cancelling an event cancels its `DRAFT`, `PENDING_VERIFICATION` and `ACTIVE` listings in the same transaction (`reason: event_cancelled`); moving its start earlier pulls any later listing expiry back to the new start, and putting it back carries listings that ended at the old start (the default) forward to the new one. `ACTIVE` listings past their expiry become `EXPIRED` when `scripts/expire_listings.py` runs; a pending listing never expires, because nobody can buy it. Problem types: `listing-not-found`, `illegal-listing-transition`, `listing-changed`, `price-out-of-range`, `price-increase-not-allowed`, `bad-expiry`, `ticket-not-listable`, `listing-already-open`, `listing-not-editable`, `listing-not-draft`, `listing-not-cancellable`, `listing-not-pending`, `listing-not-approvable`, `seller-only`, `own-listing-review`, plus `owner-only`, `event-not-open` and `event-started` from M4.
 
-## Interests and allocation (M7)
-
-| Method and path | Who | Request | Success | Errors |
-| --- | --- | --- | --- | --- |
-| `POST /listings/{listing_id}/interests` | User, not the seller | — | 201 `Interest` (`ACTIVE`) | 403 own listing; 404; 409 listing not `ACTIVE` or interest already live |
-| `GET /listings/{listing_id}/interests` | Seller, Admin | `status`, `cursor`, `limit` | 200 page of `{id, buyer_display_name, status, created_at}` | 404 for everyone else, buyers included |
-| `GET /interests/me` | User | `status`, `cursor`, `limit` | 200 page of `Interest` | — |
-| `DELETE /interests/{interest_id}` | Owner | — | 200 `Interest` (`WITHDRAWN`) | 404; 409 not `ACTIVE` |
-| `POST /listings/{listing_id}/allocations` | Seller | `{strategy: FCFS, RANDOM or SELLER_SELECTED, interest_id}`; `interest_id` only for `SELLER_SELECTED` | 201 `{interest_id, reservation: Reservation}` | 404; 409 listing not `ACTIVE`, no active interests, or chosen interest not `ACTIVE` |
-
-## Reservations (M8)
+## Reservations (M7)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `POST /listings/{listing_id}/reservations` | User, not the seller | — | 201 `Reservation` (`CREATED`, `expires_at` in 10 min). If this buyer already holds the live reservation, 200 with it. | 403 own listing; 404; 409 not available (`detail` says reserved, sold or expired) |
 | `GET /reservations/{reservation_id}` | Buyer, Seller, Admin | — | 200 `Reservation` | 404 |
+| `GET /reservations/me` | User | `cursor`, `limit` | 200 page of `Reservation`, live ones first | 400 bad cursor |
 | `POST /reservations/{reservation_id}/cancel` | Buyer | — | 200 `Reservation` (`CANCELLED`) | 404; 409 not `CREATED` |
 
 `Reservation` = `{id, listing_id, status, expires_at, created_at}`.
 
-## Orders (M9)
+Cancelling an event is refused with 409 `event-has-reservations` while any of its listings is `RESERVED` (M7).
+
+## Orders (M8)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `POST /orders` | User | header `Idempotency-Key`; `{reservation_id}` | 201 `Order` (`CREATED`); a replay returns the stored status and body with header `Idempotent-Replayed: true` | 400 header missing; 404 reservation not yours; 409 reservation not `CREATED` or expired, or an order already exists for it; 422 key reused with a different body |
 | `GET /orders/{order_id}` | Buyer, Seller, Admin | — | 200 `Order` | 404 |
 | `GET /orders/me` | User | `role` (`buyer` or `seller`), `status`, `cursor`, `limit` | 200 page of `Order` | — |
-| `POST /admin/orders/{order_id}/refund` | Admin | `{note}` | 202 `Refund` (`REQUESTED`) | 404; 409 not `PAID` or `COMPLETED` |
 
 `Order` = `{id, listing_id, reservation_id, amount_paise, currency, status, created_at, updated_at}`. There is no `amount` in the request: the server copies it from the listing.
 
@@ -165,62 +156,39 @@ As built: one function, `get_listing_for()`, decides who sees a listing, and eve
 4. Same K while the first is still running: the second request waits for the first transaction, then gets the stored response.
 5. Keys expire after 24 hours.
 
-## Payments (M10)
+## Payments (M8)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `POST /payments/intents` | Order's buyer | header `Idempotency-Key`; `{order_id}` | 201 `{payment_id, provider, provider_transaction_id, checkout_url, amount_paise, currency, status}` | 404; 409 order not `CREATED`, reservation expired, or a key still in progress; 422 key reused with a different body; 502 gateway refused |
 | `POST /payments/webhooks/{provider}` | The gateway only, authenticated by signature | headers `X-Fakepay-Signature: <hex HMAC-SHA256>`, `X-Fakepay-Timestamp: <unix seconds>`; raw JSON body `{event_id, type, transaction_id, amount_paise, currency, occurred_at}` | 200 `{"received": true}` for new **and** duplicate events | 401 bad signature or timestamp older than 5 minutes; 404 unknown provider; 400 unreadable body |
 | `GET /payments/{payment_id}` | Order's buyer, Admin | — | 200 `Payment` | 404 |
-| `GET /admin/reconciliation-runs` | Admin | `cursor`, `limit` | 200 page of runs | — |
-| `POST /admin/reconciliation-runs` | Admin | — | 202 `{run_id}`; also runs on a schedule | 409 a run is already in progress |
 
 `Payment` = `{id, order_id, provider, status, amount_paise, currency, failure_reason, created_at, updated_at}`.
 
 **Webhook signature.** `signature = hex(HMAC_SHA256(secret, timestamp + "." + raw_body_bytes))`. The server computes it over the exact bytes received, before parsing JSON, and compares with `hmac.compare_digest`. A duplicate gets 200 because a non-2xx tells the gateway to keep retrying something we already have.
 
-`fakepay` itself is a separate small service with its own API (create intent, test checkout with a chosen outcome, lookup, refund), specified in M10.
+`fakepay` itself is a separate small service with its own API (create intent, test checkout with a chosen outcome, lookup), specified in M8. It has no refunds.
 
-## Transfers (M12)
+Reconciliation has no routes: it is a script, run by hand or every 2 minutes by Celery beat from M9, and each run writes a `reconciliation_runs` row.
+
+## Transfers (M9)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `GET /transfers/{transfer_id}` | Buyer, Seller, Admin | — | 200 `Transfer` | 404 |
-| `POST /transfers/callbacks/{provider}` | The ticket provider only, signed like payment webhooks | `{transfer_reference, transfer_id, result: COMPLETED or FAILED, error}` | 200 for new and duplicate callbacks | 401; 404 |
-| `POST /admin/transfers/{transfer_id}/retry` | Admin | — | 202 `Transfer` (`PROCESSING`) | 404; 409 not `REQUIRES_MANUAL_REVIEW` |
-| `POST /admin/transfers/{transfer_id}/abandon` | Admin | `{note}` | 200 `Transfer` (`FAILED`); a refund starts | 404; 409 not `REQUIRES_MANUAL_REVIEW` |
 
-`plan.md` puts retry at `POST /transfers/{id}/retry`. It moved under `/admin` because it is admin-only, and every admin route lives there.
+The ticket provider is an adapter inside the worker, not a service, so there is no callback route. `plan.md`'s `POST /transfers/{id}/retry` is not built: a transfer that fails for good stays in `REQUIRES_MANUAL_REVIEW`, with the order `TRANSFER_FAILED`.
 
 `Transfer` = `{id, order_id, status, attempt_count, last_error (admin only), initiated_at, completed_at}`.
 
-## Notifications (M12)
+## Notifications (M9)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `GET /notifications` | User | `unread_only`, `cursor`, `limit` | 200 page of `{id, notification_type, payload, read_at, created_at}` | — |
 | `PATCH /notifications/{notification_id}/read` | Owner | — | 200 the notification with `read_at` set; repeating it is harmless | 404 |
 
-## Disputes (M13)
-
-| Method and path | Who | Request | Success | Errors |
-| --- | --- | --- | --- | --- |
-| `POST /orders/{order_id}/disputes` | Order's buyer or seller | `{reason, description}` | 201 `Dispute` (`OPEN`) | 404; 409 an open dispute exists or the order is not `PAID`, `TRANSFER_PENDING`, `TRANSFER_FAILED` or `COMPLETED` |
-| `POST /disputes/{dispute_id}/evidence` | Participant | `multipart/form-data` `file` | 201 `{id, content_type, size_bytes}` | 404; 409 dispute closed; 413; 415 |
-| `GET /disputes/me` | User | `status`, `cursor`, `limit` | 200 page of `Dispute` | — |
-| `GET /disputes/{dispute_id}` | Participant, Admin | — | 200 `Dispute` with `history` (its `dispute_events`) | 404 |
-| `GET /admin/disputes` | Admin | `status`, `cursor`, `limit` | 200 page of `Dispute` | — |
-| `POST /admin/disputes/{dispute_id}/resolve` | Admin | `{resolution: REFUND_BUYER, RELEASE_TO_SELLER or REJECT, note}` | 200 `Dispute` | 404; 409 already resolved |
-
-## Admin: users and audit (M13)
-
-| Method and path | Who | Request | Success | Errors |
-| --- | --- | --- | --- | --- |
-| `GET /admin/users` | Admin | `q`, `account_status`, `cursor`, `limit` | 200 page of `User` | — |
-| `POST /admin/users/{user_id}/suspend` | Admin | `{reason}` | 200 `User` (`SUSPENDED`); refresh tokens revoked; open listings cancelled | 404; 409 already suspended or target is an admin |
-| `POST /admin/users/{user_id}/reactivate` | Admin | — | 200 `User` (`ACTIVE`) | 404; 409 |
-| `GET /admin/audit-logs` | Admin | `entity_type`, `entity_id`, `actor_id`, `cursor`, `limit` | 200 page of audit rows | — |
-
 ## Endpoints added to `plan.md` section 10
 
-`plan.md` lists the core paths; these were added because the features need them: `/health`, password reset and change, `/users/me/history`, all `/admin/events` (including `GET /admin/events`, which lists every status), `/admin/providers` and `/admin/tickets` routes, ticket documents (upload, list and link), `/listings/me` (with its `ticket_id` filter), `/listings/{id}/submit`, `/listings/{id}/history`, `GET /admin/listings` (every status, with `status` and `ticket_id` filters), `/interests/me`, `/listings/{id}/allocations`, `/admin/orders/{id}/refund`, reconciliation runs, transfer callbacks and abandon, all dispute routes, and admin user and audit routes.
+`plan.md` lists the core paths; these were added because the features need them: `/health`, password reset and change, all `/admin/events` (including `GET /admin/events`, which lists every status), `/admin/providers` and `/admin/tickets` routes, ticket documents (upload, list and link), `/listings/me` (with its `ticket_id` filter), `/listings/{id}/submit`, `/listings/{id}/history`, `GET /admin/listings` (every status, with `status` and `ticket_id` filters), and `/reservations/me`. Cut on 23 Nov 2026 with the slim roadmap: interests and allocation, refunds, disputes, transfer callbacks, retry and abandon, reconciliation routes, the history timeline, and admin user and audit routes.

@@ -173,39 +173,20 @@ CREATE INDEX ix_listings_active_expiry ON listings (expires_at) WHERE status = '
 CREATE INDEX ix_listings_review_queue ON listings (created_at) WHERE status = 'PENDING_VERIFICATION';
 
 
--- ===================================================================== interests and reservations (M7, M8)
-
-CREATE TABLE interests (
-    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    listing_id  UUID NOT NULL REFERENCES listings (id),
-    buyer_id    UUID NOT NULL REFERENCES users (id),
-    status      TEXT NOT NULL DEFAULT 'ACTIVE',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT ck_interests_status
-        CHECK (status IN ('ACTIVE', 'SELECTED', 'EXPIRED', 'WITHDRAWN', 'REJECTED'))
-);
--- FR-06: one live interest per buyer per listing.
-CREATE UNIQUE INDEX uq_interests_one_live_per_buyer ON interests (listing_id, buyer_id)
-    WHERE status IN ('ACTIVE', 'SELECTED');
--- First-come-first-served allocation reads this in order.
-CREATE INDEX ix_interests_fcfs ON interests (listing_id, created_at, id) WHERE status = 'ACTIVE';
-CREATE INDEX ix_interests_buyer ON interests (buyer_id, created_at);
+-- ===================================================================== reservations (M7)
 
 CREATE TABLE reservations (
     id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     listing_id   UUID NOT NULL REFERENCES listings (id),
     buyer_id     UUID NOT NULL REFERENCES users (id),
-    interest_id  UUID REFERENCES interests (id),     -- set when allocation picked this buyer
     status       TEXT NOT NULL DEFAULT 'CREATED',
     expires_at   TIMESTAMPTZ NOT NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_reservations_interest UNIQUE (interest_id),
     CONSTRAINT ck_reservations_status CHECK (status IN (
         'CREATED', 'PAYMENT_PENDING', 'CONFIRMED', 'EXPIRED', 'FAILED', 'CANCELLED'))
 );
--- The safety net under the conditional UPDATE (M8): one live reservation per listing.
+-- The safety net under the conditional UPDATE (M7): one live reservation per listing.
 CREATE UNIQUE INDEX uq_reservations_one_live_per_listing ON reservations (listing_id)
     WHERE status IN ('CREATED', 'PAYMENT_PENDING', 'CONFIRMED');
 CREATE INDEX ix_reservations_listing_status ON reservations (listing_id, status);
@@ -215,7 +196,7 @@ CREATE INDEX ix_reservations_due ON reservations (expires_at)
 CREATE INDEX ix_reservations_buyer ON reservations (buyer_id, created_at);
 
 
--- ===================================================================== orders (M9)
+-- ===================================================================== orders (M8)
 
 CREATE TABLE orders (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -250,7 +231,7 @@ CREATE TABLE idempotency_keys (
     request_hash     TEXT NOT NULL,                  -- SHA-256 of method, path and canonical body
     response_status  SMALLINT,                       -- NULL until the first request finishes
     response_body    JSONB,
-    locked_at        TIMESTAMPTZ,                    -- held during an external call (M10)
+    locked_at        TIMESTAMPTZ,                    -- held during an external call (M8)
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at       TIMESTAMPTZ NOT NULL,           -- created_at + 24 hours
     CONSTRAINT pk_idempotency_keys PRIMARY KEY (user_id, key),
@@ -259,7 +240,7 @@ CREATE TABLE idempotency_keys (
 CREATE INDEX ix_idempotency_keys_expiry ON idempotency_keys (expires_at);
 
 
--- ===================================================================== payments (M10)
+-- ===================================================================== payments (M8)
 
 CREATE TABLE payments (
     id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -295,7 +276,7 @@ CREATE TABLE payment_events (
     provider           TEXT NOT NULL,
     provider_event_id  TEXT NOT NULL,
     payment_id         UUID REFERENCES payments (id),  -- NULL if it matches no payment we know
-    event_type         TEXT NOT NULL,                -- 'payment.succeeded', 'refund.succeeded', ...
+    event_type         TEXT NOT NULL,                -- 'payment.succeeded', 'payment.failed'
     payload            JSONB NOT NULL,               -- the verified body, kept forever
     processing_status  TEXT NOT NULL DEFAULT 'RECEIVED',
     error              TEXT,
@@ -307,31 +288,6 @@ CREATE TABLE payment_events (
         CHECK (processing_status IN ('RECEIVED', 'PROCESSED', 'IGNORED', 'FAILED'))
 );
 CREATE INDEX ix_payment_events_payment ON payment_events (payment_id, received_at);
-
-CREATE TABLE refunds (
-    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    payment_id          UUID NOT NULL REFERENCES payments (id),
-    order_id            UUID NOT NULL REFERENCES orders (id),
-    amount_paise        BIGINT NOT NULL,
-    currency            CHAR(3) NOT NULL DEFAULT 'INR',
-    status              TEXT NOT NULL DEFAULT 'REQUESTED',
-    reason              TEXT NOT NULL,
-    provider_refund_id  TEXT,
-    idempotency_key     TEXT NOT NULL,
-    requested_by        UUID REFERENCES users (id),  -- NULL when the system asked
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_refunds_provider_refund UNIQUE (provider_refund_id),
-    CONSTRAINT uq_refunds_idempotency_key UNIQUE (idempotency_key),
-    CONSTRAINT ck_refunds_amount CHECK (amount_paise > 0),
-    CONSTRAINT ck_refunds_currency CHECK (currency = 'INR'),
-    CONSTRAINT ck_refunds_status CHECK (status IN ('REQUESTED', 'PENDING', 'SUCCEEDED', 'FAILED')),
-    CONSTRAINT ck_refunds_reason
-        CHECK (reason IN ('TRANSFER_FAILED', 'DISPUTE', 'ADMIN', 'LATE_PAYMENT'))
-);
--- Full refunds only, so at most one live refund per payment.
-CREATE UNIQUE INDEX uq_refunds_one_live_per_payment ON refunds (payment_id)
-    WHERE status IN ('REQUESTED', 'PENDING', 'SUCCEEDED');
 
 CREATE TABLE reconciliation_runs (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -346,7 +302,7 @@ CREATE TABLE reconciliation_runs (
 );
 
 
--- ===================================================================== messaging (M11)
+-- ===================================================================== messaging (M9)
 
 CREATE TABLE outbox_events (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),  -- also the message id consumers dedupe on
@@ -358,7 +314,8 @@ CREATE TABLE outbox_events (
     published_at     TIMESTAMPTZ,                    -- NULL until the broker confirmed it
     retry_count      INT NOT NULL DEFAULT 0,
     next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_error       TEXT
+    last_error       TEXT,
+    headers          JSONB NOT NULL DEFAULT '{}'     -- trace context, filled from M11
 );
 -- The relay's scan. Partial, so it stays tiny however many events have been published.
 CREATE INDEX ix_outbox_unpublished ON outbox_events (created_at) WHERE published_at IS NULL;
@@ -371,7 +328,7 @@ CREATE TABLE processed_events (
 );
 
 
--- ===================================================================== transfers and notifications (M12)
+-- ===================================================================== transfers and notifications (M9)
 
 CREATE TABLE transfers (
     id                           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -407,59 +364,6 @@ CREATE TABLE notifications (
 CREATE INDEX ix_notifications_user ON notifications (user_id, created_at DESC, id DESC);
 
 
--- ===================================================================== disputes (M13)
-
-CREATE TABLE disputes (
-    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    order_id         UUID NOT NULL REFERENCES orders (id),
-    opened_by        UUID NOT NULL REFERENCES users (id),
-    reason           TEXT NOT NULL,
-    description      TEXT NOT NULL,
-    status           TEXT NOT NULL DEFAULT 'OPEN',
-    resolved_by      UUID REFERENCES users (id),
-    resolved_at      TIMESTAMPTZ,
-    resolution_note  TEXT,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT ck_disputes_reason CHECK (reason IN (
-        'TICKET_NOT_RECEIVED', 'TICKET_INVALID', 'NOT_AS_DESCRIBED', 'PAYMENT_ISSUE', 'OTHER')),
-    CONSTRAINT ck_disputes_status CHECK (status IN (
-        'OPEN', 'UNDER_REVIEW', 'RESOLVED_REFUND', 'RESOLVED_RELEASE', 'REJECTED'))
-);
-CREATE UNIQUE INDEX uq_disputes_one_open_per_order ON disputes (order_id)
-    WHERE status IN ('OPEN', 'UNDER_REVIEW');
-CREATE INDEX ix_disputes_queue ON disputes (status, created_at);
-
-CREATE TABLE dispute_events (
-    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dispute_id   UUID NOT NULL REFERENCES disputes (id),
-    actor_id     UUID REFERENCES users (id),         -- NULL = the system
-    event_type   TEXT NOT NULL,
-    from_status  TEXT,
-    to_status    TEXT,
-    note         TEXT,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT ck_dispute_events_type
-        CHECK (event_type IN ('OPENED', 'EVIDENCE_ADDED', 'COMMENT', 'STATUS_CHANGED'))
-);
-CREATE INDEX ix_dispute_events_dispute ON dispute_events (dispute_id, created_at);
-
-CREATE TABLE dispute_evidence (
-    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    dispute_id    UUID NOT NULL REFERENCES disputes (id),
-    uploaded_by   UUID NOT NULL REFERENCES users (id),
-    storage_key   TEXT NOT NULL,
-    content_type  TEXT NOT NULL,
-    size_bytes    BIGINT NOT NULL,
-    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT uq_dispute_evidence_storage_key UNIQUE (storage_key),
-    CONSTRAINT ck_dispute_evidence_type
-        CHECK (content_type IN ('application/pdf', 'image/png', 'image/jpeg')),
-    CONSTRAINT ck_dispute_evidence_size CHECK (size_bytes BETWEEN 1 AND 5242880)
-);
-CREATE INDEX ix_dispute_evidence_dispute ON dispute_evidence (dispute_id);
-
-
 -- ===================================================================== audit (M5)
 
 CREATE TABLE audit_logs (
@@ -475,7 +379,7 @@ CREATE TABLE audit_logs (
 CREATE INDEX ix_audit_logs_entity ON audit_logs (entity_type, entity_id, created_at);
 CREATE INDEX ix_audit_logs_actor ON audit_logs (actor_id, created_at);
 
--- History tables are append-only. The app never updates or deletes them; this trigger makes
+-- The audit history is append-only. The app never updates or deletes them; this trigger makes
 -- the database refuse even if a bug or a person tries.
 CREATE FUNCTION forbid_update_delete() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -487,6 +391,3 @@ CREATE TRIGGER audit_logs_append_only
     BEFORE UPDATE OR DELETE ON audit_logs
     FOR EACH ROW EXECUTE FUNCTION forbid_update_delete();
 
-CREATE TRIGGER dispute_events_append_only
-    BEFORE UPDATE OR DELETE ON dispute_events
-    FOR EACH ROW EXECUTE FUNCTION forbid_update_delete();

@@ -1,6 +1,6 @@
 # Requirements
 
-Every functional (FR) and non-functional (NFR) requirement from `plan.md`, restated as rules we can check, with the test that proves each one and the module that builds it. Where `plan.md` was vague, the rule here is the decision we made; `database-design.md` and `state-machines.md` hold the details.
+Every functional (FR) and non-functional (NFR) requirement from `plan.md`, restated as rules we can check, with the test that proves each one and the module that builds it. Module numbers follow the slimmed roadmap of 23 Nov 2026 ([design](superpowers/specs/2026-11-23-slim-roadmap-m6-m12-design.md)); what it cut is marked **Cut**. Where `plan.md` was vague, the rule here is the decision we made; `database-design.md` and `state-machines.md` hold the details.
 
 Conventions used everywhere:
 
@@ -66,18 +66,11 @@ Conventions used everywhere:
 
 **Test:** with 100,000 seeded listings, page 500 is as fast as page 1, and `EXPLAIN ANALYZE` shows no sequential scan on `listings` for common filters.
 
-### FR-06 · Interest registration (M7)
+### FR-06 · Interest registration (cut)
 
-- A buyer registers interest in an `ACTIVE` listing they do not own.
-- Interest statuses: `ACTIVE`, `SELECTED`, `EXPIRED`, `WITHDRAWN`, `REJECTED`.
-- A buyer holds at most one live (`ACTIVE` or `SELECTED`) interest per listing, enforced by a partial unique index.
-- Only the seller and admins can see who is interested. Buyers never see each other.
-- The seller triggers allocation with one of three strategies: first-come-first-served, random (with the candidate list and the result written to the audit log), or seller-selected. The winner becomes `SELECTED` and gets a reservation; the others stay `ACTIVE` as fallbacks.
-- No bidding.
+**Cut** in the slimmed roadmap. Buyers reserve an `ACTIVE` listing directly; first come, first served is the reservation race itself (FR-07).
 
-**Test:** a duplicate interest gives 409; the seller's own interest gives 403; FCFS picks the earliest; random picks are spread roughly evenly over 1,000 runs; the audit log alone explains every pick.
-
-### FR-07 · Ticket reservation (M8)
+### FR-07 · Ticket reservation (M7)
 
 - A reservation holds one listing for one buyer for 10 minutes.
 - Reserving is one conditional `UPDATE` on the listing row (`ACTIVE` to `RESERVED`) plus an insert, in one transaction. The listing row is the lock target; the ticket row does not change until the transfer completes.
@@ -87,7 +80,7 @@ Conventions used everywhere:
 
 **Test:** 100 concurrent buyers produce exactly 1 reservation and 99 conflicts, 20 runs in a row; two expiry workers expire each reservation exactly once; expiry racing payment success never releases a paid listing.
 
-### FR-08 · Order management (M9)
+### FR-08 · Order management (M8)
 
 - An order records one purchase attempt: buyer, seller, listing, reservation, amount, currency, status and idempotency key.
 - The amount is copied from the listing on the server. The client never sends a price.
@@ -97,9 +90,9 @@ Conventions used everywhere:
 
 **Test:** 50 concurrent requests with one key create one order and all get the same body; the same key with a different body gives 422; an expired or someone else's reservation is rejected.
 
-### FR-09 · Payment processing (M10)
+### FR-09 · Payment processing (M8)
 
-- A fake gateway, `fakepay`, simulates success, failure, delays, duplicate webhooks, bad signatures, timeouts and refunds, and exposes a lookup API for reconciliation.
+- A fake gateway, `fakepay`, simulates success, failure, delays, duplicate webhooks, bad signatures and timeouts, and exposes a lookup API for reconciliation. Refunds are **cut**.
 - We save the payment row before calling the gateway and send the gateway an idempotency key, so a crash or retry never creates two payment intents.
 - Webhooks are authenticated with HMAC-SHA256 over the raw body plus a timestamp, compared in constant time. Timestamps older than 5 minutes are rejected.
 - Each provider event is stored once (`UNIQUE (provider, provider_event_id)`). A duplicate is answered with 200 and changes nothing.
@@ -110,33 +103,32 @@ Conventions used everywhere:
 
 **Test:** a webhook delivered 10 times changes state once; a forged signature gives 401 and changes nothing; a late webhook after reconciliation is a no-op; a timed-out payment leaves a recoverable order.
 
-### FR-10 · Ticket transfer (M12)
+### FR-10 · Ticket transfer (M9)
 
-- After payment succeeds, a worker asks the (fake) ticket provider to transfer the ticket.
+- After payment succeeds, a worker asks the ticket provider to transfer the ticket, through an in-process fake adapter.
 - Transfer statuses: `INITIATED`, `PROCESSING`, `COMPLETED`, `FAILED`, `REQUIRES_MANUAL_REVIEW`.
 - One transfer per order (`UNIQUE (order_id)`).
 - On success, in one transaction: transfer `COMPLETED`, order `COMPLETED`, listing `SOLD`, ticket `current_owner_id` set to the buyer.
-- On failure: automatic retries with backoff, then manual review. An admin may retry, or abandon, which refunds the buyer.
+- On failure: automatic retries with backoff, then `REQUIRES_MANUAL_REVIEW`, where it stays. Admin retry and abandon, and the refund that abandoning would start, are **cut**.
 - A paid order is never `COMPLETED` before the transfer succeeds.
 
-**Test:** the full happy path runs end to end; a duplicate payment-succeeded event creates one transfer; a permanent failure ends in manual review and then a refund.
+**Test:** the full happy path runs end to end; a duplicate payment-succeeded event creates one transfer; a permanent failure ends in manual review.
 
-### FR-11 · Notifications (M12)
+### FR-11 · Notifications (M9)
 
-- In-app notifications for listing verification, new reservation, payment success and failure, reservation expiry, ticket transfer, listing cancellation and dispute updates.
+- In-app notifications for payment success and failure, reservation expiry and ticket transfer, read through the API. No notification screen.
 - Built by a consumer of outbox events; one event produces exactly one notification per affected user, even if delivered twice.
 - Users read and mark only their own notifications.
 
 **Test:** replaying the same event creates no second notification; user B cannot read user A's notifications.
 
-### FR-12 · Audit and dispute management (M5, M13)
+### FR-12 · Audit and dispute management (M5; disputes cut)
 
-- Audit rows for listing changes, reservation creation and expiry, order creation, payment changes, transfers, refunds and every admin action. Each row is written in the same transaction as the change it records, and carries the request ID.
+- Audit rows for listing changes, reservation creation and expiry, order creation, payment changes, transfers and every admin action. Each row is written in the same transaction as the change it records, and carries the request ID.
 - `audit_logs` is append-only: the app never updates or deletes it.
-- Buyer or seller of an order can open one dispute at a time, choose a reason, add evidence and follow its history. Admins resolve with refund-buyer, release-to-seller or reject.
-- Dispute history is append-only (`dispute_events`).
+- Disputes are **cut**: no dispute flow, no `dispute_events`.
 
-**Test:** a rolled-back change leaves no audit row; every `/admin` route returns 403 to a USER (a test enumerates the router); a second open dispute on one order gives 409.
+**Test:** a rolled-back change leaves no audit row; every `/admin` route returns 403 to a USER (a test enumerates the router).
 
 ## Non-functional requirements
 
@@ -152,25 +144,25 @@ Postgres is the only source of truth. Each guarantee has a database backstop, no
 | Duplicate payment processing | webhook dedupe insert | `UNIQUE (provider, provider_event_id)` |
 | Invalid transitions | `ALLOWED` transition map | `WHERE status = :from` in every update, `CHECK` on status values |
 
-**Test:** the concurrency tests in M8 to M11, asserting on database rows, not on API responses.
+**Test:** the concurrency tests in M7 to M9, asserting on database rows, not on API responses.
 
 ### NFR-02 · Availability
 
 Recover from an API crash, a broker outage, slow payment responses, dropped database connections and worker crashes. The tools are short transactions, the transactional outbox, idempotent consumers, `pool_pre_ping` and reconciliation.
 
-**Test:** the M11 and M17 failure drills (stop RabbitMQ, kill a worker mid-task, restart Postgres) end with nothing lost and nothing applied twice.
+**Test:** the M9 and M12 failure drills (stop RabbitMQ, kill a worker mid-task, send a poison message) end with nothing lost and nothing applied twice.
 
 ### NFR-03 · Performance
 
 Normal reads under 300 ms p95; reservation under 500 ms p95 under the test workload; no duplicate reservations under load; paginated queries stay fast as data grows. These are targets, measured and reported with the hardware used.
 
-**Test:** k6 load, stress, spike and soak runs from 100 to 10,000 users in the M17 testing campaign, read from the M15 Grafana dashboards.
+**Test:** k6 load and spike runs from 100 to 1,000 users in M12, read from the M11 Grafana dashboards.
 
 ### NFR-04 · Security
 
-Argon2id, JWT, roles, Pydantic validation on every input, SQLAlchemy bound parameters only (no SQL built from strings), Redis rate limits on login, listing creation, reservation, payment and search, a strict CORS allow-list, private storage with presigned URLs, HMAC webhooks, secrets only from the environment, and audit logs. No card data, ever.
+Argon2id, JWT, roles, Pydantic validation on every input, SQLAlchemy bound parameters only (no SQL built from strings), Redis rate limits on login, reservation, payment and search, a strict CORS allow-list, private storage with presigned URLs, HMAC webhooks, secrets only from the environment, and audit logs. No card data, ever.
 
-**Test:** the auth, IDOR, webhook and rate-limit tests; a security pass in M16.
+**Test:** the auth, IDOR, webhook and rate-limit tests; Bandit, pip-audit and `npm audit` in CI from M11.
 
 ### NFR-05 · Maintainability
 
@@ -180,6 +172,6 @@ A modular monolith: each module owns its tables and exposes service functions; b
 
 ### NFR-06 · Observability
 
-JSON logs with a request ID from M1. From M15: Prometheus metrics for request rate, latency, errors, database pool use, queue depth, outbox backlog, worker failures, payment failures and reservation expiries; Grafana dashboards; OpenTelemetry traces from API to worker. Never log passwords, tokens, payment secrets or ticket credentials.
+JSON logs with a request ID from M1. From M11: Prometheus metrics for request rate, latency, errors, database pool use, queue depth, outbox backlog, worker failures, payment failures and reservation expiries; Grafana dashboards; OpenTelemetry traces from API to worker. Never log passwords, tokens, payment secrets or ticket credentials.
 
-**Test:** every log line in the M1 test suite parses as JSON and carries the request ID; in M15 a load test is readable from the dashboards alone.
+**Test:** every log line in the M1 test suite parses as JSON and carries the request ID; in M11 a load test is readable from the dashboards alone.

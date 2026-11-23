@@ -4,7 +4,7 @@ Nov 16, 2026 · @Aswin Mony
 
 ## What you are building and how to use this plan
 
-TicketLoop is a FastAPI modular monolith for fixed-price ticket resale. Its real purpose is to show that a backend stays correct under concurrent requests and partial failures. This plan splits it into 19 modules over about 110 focused sessions, built in an order where each module depends only on what came before.
+TicketLoop is a FastAPI modular monolith for fixed-price ticket resale. Its real purpose is to show that a backend stays correct under concurrent requests and partial failures. This plan splits it into 19 modules over about 110 focused sessions, built in an order where each module depends only on what came before. On 23 Nov 2026, with M0 to M5 done, it was slimmed to 13 modules (M0 to M12) so it finishes in one more week: see [Cut from the plan](#cut-from-the-plan-23-nov-2026).
 
 The source is `plan.md` (v1.0) in the repo. It is the only file so far; no code exists yet.
 
@@ -12,19 +12,19 @@ The source is `plan.md` (v1.0) in the repo. It is the only file so far; no code 
 
 Most of the API is CRUD that sets these up. Spend your deepest learning time here:
 
-1. **Double booking:** 100 buyers hit one ticket at once and exactly one wins (M8).
-2. **Duplicate orders:** a retried request must not create a second order, which is what idempotency keys solve (M9).
-3. **Duplicate or forged webhooks:** the gateway sends the same event twice, or someone fakes one (M10).
-4. **Lost events:** the database commits but RabbitMQ is down, which the transactional outbox fixes (M11).
-5. **Expiry racing payment:** the expiry worker must never release a ticket that was just paid for (M8 + M10).
-6. **Drift:** the gateway and your database disagree, and reconciliation finds it (M10).
+1. **Double booking:** 100 buyers hit one ticket at once and exactly one wins (M7).
+2. **Duplicate orders:** a retried request must not create a second order, which is what idempotency keys solve (M8).
+3. **Duplicate or forged webhooks:** the gateway sends the same event twice, or someone fakes one (M8).
+4. **Lost events:** the database commits but RabbitMQ is down, which the transactional outbox fixes (M9).
+5. **Expiry racing payment:** the expiry worker must never release a ticket that was just paid for (M7 + M8).
+6. **Drift:** the gateway and your database disagree, and reconciliation finds it (M8).
 
 ### Assumptions to adjust
 
-- One "day" is one focused session of 3 to 4 hours. At 5 sessions a week the plan runs about 22 weeks. With less time, stretch the days; do not skip the Learn steps.
+- One "day" is one focused session of 3 to 4 hours. At 5 sessions a week the plan ran about 22 weeks; after the slimming, M6 to M12 run one a day from 24 to 30 November 2026. With less time, stretch the days; do not skip the Learn steps.
 - You know Python basics (functions, classes, venv, pip) and everyday Git. If not, do the optional pre-week in M0.
 - You work on Windows 11 with a mixed setup. Your code, the API, tests and the frontend run natively on Windows; Postgres, Redis, RabbitMQ, Celery and the monitoring tools run in Docker Desktop, which uses WSL2 behind the scenes. Celery and Redis do not support Windows, which is why they always live in containers.
-- The React frontend grows a slice at a time. From M3 on, each module adds the screens for what it builds, so you test every feature by hand in a browser the day it lands, not at the end. M18 is a polish pass over screens that already work. The backend is still the point of the project: a module's screens are thin and never hold business rules.
+- The React frontend grows a slice at a time. M3 to M5 each added the screens for what they built; from M6 only the buying flow (search, reserve, pay, own the ticket) gets screens, and there is no polish module. The backend is still the point of the project: a module's screens are thin and never hold business rules.
 
 ### How each module is laid out
 
@@ -42,8 +42,8 @@ Most of the API is CRUD that sets these up. Spend your deepest learning time her
 | Sync or async SQLAlchemy | Sync SQLAlchemy 2.0 with psycopg 3 | One session model shared by FastAPI and Celery workers; fewer concepts at once. Switch later if load tests demand it. |
 | Package manager | uv with `pyproject.toml` | Fast, and pyproject-native as plan.md expects. Plain pip + venv also works. |
 | Money type | Integer paise in a `BIGINT` column, currency `INR` | plan.md bans floats for money; integers avoid rounding bugs entirely. |
-| Reservation expiry before Celery exists | A plain Python loop script in M8, moved to Celery beat in M11 | Keeps the expiry logic a pure function you can test, separate from the scheduler. |
-| Logging timing | JSON logs and request IDs from M1; metrics and tracing in M15 | Cheap now and makes every later bug easier to find. |
+| Reservation expiry before Celery exists | A plain Python loop script in M7, moved to Celery beat in M9 | Keeps the expiry logic a pure function you can test, separate from the scheduler. |
+| Logging timing | JSON logs and request IDs from M1; metrics and tracing in M11 | Cheap now and makes every later bug easier to find. |
 | Load-test tool | Grafana k6, run from Docker | One laptop can generate far more load with it than with a Python tool, it has load, stress, spike and soak patterns built in, and thresholds turn each run into a pass or fail. One tool keeps every run comparable. |
 | Migrations on enums | Store status as `TEXT` with a `CHECK` constraint | Postgres enum types are awkward to change in Alembic; you will add states. |
 
@@ -52,16 +52,16 @@ Most of the API is CRUD that sets these up. Spend your deepest learning time her
 ```mermaid
 flowchart TB
     client["React client in frontend/<br/>a slice per module from M3; curl works too"]
-    api["FastAPI app (modular monolith)<br/>M3 to M14 modules<br/>Rule: state change + outbox row in one transaction"]
-    gw["Fake payment gateway · M10<br/>payment intents, HMAC-signed webhooks"]
-    redis["Redis · M14<br/>cache-aside reads, rate-limit counters"]
+    api["FastAPI app (modular monolith)<br/>M3 to M10 modules<br/>Rule: state change + outbox row in one transaction"]
+    gw["Fake payment gateway · M8<br/>payment intents, HMAC-signed webhooks"]
+    redis["Redis · M10<br/>cache-aside reads, rate-limit counters"]
     storage["Object storage · M4<br/>S3-compatible, private ticket evidence"]
     pg[("PostgreSQL · M2<br/>source of truth for inventory and money<br/>outbox_events written in the same transaction")]
-    relay["Outbox relay · M11<br/>reads unpublished outbox rows"]
-    mq["RabbitMQ · M11<br/>queues, retries, dead letters"]
-    workers["Celery workers + beat · M11<br/>transfers, notifications, expiry, reconciliation"]
-    provider["Fake ticket provider · M12<br/>ticket transfers that succeed or fail"]
-    obs["Prometheus · Grafana · Jaeger · M15<br/>metrics, dashboards and traces"]
+    relay["Outbox relay · M9<br/>reads unpublished outbox rows"]
+    mq["RabbitMQ · M9<br/>queues, retries, dead letters"]
+    workers["Celery workers + beat · M9<br/>transfers, notifications, expiry, reconciliation"]
+    provider["Ticket provider adapter · M9<br/>in-process fake: transfers that succeed or fail"]
+    obs["Prometheus · Grafana · Jaeger · M11<br/>metrics, dashboards and traces"]
 
     client -->|"HTTPS /api/v1"| api
     api -->|intent| gw
@@ -79,13 +79,13 @@ flowchart TB
     workers -.-> obs
 ```
 
-*TicketLoop architecture after M17: Postgres decides; everything async flows through the outbox. Module numbers show where each part is built.*
+*TicketLoop architecture after M12: Postgres decides; everything async flows through the outbox. Module numbers show where each part is built.*
 
-The API writes every state change and its outbox row in one Postgres transaction. The relay, RabbitMQ and Celery carry those events to workers, which write back to Postgres idempotently. Redis only speeds up reads and counts rate limits, and the two fake services stand in for the real payment gateway and ticket provider until you integrate them.
+The API writes every state change and its outbox row in one Postgres transaction. The relay, RabbitMQ and Celery carry those events to workers, which write back to Postgres idempotently. Redis only speeds up reads and counts rate limits, and the fake gateway and the in-process provider adapter stand in for the real payment gateway and ticket provider.
 
 ## Module map and build order
 
-Build the 19 modules strictly in this order. Each one leaves you with something running and tested, and each needs only what came before it. Modules M7 and M14 are the only ones that could move; everything from M8 to M12 is a chain.
+Build the 13 modules strictly in this order. Each one leaves you with something running and tested, and each needs only what came before it. M10 is the only one that could move; M7 to M9 are a chain.
 
 | # | Module | What exists when done | Needs | Why it sits here | plan.md phase |
 | --- | --- | --- | --- | --- | --- |
@@ -96,27 +96,22 @@ Build the 19 modules strictly in this order. Each one leaves you with something 
 | M4 | Events, tickets, document storage | Event CRUD (admin), ticket upload to MinIO, ownership checks | M3 | Listings point at tickets; tickets point at events and owners. | 1 |
 | M5 | Listings, verification, audit log | Listing state machine, admin approve/reject, partial unique index, audit helper | M4 | First real state machine; audit starts now because every later state change must write it. | 2 |
 | M6 | Discovery | Search, filters, keyset pagination, indexes checked with `EXPLAIN ANALYZE` | M5 | Needs active listings to search. | 2 |
-| M7 | Interests and allocation | Interest API, one-active-interest rule, three allocation strategies | M5 | Allocation is what triggers a reservation. | 2 |
-| M8 | Reservations and concurrency | Atomic reservation, 100-buyer race test, expiry script | M7 | The core problem; everything after builds on a reserved ticket. | 3 |
-| M9 | Orders and idempotency | Order state machine, `Idempotency-Key` handling | M8 | An order is created from a reservation. | 4 |
-| M10 | Payments | Fake gateway, signed webhooks, dedupe, reconciliation, refunds | M9 | A payment belongs to exactly one order. | 4 |
-| M11 | Messaging | RabbitMQ, Celery, transactional outbox, retries, dead-letter queue | M10 | Payment success is the first event that must reach a worker reliably. | 5 |
-| M12 | Transfers and notifications | Transfer worker with fake provider, in-app notifications | M11 | Both are consumers of outbox events. | 5 |
-| M13 | Disputes and admin | Dispute flow, admin review, suspension | M12 | Disputes refer to completed or failed orders. | 5 |
-| M14 | Caching and rate limiting | Redis cache-aside for reads, rate limits on hot endpoints | M6 | plan.md says Redis only after the app works; it speeds up M6 reads. | 6 |
-| M15 | Observability | Prometheus metrics, Grafana dashboards, OpenTelemetry traces | M11 | Moved before load tests: you need p95 and queue-depth graphs to read a load test. | 7 |
-| M16 | CI/CD, security, docs | Full GitHub Actions pipeline, security pass, ADRs, README | M15 | Hardens and explains the finished backend before it is measured. | 7 |
-| M17 | Performance, concurrency and resilience testing | Fourteen kinds of test (load, stress, spike, soak, races, deadlocks, lock contention, isolation, idempotency, integrity, coordination, failure recovery, connection pool, latency) and resume numbers | M16 | Runs once the backend is finished, so every number describes the real system. | 6 + 7 |
-| M18 | Frontend polish | A design, accessibility and states pass over the screens each module added | M17 | The screens exist from M3 on, so every module is tested by hand as it lands; this module makes them good. | separate |
+| M7 | Reservations and concurrency | Atomic reservation, 100-buyer race test, three locking strategies compared, expiry loop | M6 | The core problem; everything after builds on a reserved ticket. | 3 |
+| M8 | Orders and payments | Order state machine, `Idempotency-Key` handling, fake gateway, signed webhooks, dedupe, reconciliation | M7 | An order is created from a reservation and paid by exactly one live payment. | 4 |
+| M9 | Outbox and transfer | Transactional outbox, RabbitMQ, Celery, retries, dead-letter queue, the transfer and notification consumers | M8 | Payment success is the first event that must reach a worker reliably. | 5 |
+| M10 | Caching and rate limiting | Redis cache-aside for reads, token-bucket rate limits on hot endpoints | M6 | plan.md says Redis only after the app works; it speeds up M6 reads. | 6 |
+| M11 | Observability and delivery | Prometheus metrics, a Grafana dashboard, OpenTelemetry traces, the image and dependency scans in CI | M9 | You need p95 and queue-depth graphs to read a load test. | 7 |
+| M12 | Load testing and results | k6 load and spike runs, races at scale, a broker drill, the invariants check, resume numbers | M11 | Runs once the backend is finished, so every number describes the real system. | 6 + 7 |
 
-Five changes from plan.md's phase order, each on purpose:
+Seven changes from plan.md's phase order, each on purpose:
 
 1. The audit-log helper arrives in M5, not at the end, so no state change ever goes unrecorded.
-2. A basic CI run (pytest on every push) starts in M3; the full pipeline stays in M16.
-3. Observability (M15) comes before the testing campaign (M17), because load-test numbers are unreadable without dashboards.
-4. Reservation expiry first runs as a plain script in M8 and moves onto Celery beat in M11.
-5. Performance, concurrency and resilience testing runs as one campaign (M17) after the backend is finished, hardened and documented. Each module still ships its own correctness tests, because a module is not done without them.
-6. The frontend arrives a slice per module from M3, not whole in M18, so every feature can be tried in a browser as soon as it exists. Each module's **Screens** paragraph lists its slice; M18 polishes the result.
+2. A basic CI run (pytest on every push) starts in M3; the image build and scans arrive in M11.
+3. Observability (M11) comes before load testing (M12), because load-test numbers are unreadable without dashboards.
+4. Reservation expiry first runs as a plain script in M7 and moves onto Celery beat in M9.
+5. Load and contention testing runs as one module (M12) after the backend is finished. Each module still ships its own correctness tests, because a module is not done without them.
+6. The frontend arrives a slice per module from M3, so every feature can be tried in a browser as soon as it exists. From M6 only the buying flow gets screens; each module's **Screens** paragraph lists its slice.
+7. On 23 Nov 2026 the plan was slimmed from 19 modules to 13 for a one-week finish. See [Cut from the plan](#cut-from-the-plan-23-nov-2026).
 
 ## Module-by-module breakdown
 
@@ -194,7 +189,7 @@ Each module lists what to know before you start, what to watch and read, what to
 2. `uv init`, then add fastapi, uvicorn, pydantic-settings, sqlalchemy, psycopg\[binary\], alembic, pytest, httpx, ruff, structlog.
 3. `app/main.py` with an app factory, a `/api/v1` router and `/health`.
 4. `app/core/config.py` reading settings from the environment; commit `.env.example`, never `.env`.
-5. `docker-compose.yml` with `postgres:17` (named volume, healthcheck) and the API service. Day to day you run the API on Windows with `uvicorn --reload`; the containerised API is for the M8 race test and the load tests.
+5. `docker-compose.yml` with `postgres:17` (named volume, healthcheck) and the API service. Day to day you run the API on Windows with `uvicorn --reload`; the containerised API is for the M7 race test and the load tests.
 6. Middleware that creates a request ID, returns it in a response header and adds it to every log line.
 7. `app/core/exceptions.py`: one error format for every error.
 8. The first test: FastAPI `TestClient` calls `/health`.
@@ -326,7 +321,7 @@ Each module lists what to know before you start, what to watch and read, what to
 **Learn first**
 
 - Video: [Computers Without Memory](https://www.youtube.com/watch?v=vhiiia1_hC4) (Computerphile). The theory behind state machines in 10 minutes; optional but it makes the idea click.
-- Article: [How Payment Intents work](https://docs.stripe.com/payments/paymentintents/lifecycle) (Stripe). A production state machine to model yours on, and useful again in M10.
+- Article: [How Payment Intents work](https://docs.stripe.com/payments/paymentintents/lifecycle) (Stripe). A production state machine to model yours on, and useful again in M8.
 - Article: [Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) (OWASP): what an audit event should and must never contain.
 - Article: [Unique indexes](https://www.postgresql.org/docs/current/indexes-unique.html) (PostgreSQL docs)
 
@@ -334,11 +329,11 @@ Each module lists what to know before you start, what to watch and read, what to
 
 1. `listings` migration with `event_id` copied from the ticket, prices in paise, `status`, `expires_at` and the partial unique index.
 2. One `transition(listing, to_state, actor)` function backed by an `ALLOWED` dictionary. An illegal move raises an error that maps to HTTP 409.
-3. Apply transitions with a conditional UPDATE: `UPDATE listings SET status = :to WHERE id = :id AND status = :from`, then check the row count. This is the M8 pattern, learned in a calmer setting.
+3. Apply transitions with a conditional UPDATE: `UPDATE listings SET status = :to WHERE id = :id AND status = :from`, then check the row count. This is the M7 pattern, learned in a calmer setting.
 4. A pure price rule: asking price may not exceed the original price. Unit-test it.
 5. An audit helper, `record(session, actor_id, entity, entity_id, action, metadata)`, called inside the same transaction as the change.
 6. Endpoints: create (DRAFT to PENDING\_VERIFICATION), PATCH price only in allowed states, DELETE cancels only from ACTIVE, plus admin pending, approve and reject.
-7. Listing expiry from ACTIVE to EXPIRED as a plain query for now; it gets a schedule in M11.
+7. Listing expiry from ACTIVE to EXPIRED as a plain query for now; it gets a schedule in M9.
 8. Tests: every illegal transition fails; a seller cannot list someone else's ticket; a second open listing for one ticket fails; the audit row rolls back together with a failed change.
 
 **As built:** the `listings` table already existed from M2, so the M5 migration adds only indexes. Create makes a `DRAFT`, and a separate `POST /listings/{id}/submit` sends it for review, so a seller can fix a draft before an admin sees it. The seller can cancel from `DRAFT`, `PENDING_VERIFICATION` or `ACTIVE`; an admin only from `ACTIVE`. The audit column is `details`, not `metadata` (see `docs/database-design.md`).
@@ -349,7 +344,7 @@ Each module lists what to know before you start, what to watch and read, what to
 
 **Explain it:** Why check the current state inside the UPDATE's WHERE clause instead of reading it first in Python? What happens to the audit row when the listing update fails?
 
-### M6 · Discovery: search, filters, pagination (Days 32 to 35)
+### M6 · Discovery: search, filters, pagination (Tue 24 Nov)
 
 **Goal:** buyers search and filter listings with keyset pagination, and every common query uses an index at 100,000 rows, proven with `EXPLAIN ANALYZE`.
 
@@ -370,60 +365,27 @@ Each module lists what to know before you start, what to watch and read, what to
 
 **Build**
 
-1. A seed script that creates 2,000 events and 100,000 listings. Indexes show no effect on 50 rows.
-2. `GET /listings` with filters for event name, category, city, price range and ticket category, sorted by date or price.
-3. Keyset pagination: the cursor encodes the last row's sort value and id, then `WHERE (price, id) > (:p, :id) ORDER BY price, id LIMIT 20`. Cap page size at 100.
-4. Indexes: `listings(event_id, status)`, `listings(status, price, id)`, `listings(status, created_at, id)` and a trigram GIN index on `events.name`. Record before-and-after timings.
-5. `GET /events/{id}/listings`.
-6. Response models that expose public fields only: no seller email, no ticket documents.
+1. `scripts/seed_discovery.py` (Faker): 2,000 events and 100,000 listings with their tickets and sellers, written only to a database whose name ends in `_perf`.
+2. Public `GET /listings`, `GET /events`, `GET /events/{id}` and `GET /events/{id}/listings`, with the filters and sorts in `docs/api-contract.md`. Public fields only: no seller email or name, no ticket documents, no provider references.
+3. Keyset pagination inside the shared `paginate()` helper, for every list endpoint, behind the same opaque cursor: sort name, last sort value and id. Page size 20 by default, 100 at most.
+4. Indexes: `listings(status, price, id)` and `listings(status, created_at, id)` as partial indexes on `ACTIVE`, a trigram GIN index on `events.name`, `events(status, starts_at)`, plus what `EXPLAIN ANALYZE` shows the joined filters need. Record before-and-after plans and timings; drop any index no plan uses.
+5. The browser tests move to their own database, recreated at the start of every run.
 
-**Screens:** the public search page: filters, results with infinite scroll over keyset cursors, and a listing detail page.
+**Screens:** `/` becomes the public search page (filters, sort, **Load more** over the cursor) and each event gets a page of its tickets for sale. The existing listing page is the detail view.
 
-**Done when:** page 500 loads as fast as page 1, and no common filter does a Seq Scan on `listings` at 100,000 rows.
+**Done when:** page 500 loads within 20% of page 1's time, and no common filter does a Seq Scan on `listings` at 100,000 rows.
+
+**First to drop if the day runs short:** the `GET /events` filters beyond name and city.
 
 **Explain it:** Why does `OFFSET 10000` get slower as the offset grows? Why does the order of columns in a composite index matter?
 
-### M7 · Interests and allocation (Days 36 to 38)
-
-**Goal:** buyers register interest; one buyer holds at most one active interest per listing; the seller or platform picks a winner by first-come-first-served, random choice or seller selection, and every pick is audited.
-
-**Prerequisites**
-
-- Tech: the M5 stack.
-- Knowledge: partial unique indexes (from M2); `INSERT ... ON CONFLICT`; the Strategy design pattern; why a fair random pick must be reproducible from the audit trail.
-
-**Learn first**
-
-- Video: [Queues in PostgreSQL](https://www.youtube.com/watch?v=B81nQLg4RuU) (PGCon talk by Thomas Munro, who worked on `SKIP LOCKED`). Explains ordered, concurrent picking from a table.
-- Video: re-watch the waiting-queue part of [Design Ticketmaster](https://www.youtube.com/watch?v=fhdPyoO6aXI) (Hello Interview).
-- Article: [INSERT ... ON CONFLICT](https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT) (PostgreSQL docs)
-- Article: [secrets module](https://docs.python.org/3/library/secrets.html) (Python docs), for unbiased random choice.
-
-**Build**
-
-1. `interests` migration with a partial unique index on `(listing_id, buyer_id) WHERE status = 'ACTIVE'`.
-2. `POST /listings/{id}/interests`: reject the seller and any listing that is not ACTIVE; turn a unique violation into 409.
-3. `GET /listings/{id}/interests` for the seller and admins only; buyers never see each other.
-4. `DELETE /interests/{id}` moves the interest to WITHDRAWN, owner only.
-5. Three allocation strategies behind one interface: FCFS (`ORDER BY created_at, id`), random (`secrets.SystemRandom`, with the candidate list and choice written to the audit log) and seller-selected (validate that the chosen interest is ACTIVE).
-6. The winning interest becomes SELECTED; the rest stay ACTIVE as fallbacks if the reservation later expires. Record this choice in an ADR.
-7. Tests: duplicate interest, seller interest, FCFS picks the earliest, and random picks spread roughly evenly over 1,000 runs.
-
-**Screens:** an **I'm interested** button on a listing and a **My interests** page with withdraw; the seller sees the interested buyers and picks a winner.
-
-**Done when:** each strategy has tests, and the audit log alone is enough to explain any past pick.
-
-**Explain it:** Why must buyers not see the list of other interested buyers? How would you prove to a suspicious buyer that the random pick was fair?
-
-### M8 · Reservations and concurrency (Days 39 to 46)
+### M7 · Reservations and concurrency (Wed 25 Nov)
 
 **Goal:** 100 buyers reserving one listing at the same instant produce exactly one reservation, every time; expired reservations release the listing safely, even with two expiry workers running.
 
-This is the heart of the project. Take the full eight days, and do the experiments: comparing three locking approaches is where the real learning happens.
-
 **Prerequisites**
 
-- Tech: the M7 stack, a multi-worker uvicorn in Docker, httpx, `concurrent.futures`.
+- Tech: the M6 stack, a multi-worker uvicorn in Docker, httpx, `concurrent.futures`.
 - Knowledge: race conditions; isolation levels (READ COMMITTED, REPEATABLE READ, SERIALIZABLE); row locks; `SELECT ... FOR UPDATE` and `SKIP LOCKED`; deadlocks; Python threads.
 
 **Learn first**
@@ -437,72 +399,45 @@ This is the heart of the project. Take the full eight days, and do the experimen
 - Article: [Deeply understand isolation levels and read phenomena](https://dev.to/techschoolguru/understand-isolation-levels-read-phenomena-in-mysql-postgres-c2e) (Tech School). Reproduce each anomaly yourself in two `psql` windows.
 - Article: [How to implement a database job queue using SKIP LOCKED](https://vladmihalcea.com/database-job-queue-skip-locked/) (Vlad Mihalcea), for the expiry worker.
 - Article: [Hermitage](https://github.com/ept/hermitage) (Martin Kleppmann): tests of what each database's isolation levels actually prevent.
-- Book: chapter 7, Transactions, of [Designing Data-Intensive Applications](https://dataintensive.net/) (Kleppmann). Worth buying; you will reuse it in M10 and M11.
+- Book: chapter 7, Transactions, of [Designing Data-Intensive Applications](https://dataintensive.net/) (Kleppmann). Worth buying; you will reuse it in M8 and M9.
 
 **Build**
 
-1. `reservations` migration with a partial unique index allowing one open reservation (CREATED or PAYMENT\_PENDING) per listing. This is the safety net under your application logic.
-2. One `reserve(listing_id, buyer_id)` service used by both the direct endpoint and the M7 allocation path.
-3. Inside one transaction: `UPDATE listings SET status = 'RESERVED' WHERE id = :id AND status = 'ACTIVE' AND seller_id <> :buyer RETURNING id`. Zero rows means 409. Otherwise insert the reservation with `expires_at = now() + 10 minutes`, write the audit row and commit.
-4. On an experiment branch, build two alternatives: `SELECT ... FOR UPDATE` then check in Python, and SERIALIZABLE isolation with a retry on SQLSTATE 40001.
-5. The race test: run the API with `uvicorn --workers 4`, then fire 100 simultaneous requests from 100 different users with a thread pool. Assert 1 success, 99 conflicts, one open reservation row and a RESERVED listing. Run it against all three approaches and record latency and results in `docs/reservation-design.md`.
-6. A second race: a seller cancels while buyers reserve (plan.md concurrency test 5).
-7. `GET /reservations/{id}` (buyer only) and `POST /reservations/{id}/cancel` (CREATED only, listing back to ACTIVE).
-8. `app/workers/expire_reservations.py`, a loop every 30 seconds: claim expired CREATED reservations with `FOR UPDATE SKIP LOCKED`, mark them EXPIRED and release each listing with a conditional UPDATE. It leaves PAYMENT\_PENDING alone until M10 makes that safe.
-9. Run two expiry workers together and assert each reservation expired exactly once, by counting audit rows.
+1. `reservations` migration with a partial unique index allowing one live reservation (`CREATED`, `PAYMENT_PENDING` or `CONFIRMED`) per listing: the safety net under the application logic.
+2. `POST /listings/{id}/reservations` in one transaction: `UPDATE listings SET status = 'RESERVED' WHERE id = :id AND status = 'ACTIVE' AND seller_id <> :buyer AND expires_at > now() RETURNING id`; zero rows means 409. Then insert the reservation with `expires_at = now() + 10 minutes` and write the audit rows.
+3. `GET /reservations/{id}`, `GET /reservations/me` and `POST /reservations/{id}/cancel` (only from `CREATED`; the listing goes back to `ACTIVE`).
+4. An event with a `RESERVED` listing cannot be cancelled (409) until the hold ends.
+5. In `tests/concurrency/` only, two alternatives: `SELECT ... FOR UPDATE` then check in Python, and SERIALIZABLE with a retry on SQLSTATE 40001.
+6. The race test: `uvicorn --workers 4` on Linux, 100 users released together. Assert 1 success, 99 conflicts, one live reservation row and a `RESERVED` listing, by reading the database. Run all three approaches and record results and latency in `docs/reservation-design.md`.
+7. A second race: a seller cancels while buyers reserve.
+8. `scripts/expire_reservations.py`, a loop every 30 seconds: claim due `CREATED` reservations with `FOR UPDATE SKIP LOCKED`, expire each and release its listing. It never touches `PAYMENT_PENDING`. Two workers together expire each reservation exactly once, counted by audit rows.
 
-**Screens:** **Reserve** on a listing, a countdown from `expires_at`, and a plain message when someone else got there first or the hold ran out. Open two browsers and race them.
+**Screens:** **Reserve** on a listing, a countdown from `expires_at`, **Cancel**, and a plain message when someone else got there first or the hold ran out.
 
-**Done when:** plan.md's Phase 3 exit test passes 20 runs in a row: 100 concurrent buyers, exactly one reservation.
+**Done when:** the 100-buyer race passes 20 runs in a row on 4 workers, and the comparison of three approaches is recorded.
+
+**First to drop if the day runs short:** the SERIALIZABLE variant of the comparison.
 
 **Explain it:** Under READ COMMITTED, what does the second UPDATE do while the first is uncommitted, and what does it see afterwards? When would you choose `SELECT ... FOR UPDATE` over a conditional UPDATE? Why can FastAPI's `TestClient` never prove concurrency safety?
 
-### M9 · Orders and idempotency (Days 47 to 50)
+### M8 · Orders and payments: idempotency, fake gateway, webhooks, reconciliation (Thu 26 Nov)
 
-**Goal:** `POST /orders` creates exactly one order per reservation; replaying the same `Idempotency-Key` returns the same response; reusing a key with a different body is rejected; order status changes only through a state machine.
+**Goal:** `POST /orders` creates exactly one order per reservation and replays the same response for the same `Idempotency-Key`; a fake gateway behaves like a real one; every webhook is verified and applied exactly once in effect; reconciliation repairs drift; expiry never releases a paid listing.
 
 **Prerequisites**
 
-- Tech: the M8 stack.
-- Knowledge: which HTTP methods are idempotent (GET, PUT, DELETE) and which are not (POST); why clients retry (timeouts, flaky mobile networks); unique constraints as a form of idempotency; storing a response so it can be replayed.
+- Tech: the M7 stack; a second small FastAPI app, `fakepay`, in its own container; Python's `hmac` and `hashlib`.
+- Knowledge: which HTTP methods are idempotent and why clients retry; unique constraints as idempotency; storing a response so it can be replayed; webhooks; HMAC-SHA256 and constant-time comparison; replay attacks and timestamp windows; at-least-once delivery; reconciliation; the race between reservation expiry and payment success.
 
 **Learn first**
 
 - Video: [Idempotency in APIs Explained, Why It Matters + Code Example](https://www.youtube.com/watch?v=dZTkBeB_dmg) (Arkynate, 6 minutes)
 - Video: [How Idempotency Works](https://roadmap.sh/videos/how-idempotency-prevents-duplicate-payments) (roadmap.sh): a payment succeeds, the response is lost, the app retries.
-- Article: [Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys) (Brandur Leach). The most important read for M9 and M10; it builds almost exactly what you need.
+- Article: [Implementing Stripe-like Idempotency Keys in Postgres](https://brandur.org/idempotency-keys) (Brandur Leach). The most important read for M8; it builds almost exactly what you need.
 - Article: [Designing robust and predictable APIs with idempotency](https://stripe.com/blog/idempotency) (Stripe)
 - Article: [The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/) (IETF draft 08, updated Oct 2026): the header's semantics and error codes.
 - Article: [Avoiding Double Payments in a Distributed Payments System](https://medium.com/airbnb-engineering/avoiding-double-payments-in-a-distributed-payments-system-2981f6b070bb) (Airbnb Engineering)
 - Article: [How to avoid double payment](https://blog.bytebytego.com/p/how-to-avoid-double-payment) (ByteByteGo)
-
-**Build**
-
-1. `orders` migration with `reservation_id` UNIQUE (one order per reservation, enforced by the database), `listing_id`, buyer, seller, `amount` copied from the listing on the server, currency, status and `idempotency_key`.
-2. An `idempotency_keys` table keyed on `(user_id, key)` with `request_hash`, `response_status`, `response_body`, `locked_at` and a 24-hour expiry.
-3. The flow: insert the key row with `ON CONFLICT DO NOTHING`. If it already existed: a different request hash returns 422, a stored response is replayed, and an in-progress key returns 409. Otherwise do the work and store the response in the same transaction.
-4. The order state machine with the M5 pattern: CREATED, PAYMENT\_PENDING, PAID, TRANSFER\_PENDING, COMPLETED, plus the failure branches.
-5. Checks: the reservation must be the buyer's own, unexpired and CREATED.
-6. `GET /orders/{id}` for the buyer or seller, and `GET /orders/me` with keyset pagination.
-7. Tests: 50 concurrent requests with the same key (plan.md concurrency test 2); same key with a different body; an expired reservation; another user's reservation.
-
-**Screens:** checkout from a reservation into an order. The page makes one `Idempotency-Key` per checkout click and reuses it on retries: the browser's half of idempotency. A **My orders** page with each order's status.
-
-**Done when:** 50 concurrent requests sharing one `Idempotency-Key` create exactly one order, and all 50 receive the same response body.
-
-**Explain it:** Two layers stop duplicate orders here, the key table and `reservation_id` UNIQUE. What does each catch that the other misses? Why must the amount come from the database and never from the request?
-
-### M10 · Payments: fake gateway, webhooks, reconciliation (Days 51 to 58)
-
-**Goal:** a fake gateway behaves like a real one (success, failure, delays, duplicate and forged webhooks, timeouts); the backend verifies every webhook, applies each provider event exactly once in effect, and a reconciliation job repairs any drift.
-
-**Prerequisites**
-
-- Tech: the M9 stack; a second small FastAPI app in its own container as the fake gateway; Python's `hmac` and `hashlib`.
-- Knowledge: webhooks (the provider calls you); HMAC-SHA256 signatures and constant-time comparison; replay attacks and timestamp windows; at-least-once delivery; reconciliation; the race between reservation expiry and payment success.
-
-**Learn first**
-
 - Video: [Webhooks for Beginners, Full Course](https://www.youtube.com/watch?v=41NOoEz3Tzc) (freeCodeCamp). The first hour is enough.
 - Video: [Securing Stream Ciphers (HMAC)](https://www.youtube.com/watch?v=wlSG3pEiQdc) (Computerphile)
 - Article and video: [Your Idempotent Code Is Lying To You](https://codeopinion.com/your-idempotent-code-is-lying-to-you/) (CodeOpinion). Why calling a gateway outside your database transaction can still double-charge.
@@ -513,29 +448,32 @@ This is the heart of the project. Take the full eight days, and do the experimen
 
 **Build**
 
-1. The fake gateway container `fakepay`: create an intent, then a test checkout where you pick the outcome (success, failure, delay N seconds, webhook sent twice, bad signature, webhook never sent). It keeps its own records and exposes a lookup endpoint for reconciliation, plus refunds.
-2. `payments` migration (`provider_transaction_id` UNIQUE, amount, currency, status, `idempotency_key`, `provider_response` as JSONB) and `payment_events` with `provider_event_id` UNIQUE.
-3. `POST /payments/intents`: save a PENDING payment row first, then call the gateway with your idempotency key, so a crash or retry never creates two intents. Order and reservation move to PAYMENT\_PENDING.
-4. `POST /payments/webhooks/fakepay`: read the raw body; verify the HMAC with `compare_digest`; reject timestamps older than 5 minutes; insert into `payment_events` with `ON CONFLICT DO NOTHING` and return 200 at once for duplicates. For a new event, in one transaction: check amount and currency against the order, then move payment, order and reservation to their success or failure states.
-5. Make expiry safe: the expiry worker now skips any reservation with a pending or succeeded payment. An expired PAYMENT\_PENDING reservation is checked against the gateway, never released blindly.
-6. A reconciliation script (it moves to Celery beat in M11): find payments PENDING for more than N minutes, ask the gateway, and fix local state through the same transition functions. Each run writes a `reconciliation_runs` row listing every fix; a second run changes nothing.
-7. Refunds: PAID to REFUND\_PENDING to REFUNDED through a gateway refund and a refund webhook, deduplicated the same way.
-8. Tests for plan.md's list: a webhook delivered 10 times changes state once; a forged signature returns 401 and changes nothing; a late webhook after reconciliation already fixed things is a no-op; expiry racing payment success, run 50 times, never releases a paid listing; a payment timeout leaves a recoverable order.
+1. `orders` migration (`reservation_id` UNIQUE, the amount copied from the listing on the server) and `idempotency_keys` keyed on `(user_id, key)`: insert with `ON CONFLICT DO NOTHING`; a different body is 422, a stored response is replayed, a key in progress is 409.
+2. The order state machine with the M5 pattern: `CREATED`, `PAYMENT_PENDING`, `PAID`, `PAYMENT_FAILED`, `CANCELLED`, `TRANSFER_PENDING`, `COMPLETED`, `TRANSFER_FAILED`.
+3. The `fakepay` container: intents (the payment id is the idempotency key), a checkout page and an API that pick the outcome (success, failure, delay, webhook twice, bad signature, no webhook), a lookup endpoint. No refunds.
+4. `payments` saved as `CREATED` before the gateway is called, `payment_events` unique on the provider's event id, `reconciliation_runs`.
+5. The webhook: raw body, `hmac.compare_digest`, a 5-minute timestamp window, the dedupe insert answering duplicates with 200, the amount check, then success or failure applied through the transition functions in one transaction.
+6. Safe expiry: a `PAYMENT_PENDING` reservation is resolved by asking the gateway, never released by the clock.
+7. A reconciliation script that repairs stuck payments through the same transition functions; a second run changes nothing.
+8. Tests: 50 concurrent requests with one key; same key, different body; a webhook delivered 10 times; a forged signature; a late webhook after reconciliation; an amount mismatch; expiry racing payment success, 50 runs; a gateway timeout.
 
-**Screens:** payment through fakepay's own page with its success, failure and delay choices; the order page polls until the payment settles.
+**Screens:** checkout from a reservation (one `Idempotency-Key` per click, reused on retry), `fakepay`'s page with its outcome buttons, an order page that polls until the payment settles, and **My orders**.
 
-**Done when:** plan.md's Phase 4 exit test holds: delayed, duplicated and failed payment events all recover correctly, each with an automated test.
+**Done when:** 50 concurrent requests sharing one `Idempotency-Key` create one order with 50 identical responses, and delayed, duplicated and failed payments all end in a correct state, each with an automated test.
 
-**Explain it:** Why verify the HMAC over raw bytes rather than parsed JSON? Why answer a duplicate webhook with 200 instead of an error? If the server crashes after the gateway charged the card but before you saved anything, which component discovers it, and how?
+**First to drop if the day runs short:** the delay and no-webhook buttons on `fakepay`'s page (they stay as test switches).
 
-### M11 · Messaging: RabbitMQ, Celery, transactional outbox (Days 59 to 66)
+**Explain it:** Two layers stop duplicate orders here, the key table and `reservation_id` UNIQUE. What does each catch that the other misses? Why must the amount come from the database and never from the request? Why verify the HMAC over raw bytes rather than parsed JSON? Why answer a duplicate webhook with 200 instead of an error? If the server crashes after the gateway charged the card but before you saved anything, which component discovers it, and how?
 
-**Goal:** every business event is saved in the same transaction as the change that caused it, reaches a worker even if RabbitMQ was down, and is applied once even when delivered twice; expiry and reconciliation run on Celery beat.
+### M9 · Outbox, RabbitMQ, Celery and the transfer (Fri 27 Nov)
+
+**Goal:** every business event is saved in the same transaction as the change that caused it, reaches a worker even if RabbitMQ was down, and is applied once even when delivered twice; a paid order completes by moving the ticket to the buyer; expiry and reconciliation run on Celery beat.
 
 **Prerequisites**
 
 - Tech: RabbitMQ (management image), Celery, pika for the learning exercises.
 - Knowledge: producers, exchanges, queues, bindings; acks, nacks and prefetch; at-most-once versus at-least-once delivery; the dual-write problem; dead-letter queues; exponential backoff with jitter.
+- Knowledge, too: multi-step workflows across systems (sagas); when to retry and when to stop for a human.
 
 **Learn first**
 
@@ -548,89 +486,30 @@ This is the heart of the project. Take the full eight days, and do the experimen
 - Article: [Consumer Acknowledgements and Publisher Confirms](https://www.rabbitmq.com/docs/confirms) and [Dead Letter Exchanges](https://www.rabbitmq.com/docs/dlx) (RabbitMQ docs)
 - Article: [First steps with Celery](https://docs.celeryq.dev/en/stable/getting-started/first-steps-with-celery.html), [Tasks: retrying and acks\_late](https://docs.celeryq.dev/en/stable/userguide/tasks.html) and [Periodic tasks](https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html) (Celery docs). No Celery video beats these pages.
 - Article: [What do you mean by "Event-Driven"?](https://martinfowler.com/articles/201701-event-driven.html) (Martin Fowler)
-
-**Build**
-
-1. Before Celery hides it, do RabbitMQ tutorials 1 to 5 and 7 with raw pika in a scratch folder.
-2. Add `rabbitmq`, `worker` and `beat` services to Compose. Celery does not support Windows, so the worker and beat always run in containers.
-3. An `emit(session, aggregate_type, aggregate_id, event_type, payload)` helper that inserts into `outbox_events` inside the caller's transaction. Call it for payment succeeded or failed, reservation expired, listing approved and transfer results.
-4. A relay process that loops: lock unpublished rows with `FOR UPDATE SKIP LOCKED LIMIT 100`, publish each with broker confirmation, set `published_at`, and on failure bump `retry_count` and back off.
-5. Consumers as Celery tasks with `acks_late=True`, automatic retries with backoff and jitter, and a `processed_events (consumer, event_id)` unique table so a redelivered message does nothing. After the last retry the message goes to a dead-letter queue.
-6. Move reservation expiry, listing expiry and reconciliation onto Celery beat.
-7. Failure drills: stop RabbitMQ while making payments and watch outbox rows wait, then start it and see them all published; `docker kill` a worker mid-task and see the message redelivered and ignored the second time; send a poison message and find it in the DLQ.
-
-**Screens:** none new. The pages from M8 to M10 keep working while the work moves onto workers; RabbitMQ's management page at `localhost:15672` shows the queues.
-
-**Done when:** plan.md's Phase 5 exit test holds: events survive a broker outage and worker crashes with nothing lost and nothing applied twice.
-
-**Explain it:** Why not simply publish to RabbitMQ right after the commit? Exactly-once delivery is impossible, so how do you still get an exactly-once effect? What does `acks_late` fix, and what new risk does it add?
-
-### M12 · Transfers and notifications (Days 67 to 70)
-
-**Goal:** a payment-succeeded event starts a transfer with a fake ticket provider; success completes the order, marks the listing SOLD and changes the ticket's owner; failure ends in retry, manual review and refund; buyer and seller get in-app notifications for each step.
-
-**Prerequisites**
-
-- Tech: the M11 stack and a fake provider container.
-- Knowledge: multi-step workflows across systems (sagas); compensating actions versus rollback; when to retry and when to stop for a human.
-
-**Learn first**
-
 - Article: [Pattern: Saga](https://microservices.io/patterns/data/saga.html) (Chris Richardson)
-- Video: [Saga Pattern for Distributed Transactions](https://conf42.com/Cloud_Native_2023_Dmitry_Khorev_saga_pattern_distributed_transactions) (Dmitry Khorev, Conf42 conference talk)
-- Video: re-watch the acknowledgement part of [RabbitMQ Crash Course](https://www.youtube.com/watch?v=Cie5v59mrTg) (Hussein Nasser)
-- Article: [WebSockets](https://fastapi.tiangolo.com/advanced/websockets/) (FastAPI docs), only if you add live notifications later.
 
 **Build**
 
-1. The fake provider: `POST /transfers` with a configurable result (success, failure, slow) delivered by callback.
-2. `transfers` migration with `order_id` UNIQUE. The payment-succeeded consumer creates the transfer as INITIATED and moves the order to TRANSFER\_PENDING.
-3. On provider success, in one transaction: transfer COMPLETED, order COMPLETED, listing SOLD, ticket `current_owner_id` set to the buyer, and a transfer-completed event emitted.
-4. On failure: retry with backoff N times, then REQUIRES\_MANUAL\_REVIEW and order TRANSFER\_FAILED. `POST /transfers/{id}/retry` is admin-only and works only from retryable states.
-5. A permanent failure triggers a refund through the M10 flow. Record this compensation policy in an ADR.
-6. `notifications` migration and a consumer that turns each event into one notification per affected user, idempotently.
-7. `GET /notifications` (own only, paginated) and `PATCH /notifications/{id}/read`.
-8. Tests: a paid order is never COMPLETED before the transfer succeeds (FR-10); a duplicate payment event creates one transfer; a permanent failure ends in manual review plus refund.
+1. `rabbitmq`, `worker`, `beat` and `relay` in Compose. Celery does not support Windows, so these always run in containers.
+2. `emit(session, aggregate_type, aggregate_id, event_type, payload)` inserting into `outbox_events` in the caller's transaction, for payment succeeded and failed, reservation expired and transfer completed.
+3. The relay: `FOR UPDATE SKIP LOCKED LIMIT 100`, publish through Celery with publisher confirms, set `published_at`; on failure bump `retry_count` and back off.
+4. Consumers as Celery tasks with `acks_late`, retries with backoff and jitter, a dead-letter queue after the last retry, and `processed_events (consumer, event_id)` written with the consumer's effect.
+5. The transfer consumer: `transfers` with `order_id` UNIQUE, an in-process provider adapter, and on success one transaction for transfer `COMPLETED`, order `COMPLETED`, listing `SOLD` and the ticket's new owner. Exhausted retries end in `REQUIRES_MANUAL_REVIEW`.
+6. A notifications consumer (one notification per user per event) with `GET /notifications` and mark-as-read. No screen.
+7. Reservation expiry, listing expiry and reconciliation on Celery beat.
+8. Failure drills: stop RabbitMQ while paying; kill a worker mid-task; send a poison message.
 
-**Screens:** a notifications bell with an unread count; the order page shows transfer progress, retries and refunds; the buyer's **My tickets** shows the transferred ticket.
+**Screens:** the order page shows the transfer until **Completed**, the buyer's **My tickets** shows the bought ticket, and the seller's listing shows **Sold**.
 
-**Done when:** one integration test runs the whole happy path (reserve, order, pay, transfer, notify), and another runs the failed-transfer path to a refund.
+**Done when:** one integration test runs reserve, order, pay, webhook, outbox and consumer to a completed transfer, and the drills end with nothing lost and nothing applied twice.
 
-**Explain it:** Why is an order not COMPLETED at PAID? Why is a refund after a failed transfer a compensation and not a rollback?
+**First to drop if the day runs short:** the notifications consumer.
 
-### M13 · Disputes and admin (Days 71 to 73)
+**Explain it:** Why not simply publish to RabbitMQ right after the commit? Exactly-once delivery is impossible, so how do you still get an exactly-once effect? What does `acks_late` fix, and what new risk does it add? Why is an order not `COMPLETED` at `PAID`?
 
-**Goal:** buyers and sellers open disputes with evidence; admins review and resolve them and suspend fraudulent accounts; every admin action is audited; users can read their full transaction history.
+### M10 · Caching and rate limiting (Sat 28 Nov)
 
-**Prerequisites**
-
-- Tech: roles from M3, storage from M4, events from M11.
-- Knowledge: role-based access control; broken access control as the top web risk; designing a history table that never loses entries.
-
-**Learn first**
-
-- Video: re-watch [IDOR Explained](https://www.youtube.com/watch?v=rloqMGcPMkI) (PwnFunction) with admin routes in mind.
-- Article: [Authorization Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) (OWASP)
-- Article: re-read the [Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) (OWASP) for audit content.
-
-**Build**
-
-1. `disputes` and `dispute_events` (an append-only history) migrations, with a fixed list of reasons and evidence stored through the M4 adapter.
-2. `POST /orders/{id}/disputes` for that order's buyer or seller, and a list of your own disputes.
-3. Admin: `GET /admin/disputes` and a resolve action (refund buyer, release to seller, reject), each writing a dispute event, an audit row and an outbox event for notifications.
-4. Admin suspension: revoke the user's refresh tokens (M3) and cancel their active listings through the state machine.
-5. `GET /users/me/history`: orders, payments and transfers merged into one paginated timeline.
-6. A test that lists every `/admin` route from the app's router and proves a normal user gets 403 on each.
-
-**Screens:** **Open a dispute** with evidence from an order; an admin dispute queue with resolve, refund and suspend; a **History** page listing every transaction; the message a suspended account sees.
-
-**Done when:** that route-enumerating test passes, so no admin route can be added later without protection.
-
-**Explain it:** Where exactly is the admin check enforced, and how do you know no admin route was missed?
-
-### M14 · Caching and rate limiting (Days 74 to 77)
-
-**Goal:** public reads come from Redis through cache-aside with TTLs and invalidation on listing changes; login, listing creation, reservation, payment and search are rate limited with 429 and `Retry-After`; no inventory decision ever reads Redis.
+**Goal:** public reads come from Redis through cache-aside with TTLs and invalidation on listing changes; login, search, reservation and payment are rate limited with 429 and `Retry-After`; no inventory decision ever reads Redis.
 
 **Prerequisites**
 
@@ -649,28 +528,30 @@ This is the heart of the project. Take the full eight days, and do the experimen
 
 **Build**
 
-1. A Redis service, a client in `infrastructure/redis`, and a setting that switches caching off so you can measure its effect.
-2. Cache-aside for `GET /events/{id}` and the first page of popular searches, with keys that include every filter and a 30 to 60 second TTL.
-3. Invalidation after commit: a listing state change bumps a per-event version number that is part of the cache key, so old entries are never read again.
-4. Stampede protection with a short lock or jittered TTLs.
-5. A rate-limit dependency (sliding-window counter, or token bucket in a Lua script) keyed on user or IP, with per-endpoint limits. Login is keyed on email plus IP.
-6. Decide per endpoint what happens when Redis is down: the cache fails open (read from Postgres); record your rate-limiter choice in an ADR.
-7. Tests: second call is a cache hit; a reservation attempt on a listing shown in a stale cached search still gets 409 from Postgres; the sixth login in a minute gets 429.
+1. A Redis service, a client in `infrastructure/redis`, and a setting that switches caching off so its effect can be measured.
+2. Cache-aside for `GET /events/{id}` and the first page of searches, keyed on every filter and the sort, with jittered 30 to 60 second TTLs.
+3. Invalidation after commit through version numbers in the keys: one per event, one for search.
+4. A token bucket in one Lua script, per endpoint, keyed on user or IP; login on email plus IP. Every limit is a setting.
+5. When Redis is down the cache and the limiter both fail open, logged and counted; the trade-off is written up.
+6. Tests: a second call is a hit; a reservation from a stale cached search still gets 409 from Postgres; the sixth login in a minute gets 429.
 
-**Screens:** the 429 message with a countdown from `Retry-After` on login, search and reserve.
+**Screens:** one shared message with a countdown from `Retry-After`, on login, search and reserve.
 
 **Done when:** with Redis stopped, the app still gives correct answers, only slower, and the cache hit ratio is measurable.
 
+**First to drop if the day runs short:** caching `GET /events/{id}/listings`.
+
 **Explain it:** Why is a slightly stale search result acceptable while a stale inventory check is not? Why invalidate after the commit and not before?
 
-### M15 · Observability (Days 78 to 83)
+### M11 · Observability and delivery (Sun 29 Nov)
 
-**Goal:** Grafana shows request rate, errors and p50, p95 and p99 latency per endpoint, plus reservation conflicts, payment outcomes, outbox backlog, queue depth and database pool use; one trace follows a purchase from API to database, outbox, RabbitMQ, worker and provider; logs carry request and correlation IDs.
+**Goal:** Grafana shows request rate, errors and p50, p95 and p99 latency per endpoint, plus reservation conflicts, payment outcomes, outbox backlog, queue depth and database pool use; one trace follows a purchase from API to database, outbox, RabbitMQ and worker; CI builds the Docker image and scans the dependencies.
 
 **Prerequisites**
 
 - Tech: Prometheus, Grafana, Jaeger, the OpenTelemetry SDK, prometheus-fastapi-instrumentator.
 - Knowledge: counters, gauges and histograms; percentiles; the four golden signals (latency, traffic, errors, saturation); label cardinality; spans and trace-context propagation.
+- Tech, too: Docker, Bandit, pip-audit.
 
 **Learn first**
 
@@ -683,182 +564,69 @@ This is the heart of the project. Take the full eight days, and do the experimen
 - Article: [OpenTelemetry Python: Getting Started by Example](https://opentelemetry.io/docs/languages/python/getting-started/) (its example is Flask; the ideas carry over) and [FastAPI instrumentation](https://opentelemetry-python-contrib.readthedocs.io/en/latest/instrumentation/fastapi/fastapi.html)
 - Article: [Jaeger Getting Started](https://www.jaegertracing.io/docs/latest/getting-started/) and [Get started with Grafana and Prometheus](https://grafana.com/docs/grafana/latest/getting-started/get-started-grafana-prometheus/)
 - Article: [structlog context variables](https://www.structlog.org/en/stable/contextvars.html)
+- Article: [Multi-stage builds](https://docs.docker.com/build/building/multi-stage/) (Docker docs)
+- Article: [Bandit](https://bandit.readthedocs.io/en/latest/) and [pip-audit](https://github.com/pypa/pip-audit)
 
 **Build**
 
-1. Prometheus, Grafana and Jaeger containers; enable RabbitMQ's Prometheus plugin.
-2. `/metrics` through the instrumentator, plus custom metrics: `reservation_attempts_total{result}`, `payment_events_total{type,outcome}`, a webhook processing histogram, an outbox backlog gauge, worker retries and checked-out database connections.
-3. Keep labels low-cardinality: never a user ID or listing ID as a label.
-4. OpenTelemetry for FastAPI, SQLAlchemy, Celery and httpx. Store trace context in each outbox event so the worker's span joins the API's trace.
-5. Bind `request_id`, `correlation_id` (the trace ID), `order_id` and `reservation_id` to logs through contextvars; redact tokens and secrets.
-6. Commit the Grafana dashboard JSON and provision it automatically.
-7. Define alert rules: outbox backlog above a threshold for 5 minutes, error rate above 1%, webhook failures.
+1. Prometheus, Grafana and Jaeger containers; RabbitMQ's Prometheus plugin.
+2. `/metrics` through the instrumentator, plus `reservation_attempts_total{result}`, `payment_events_total{type,outcome}`, a webhook histogram, an outbox backlog gauge, worker retries and checked-out database connections. Never a user or listing id as a label.
+3. A Grafana dashboard committed as JSON and provisioned on start.
+4. OpenTelemetry for FastAPI, SQLAlchemy, httpx and Celery, with the trace context stored in each outbox event so the worker's span joins the API's trace.
+5. CI builds the non-root image and checks that it answers `/api/v1/health`; Bandit, pip-audit and `npm audit` fail the build on high severity.
 
-**Screens:** none in the app; Grafana is this module's screen. Error messages show the response's request ID, so a screenshot from a user leads straight to the trace.
+**Screens:** none in the app; Grafana is this module's screen.
 
-**Done when:** you can take one failed purchase, find it in the logs by order ID, open its trace and point at the step that failed and how long each step took.
+**Done when:** you can take one failed purchase, find it in the logs by order ID, open its trace and point at the step that failed.
+
+**First to drop if the day runs short:** the trace through RabbitMQ (API and database spans stay), then the Celery panels.
 
 **Explain it:** Why record latency as a histogram rather than an average? Why is a user ID a terrible metric label? How does one trace continue across RabbitMQ?
 
-### M16 · CI/CD, security and documentation (Days 84 to 89)
+### M12 · Load testing and results (Mon 30 Nov)
 
-**Goal:** every push runs lint, type checks and unit, integration and concurrency tests against real Postgres, Redis and RabbitMQ; `main` builds a Docker image; a security pass leaves no open high-severity findings; a stranger can run and understand the project from the README.
-
-**Prerequisites**
-
-- Tech: GitHub Actions, Docker multi-stage builds, mypy, Bandit, pip-audit, OWASP ZAP.
-- Knowledge: CI versus CD; caching dependencies in CI; secrets in CI; the OWASP API Security Top 10; the ADR format.
-
-**Learn first**
-
-- Video: re-watch the Docker build part of [GitHub Actions Tutorial](https://www.youtube.com/watch?v=R8_veQiYBjI) (TechWorld with Nana)
-- Video: re-watch the Dockerfile section of [Docker Tutorial for Beginners](https://www.youtube.com/watch?v=3c-iBn73dDE) (TechWorld with Nana)
-- Article: [Building and testing Python](https://docs.github.com/en/actions/tutorials/build-and-test-code/python) (GitHub docs)
-- Article: [Multi-stage builds](https://docs.docker.com/build/building/multi-stage/) (Docker docs)
-- Article: [OWASP API Security Top 10, 2023](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
-- Article: [ZAP baseline scan](https://www.zaproxy.org/docs/docker/baseline-scan/), [Bandit](https://bandit.readthedocs.io/en/latest/) and [pip-audit](https://github.com/pypa/pip-audit)
-- Article: [Documenting Architecture Decisions](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions) (Michael Nygard) and [adr.github.io](https://adr.github.io/)
-
-**Build**
-
-1. CI stages: ruff and mypy, then unit tests, then integration tests with Postgres, Redis and RabbitMQ service containers, then the concurrency tests. Cache uv dependencies.
-2. A multi-stage Dockerfile running as a non-root user; build and push to GitHub Container Registry on `main`.
-3. A security pass against the OWASP API Top 10: object-level authorization (M4, M13), authentication (M3), rate limits (M14), CORS limited to your frontend's origin, request size limits, no secrets in logs, webhook verification (M10). Run Bandit, pip-audit and a ZAP baseline scan against the running stack; fix or document every finding.
-4. Secrets: `.env` never committed, GitHub Actions secrets in CI, and a note on how production would store them.
-5. Documentation: a README with a one-command start, an architecture diagram and a demo script; the notes from every module; ADRs for sync SQLAlchemy, lock strategy, idempotency, outbox relay, compensation, cache invalidation and Redis failure behaviour. Leave an empty Results section in the README for M17's numbers.
-6. A demo script that runs a full purchase and one failure drill in under 5 minutes, for interviews.
-
-**Screens:** the frontend joins the security pass (`npm audit`, a Content Security Policy) and the README's quick start runs both halves.
-
-**Done when:** plan.md's Phase 7 exit holds: a fresh machine runs `docker compose up`, CI is green, and a reviewer can follow any request through code, logs, metrics and traces.
-
-**Explain it:** answer plan.md section 23's eight questions out loud, without notes.
-
-### M17 · Performance, concurrency and resilience testing (Days 90 to 101)
-
-**Goal:** the finished backend goes through fourteen kinds of test, each with a written hypothesis, a repeatable script and a recorded result. Every invariant still holds afterwards, and the numbers that go on your resume are measured on documented hardware.
-
-This campaign runs once the backend is finished, so every number describes the real system. The tests each module already has (M2's IntegrityError test, M8's race test, M10's expiry race, M11's broker drill) stay where they are, because a module is not done without them. M17 repeats them at scale and adds everything else.
+**Goal:** the finished backend is measured under load and under contention, every invariant still holds afterwards, and the numbers that go on your resume come from scripts anyone can rerun on documented hardware.
 
 **Prerequisites**
 
-- Tech: Grafana k6 (run from its Docker image), pytest, Hypothesis, Testcontainers, Toxiproxy, Docker Compose, and the M15 Prometheus and Grafana dashboards.
-- Knowledge: throughput versus latency; percentiles and coordinated omission; Postgres isolation levels, row locks and deadlock detection; connection pools; chaos experiments (hypothesis, blast radius, rollback).
+- Tech: Grafana k6 from its Docker image, the M6 seed script, the M11 dashboards.
+- Knowledge: throughput versus latency; percentiles and coordinated omission; why one IP playing 1,000 users needs the rate limits raised.
 
 **Learn first**
 
 - Video: re-watch [How NOT to Measure Latency](https://www.youtube.com/watch?v=lJ8ydIuPFeU) (Gil Tene)
 - Article: [Grafana k6 docs](https://grafana.com/docs/k6/latest/), its [load test types](https://grafana.com/docs/k6/latest/testing-guides/test-types/) (load, stress, spike, soak), [scenarios](https://grafana.com/docs/k6/latest/using-k6/scenarios/) and [thresholds](https://grafana.com/docs/k6/latest/using-k6/thresholds/)
-- Article: [Transaction Isolation](https://www.postgresql.org/docs/current/transaction-iso.html) and [Explicit Locking](https://www.postgresql.org/docs/current/explicit-locking.html), which covers deadlocks (PostgreSQL docs)
-- Article: [Lock Monitoring](https://wiki.postgresql.org/wiki/Lock_Monitoring) (PostgreSQL wiki) and [the cumulative statistics system](https://www.postgresql.org/docs/current/monitoring-stats.html), where `pg_stat_database.deadlocks` lives
-- Article: [Hermitage](https://github.com/ept/hermitage) (Martin Kleppmann): isolation anomalies written as two-session scripts. Copy the method.
-- Article: [Stateful tests](https://hypothesis.readthedocs.io/en/latest/stateful.html) (Hypothesis docs) and [Testcontainers for Python](https://testcontainers-python.readthedocs.io/en/latest/)
-- Article: [Connection Pooling](https://docs.sqlalchemy.org/en/20/core/pooling.html) (SQLAlchemy docs) and [PgBouncer](https://www.pgbouncer.org/)
-- Article: [Principles of Chaos Engineering](https://principlesofchaos.org/) and [Toxiproxy](https://github.com/Shopify/toxiproxy) (Shopify)
-
-**The fourteen tests**
-
-| # | Test | How it runs in TicketLoop | Passes when |
-| --- | --- | --- | --- |
-| 1 | Load | k6 ramps to 100, 500 and 1,000 virtual users with a realistic mix: browsers 80% (search, view), buyers 15% (interest, reserve, order, pay), sellers 5% | Reads under 300 ms p95 and reservations under 500 ms p95 (NFR-03); error rate under 1% |
-| 2 | Stress | Keep ramping past 1,000 (toward plan.md's 10,000) until errors or p99 climb sharply | You can name the breaking point, what failed first (pool, CPU, Postgres, Redis) and the graph that shows it |
-| 3 | Spike | 0 to 1,000 users in seconds on one hot listing, then back to baseline | Exactly one reservation in the database, every other buyer a clean 409, no 5xx, latency back to baseline afterwards |
-| 4 | Soak | 2 to 4 hours at about 60% of the load-test peak | Memory, connection count, outbox backlog and queue depth stay flat; errors do not creep up |
-| 5 | Race condition | Re-run the M8 and M10 races with 4 API workers, 100 times each, plus cancel-versus-reserve and webhook-versus-reconciliation | Zero double bookings and zero released paid listings, in every run |
-| 6 | Deadlock | Provoke one on purpose (two transactions locking two rows in opposite order), then audit every multi-row transaction for a consistent lock order | Postgres detects it (SQLSTATE `40P01`), the app retries or returns a clean error, and `pg_stat_database.deadlocks` stays at 0 under normal load |
-| 7 | Lock contention | Measure waits on the hot listing with `log_lock_waits`, `pg_locks`, wait events in `pg_stat_activity` and a `lock_timeout`; compare M8's three reservation strategies under the spike | Lock-wait p95 recorded per strategy, and no wait longer than `lock_timeout` |
-| 8 | Transaction isolation | pytest with a Testcontainers Postgres and two connections, scripted in Hermitage style: dirty read, non-repeatable read, lost update and write skew, at Read Committed and Serializable | Each anomaly is either impossible or shown harmless because a conditional UPDATE or a constraint blocks it |
-| 9 | Idempotency | 50 concurrent `POST /orders` with one `Idempotency-Key`; the same key with a different body; one webhook delivered 10 times, out of order; a consumer message redelivered | One order, one payment effect and one notification; the different body gets 422 |
-| 10 | Data integrity | `scripts/check_invariants.sql` runs after every other test (no ticket in two open listings, no listing with two live reservations, every succeeded payment belongs to a paid or later order); Hypothesis stateful tests drive random sequences of transitions | The script returns zero rows, every time; Hypothesis finds no sequence that breaks a state machine |
-| 11 | Distributed coordination | Several API instances, two outbox relays and two expiry workers at once. The lock is a Postgres row or `SKIP LOCKED`, not Redis, because Postgres decides (M0). Redis rate-limit counters are checked across all instances | Each reservation expires exactly once, each event takes effect once, and rate limits hold across instances |
-| 12 | Failure recovery | Every plan.md section 12 drill: kill the API mid-order, stop RabbitMQ, kill a worker, gateway timeouts, latency and a cut database through Toxiproxy, failing transfers | Nothing lost, nothing applied twice, invariants hold, and the system recovers by itself except for documented manual-review cases |
-| 13 | Connection pool | Shrink and grow `pool_size` and `max_overflow`, push past Postgres `max_connections`, then try PgBouncer | You know the pool size that gives the best throughput, and saturation shows up as timeouts in the metrics, not as hangs |
-| 14 | Latency | p50, p95 and p99 per endpoint, from k6 and the M15 Prometheus histograms, at every load stage | Recorded for every stage, with the slowest endpoint explained |
-
-A Redis distributed lock is deliberately not part of the design: two systems that can both say "this ticket is taken" can disagree. Test 11 checks coordination where TicketLoop actually does it.
-
-**Tools**
-
-| Tool | Role here |
-| --- | --- |
-| Grafana k6 | Load, stress, spike, soak and latency runs; the one load tool, so every run is comparable |
-| pytest | Runs the isolation, race, deadlock, idempotency, integrity and recovery tests |
-| Hypothesis | Stateful property-based tests of the state machines |
-| Testcontainers | A throwaway Postgres 17 per suite, with test-only settings such as a short `deadlock_timeout` and `log_lock_waits` on |
-| PostgreSQL | The system under test, read through `pg_stat_database`, `pg_locks`, `pg_stat_activity` and `pg_stat_statements` |
-| Redis | Already in the stack (M14): rate-limit counters across instances, and behaviour when Redis is down |
-| Prometheus and Grafana | Built in M15; the source of every server-side number and graph |
-| Toxiproxy | Adds latency and cuts connections for the failure drills |
-| Docker Compose | The whole stack, reproducible, with the API scaled to several instances |
-| Locust, Apache JMeter | Not used. k6 covers both, and one load tool keeps results comparable |
-
-**Numbers for your resume**
-
-| Metric | Measured from |
-| --- | --- |
-| Maximum requests per second | k6 summary at the stress test's breaking point |
-| Maximum concurrent users | The highest k6 stage that still met the latency and error targets |
-| p50, p95 and p99 latency | k6 summary and Prometheus histograms |
-| Error rate (%) | k6 `http_req_failed` |
-| Transaction throughput | `pg_stat_database.xact_commit` per second, and completed purchases per minute |
-| Deadlock frequency | `pg_stat_database.deadlocks` before and after each run |
-| Lock wait time | `log_lock_waits` lines and `pg_stat_activity` wait events, p95 per strategy |
-| Database connection use | The M15 pool gauges against pool size, and the Postgres connection count |
-| Successful transactions under contention | Spike test: one winner, every other buyer a clean 409, zero 5xx |
-| Duplicate transactions prevented | Idempotent replays, deduplicated webhooks and skipped redeliveries, counted from `idempotency_keys`, `payment_events` and `processed_events` |
-| Overselling and data corruption incidents | `check_invariants.sql` across every run. The target, and the claim, is 0 |
-
-Every number is reported with the hardware, the data volume and the script that produced it, so you can defend it in an interview. A laptop will likely top out before 10,000 users; where and why it does is a finding, not a failure.
 
 **Build**
 
-1. `docs/test-plan.md`: for each of the fourteen tests, the hypothesis, the script, the metric and the pass line, written before running anything.
-2. Seed data at realistic volumes (extend the M6 seed script), and k6 scripts in `tests/load/` with thresholds, so each run passes or fails by itself.
-3. `scripts/check_invariants.sql`, run after every test that follows.
-4. Performance tests in this order: latency baseline, load, stress, spike, soak, connection pool. Tune one thing at a time (pool size, uvicorn workers, an index, a cache TTL), re-run, and record before and after.
-5. Concurrency tests in `tests/concurrency/` against a Testcontainers Postgres: race, deadlock, lock contention, isolation and distributed coordination.
-6. Correctness tests: idempotency storms and Hypothesis stateful tests.
-7. Failure drills in `tests/failure/`. For each: hypothesis, run, what you saw, what you fixed.
-8. `docs/test-results.md` with the tables, Grafana screenshots and hardware; copy the resume numbers into the README's Results section.
-9. Add the fast suites (isolation, idempotency, integrity, small-scale races) to the M16 CI pipeline.
+1. `docs/test-plan.md` first: hypothesis, script, metric and pass line for each test.
+2. k6 scripts with thresholds in `tests/load/`: a load test at 100, 500 and 1,000 users (80% browse, 20% buy); a spike of 1,000 users on one listing; the M7 race 100 times and M8's expiry-versus-payment race; RabbitMQ stopped mid-run.
+3. `scripts/check_invariants.sql`, run after every test, returning zero rows.
+4. `docs/test-results.md` with the tables, Grafana screenshots, hardware and data volume.
+5. The README rewrite: a one-command start, an architecture diagram, a demo script and a Results section with the numbers.
 
-**Screens:** none; the load tests call the API directly. The browser tests run once more against the tuned stack as a smoke check.
+**Screens:** none; the load tests call the API directly. The browser tests run once more against the finished stack.
 
-**Done when:** every one of the fourteen tests has a script, a recorded result, and either a pass or an explained failure; `check_invariants.sql` returned zero rows after every run; the resume table is filled from real runs; and plan.md's Phase 6 exit holds.
+**Done when:** each test has a script and a recorded result, the invariants returned zero rows after every run, and the README's Results come from real runs.
 
-**Explain it:** Where is your bottleneck, and what is the evidence? What does p99 tell you that an average hides? How do you produce a deadlock, and how does TicketLoop avoid one? Which anomaly does Read Committed allow, and why does it not hurt TicketLoop? How do you know you never oversold a ticket? What would you change first to handle ten times the traffic?
+**First to drop if the day runs short:** everything except the spike, the races at scale, the 100-user load stage, the invariants and the README Results.
 
-### M18 · Frontend polish (Days 102 to 110)
+**Explain it:** Where is your bottleneck, and what is the evidence? What does p99 tell you that an average hides? How do you know you never oversold a ticket? What would you change first to handle ten times the traffic?
 
-**Goal:** every screen built since M3 gets a design and accessibility pass and consistent loading, empty and error states, and works on a phone; a non-technical friend can buy a ticket through it.
+## Cut from the plan (23 Nov 2026)
 
-**Prerequisites**
+TicketLoop is a resume project that will not launch, and it had one more week. These were cut so the week goes to the backend problems interviewers ask about; [the slim-roadmap design](docs/superpowers/specs/2026-11-23-slim-roadmap-m6-m12-design.md) has the reasoning.
 
-- Tech: the `frontend/` app as it stands, Playwright, axe.
-- Knowledge: the React and TanStack Query you used module by module; the trade-offs of keeping tokens in memory versus cookies; CORS and Content Security Policy.
-
-**Learn first**
-
-- Article: [TanStack Query overview](https://tanstack.com/query/latest/docs/framework/react/overview), on caching and background refetching
-- Article: [web.dev Learn Accessibility](https://web.dev/learn/accessibility) and the [Playwright accessibility testing guide](https://playwright.dev/docs/accessibility-testing)
-- Article: [Web Locks API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Locks_API) and [BroadcastChannel](https://developer.mozilla.org/en-US/docs/Web/API/BroadcastChannel) (MDN)
-
-**Build**
-
-1. One layout, type scale and spacing across every screen; list what confused you on each while building the modules, and fix it.
-2. Loading, empty and error states on every page, so nothing ever shows a blank wait or a raw status code.
-3. An axe check inside the Playwright tests, and a keyboard-only walk through the whole purchase.
-4. Session polish: logging out in one tab logs out the others at once (BroadcastChannel), and the access token refreshes shortly before it expires instead of after a 401.
-5. Route-level code splitting and a bundle size budget.
-6. A production build served from the API's origin, or behind one reverse proxy; if the two ever split, CORS allows only the frontend's origin.
-
-**Done when:** a non-technical friend can buy a ticket through the UI on your local stack, and the browser tests with the axe check pass in CI.
-
-**Explain it:** why must two tabs never refresh at the same moment, and how does a Web Lock prevent it without any server change?
+- **Old M7 · Interests and allocation.** Buyers reserve directly; first come, first served is the race itself.
+- **Old M13 · Disputes and admin.** No disputes, suspensions or history timeline. The route-enumerating admin guard test already exists from M5.
+- **Refunds, everywhere.** A transfer that fails for good stops in manual review; cancelling an event after a sale does nothing to its orders.
+- **The fake ticket-provider container and admin transfer retry or abandon.** The transfer calls an in-process adapter.
+- **Old M18 · Frontend polish.** From M6, only the buying flow gets screens.
+- **From old M15 to M17:** alert rules, the ZAP scan, a Content Security Policy, pushing the image to a registry, stress testing toward 10,000 users, soak, deadlock and isolation suites, Hypothesis, Testcontainers, Toxiproxy and connection-pool tuning.
 
 ## Day-by-day plan
 
-The plan runs 110 sessions: 22 weeks at 5 sessions a week, or 101 sessions without the optional frontend. Tick each day off as you finish it. A session is roughly 1 hour of learning and 2 to 3 hours of building; the links for every named video or article are in that module's section above.
+The plan ran 110 sessions: 22 weeks at 5 sessions a week. After Day 31 it is slimmed to one module a day for a week; see the final week below. Tick each day off as you finish it. A session is roughly 1 hour of learning and 2 to 3 hours of building; the links for every named video or article are in that module's section above.
 
 Three rules keep it honest:
 
@@ -914,133 +682,21 @@ Three rules keep it honest:
 - [ ] **Day 29 · M5.** Listing endpoints (create, change price, cancel) and admin pending, approve and reject.
 - [ ] **Day 30 · M5.** Listing expiry query; the table-driven test of every (from, to) pair; the audit rollback test.
 
-### Week 7 · Days 31 to 35 · Listings finish and discovery (M5, M6)
+### Week 7 · Day 31 · Listings finish (M5)
 
 - [ ] **Day 31 · M5 · Checkpoint.** Buffer day. `docs/notes/listings.md` and the Explain-it check.
-- [ ] **Day 32 · M6.** Re-watch the indexing video; read the opening chapters of Use The Index, Luke. Seed 2,000 events and 100,000 listings.
-- [ ] **Day 33 · M6.** `GET /listings` with filters and sorting. Measure each query with `EXPLAIN ANALYZE` before adding indexes.
-- [ ] **Day 34 · M6.** Watch PlanetScale's pagination video; read No Offset. Keyset pagination; compare OFFSET and keyset at page 500.
-- [ ] **Day 35 · M6 · Checkpoint.** Composite and trigram indexes; re-measure and record before and after; public response models.
 
-### Week 8 · Days 36 to 40 · Interests and concurrency theory (M7, M8)
+### The final week · 24 to 30 November 2026 · M6 to M12
 
-- [ ] **Day 36 · M7.** Watch Queues in PostgreSQL. Interests migration and partial unique index; create, list and withdraw endpoints.
-- [ ] **Day 37 · M7.** Three allocation strategies behind one interface, each pick audited.
-- [ ] **Day 38 · M7 · Checkpoint.** Tests, including the random spread over 1,000 runs; ADR on fallback interests.
-- [ ] **Day 39 · M8.** Watch Kleppmann's Transactions talk. Read PostgreSQL's Transaction Isolation page, the READ COMMITTED section twice.
-- [ ] **Day 40 · M8.** Reproduce dirty reads, non-repeatable reads, phantoms and lost updates in two `psql` windows with Tech School's article. Write notes.
+The slimmed plan: one module a day, each ending as one commit with its documentation page. When a day runs short, drop that module's "first to drop" item, never its tests.
 
-### Week 9 · Days 41 to 45 · Reservations (M8)
-
-- [ ] **Day 41 · M8.** Reservations migration and partial unique index; `reserve()` with the conditional UPDATE; the endpoint returns 201 or 409.
-- [ ] **Day 42 · M8.** Watch Corey Schafer's threading tutorial. Write the 100-buyer race test against `uvicorn --workers 4` in Docker.
-- [ ] **Day 43 · M8.** Experiment branch: a `SELECT ... FOR UPDATE` version and a SERIALIZABLE-with-retry version. Run the race test on all three.
-- [ ] **Day 44 · M8.** Record the comparison in `docs/reservation-design.md` as an ADR. Cancel endpoint and the cancel-versus-reserve race test.
-- [ ] **Day 45 · M8.** Read Vlad Mihalcea's SKIP LOCKED article. The expiry loop script and the two-worker expiry test.
-
-### Week 10 · Days 46 to 50 · Concurrency gate and orders (M8, M9)
-
-- [ ] **Day 46 · M8 · Checkpoint.** Run the race test 20 times and fix any flake. Explain-it check out loud. This is plan.md's Phase 3 exit.
-- [ ] **Day 47 · M9.** Watch the two idempotency videos. Read Brandur's idempotency-keys article in full.
-- [ ] **Day 48 · M9.** Orders migration with `reservation_id` UNIQUE; the order state machine; the `idempotency_keys` table.
-- [ ] **Day 49 · M9.** The idempotency flow: insert or replay, request hash, 409 while in progress.
-- [ ] **Day 50 · M9 · Checkpoint.** Order read endpoints; the 50-concurrent-same-key test; the different-body test.
-
-### Week 11 · Days 51 to 55 · Payments (M10)
-
-- [ ] **Day 51 · M10.** Watch the first hour of Webhooks for Beginners and Computerphile's HMAC video. Read Stripe's webhook docs and Razorpay's validation page.
-- [ ] **Day 52 · M10.** Build the fakepay container: intents, checkout with a chosen outcome, signed webhooks, lookup and refunds.
-- [ ] **Day 53 · M10.** Read CodeOpinion's idempotency article. Payments and payment\_events migrations; `POST /payments/intents` saving first, then calling the gateway.
-- [ ] **Day 54 · M10.** The webhook endpoint: raw-body HMAC, timestamp window, dedupe insert, amount check, transactional state updates.
-- [ ] **Day 55 · M10.** Make expiry payment-aware. Run the expiry-versus-payment race test 50 times.
-
-### Week 12 · Days 56 to 60 · Payments finish and RabbitMQ (M10, M11)
-
-- [ ] **Day 56 · M10.** Reconciliation script and `reconciliation_runs`; a test that a second run changes nothing.
-- [ ] **Day 57 · M10.** Refund flow with refund-webhook dedupe.
-- [ ] **Day 58 · M10 · Checkpoint.** Every plan.md payment failure test; `docs/payment-design.md`. This is plan.md's Phase 4 exit.
-- [ ] **Day 59 · M11.** Watch Hussein Nasser's RabbitMQ crash course. RabbitMQ tutorials 1 to 3 with pika.
-- [ ] **Day 60 · M11.** Tutorials 4, 5 and 7 (publisher confirms). Read RabbitMQ's confirms and dead-letter docs.
-
-### Week 13 · Days 61 to 65 · Outbox and Celery (M11)
-
-- [ ] **Day 61 · M11.** Watch the roadmap.sh and CodeOpinion outbox videos; read the two microservices.io patterns. `outbox_events` and `emit()` wired into payment, reservation and listing changes.
-- [ ] **Day 62 · M11.** The relay process: SKIP LOCKED, broker confirms, `published_at`, `retry_count`, backoff.
-- [ ] **Day 63 · M11.** Read Celery's First Steps and Tasks pages. Worker and beat services; the first consumer with `acks_late` and `processed_events`.
-- [ ] **Day 64 · M11.** Retries with backoff and jitter, dead-letter queue wiring, the poison-message test.
-- [ ] **Day 65 · M11.** Move reservation expiry, listing expiry and reconciliation onto Celery beat.
-
-### Week 14 · Days 66 to 70 · Messaging gate and transfers (M11, M12)
-
-- [ ] **Day 66 · M11 · Checkpoint.** Failure drills: broker outage, worker kill, double delivery; `docs/messaging-design.md`. This is plan.md's Phase 5 exit.
-- [ ] **Day 67 · M12.** Read the Saga pattern page. Fake provider container, transfers migration, the payment-succeeded consumer.
-- [ ] **Day 68 · M12.** The success transaction (transfer, order, listing SOLD, new owner); failure retries ending in manual review; the admin retry endpoint.
-- [ ] **Day 69 · M12.** Refund on permanent failure, with an ADR; notifications table, consumer and endpoints.
-- [ ] **Day 70 · M12 · Checkpoint.** End-to-end integration tests for the happy path and the failed-transfer path.
-
-### Week 15 · Days 71 to 75 · Disputes and caching (M13, M14)
-
-- [ ] **Day 71 · M13.** Read the OWASP Authorization cheat sheet. Disputes and dispute\_events; create and list disputes with evidence.
-- [ ] **Day 72 · M13.** Admin resolution with audit and outbox events; suspension that revokes tokens and cancels listings.
-- [ ] **Day 73 · M13 · Checkpoint.** The transaction history endpoint and the route-enumerating admin test.
-- [ ] **Day 74 · M14.** Watch Redis in 100 Seconds and ByteByteGo's cache video; read AWS caching best practices. Redis service, client and cache switch.
-- [ ] **Day 75 · M14.** Cache-aside for events and popular searches; version-key invalidation after commit; a stampede guard.
-
-### Week 16 · Days 76 to 80 · Rate limits and metrics (M14, M15)
-
-- [ ] **Day 76 · M14.** Read ByteByteGo's rate limiter chapter and Stripe's rate limiter post. The limiter dependency with 429 and `Retry-After`.
-- [ ] **Day 77 · M14 · Checkpoint.** Redis-down behaviour and its ADR; cache and rate-limit tests.
-- [ ] **Day 78 · M15.** Watch Nana's Prometheus video and Gil Tene's latency talk; read the SRE monitoring chapter. Prometheus and Grafana containers; `/metrics`.
-- [ ] **Day 79 · M15.** Custom business metrics with low-cardinality labels; outbox backlog and connection-pool gauges.
-- [ ] **Day 80 · M15.** The Grafana dashboard (golden signals plus business panels), committed and provisioned.
-
-### Week 17 · Days 81 to 85 · Tracing and CI (M15, M16)
-
-- [ ] **Day 81 · M15.** Watch the first half of the freeCodeCamp OpenTelemetry course. Jaeger container; instrument FastAPI, SQLAlchemy and httpx.
-- [ ] **Day 82 · M15.** Celery instrumentation and trace context carried in outbox events, so one trace spans API to worker.
-- [ ] **Day 83 · M15 · Checkpoint.** Log context (request, correlation and order IDs), redaction, alert rules. Trace one failed purchase end to end.
-- [ ] **Day 84 · M16.** Read GitHub's Python CI tutorial. The full pipeline with Postgres, Redis and RabbitMQ service containers, plus mypy.
-- [ ] **Day 85 · M16.** Multi-stage, non-root Dockerfile; build and push the image on `main`.
-
-### Week 18 · Days 86 to 90 · Hardening, docs and the test plan (M16, M17)
-
-- [ ] **Day 86 · M16.** Read the OWASP API Security Top 10 and walk the checklist; CORS and request size limits.
-- [ ] **Day 87 · M16.** Bandit, pip-audit and a ZAP baseline scan; fix or document each finding.
-- [ ] **Day 88 · M16.** Read Nygard's ADR article and finish the ADRs; README with the architecture diagram and one-command start.
-- [ ] **Day 89 · M16 · Checkpoint.** The demo script; answer plan.md section 23's eight questions out loud and record yourself. This is plan.md's Phase 7 exit.
-- [ ] **Day 90 · M17.** Re-watch Gil Tene's latency talk; read the k6 docs and its test-types guide. Write `docs/test-plan.md` for all fourteen tests and `scripts/check_invariants.sql`.
-
-### Week 19 · Days 91 to 95 · Performance tests (M17)
-
-- [ ] **Day 91 · M17.** Scale up the seed data; k6 scripts with thresholds. Latency baseline, then the load test at 100, 500 and 1,000 users.
-- [ ] **Day 92 · M17.** Read SQLAlchemy's pooling page. Stress test to the breaking point and the connection-pool test; name the bottleneck with evidence.
-- [ ] **Day 93 · M17.** The spike test on one hot listing, asserting one winner in the database; start the soak run.
-- [ ] **Day 94 · M17.** Read the soak results. Tune one thing at a time and re-run the load test; record before and after.
-- [ ] **Day 95 · M17.** Read Postgres's isolation and explicit-locking chapters and Hermitage. Testcontainers fixture; isolation tests for dirty read, non-repeatable read, lost update and write skew.
-
-### Week 20 · Days 96 to 100 · Concurrency, correctness and failure tests (M17)
-
-- [ ] **Day 96 · M17.** Race tests at scale, 100 runs each; provoke and handle a deadlock; audit lock order in every multi-row transaction.
-- [ ] **Day 97 · M17.** Read the Lock Monitoring wiki page. Lock contention per reservation strategy; distributed coordination with several API instances, relays and expiry workers.
-- [ ] **Day 98 · M17.** Read Hypothesis's stateful testing page. Idempotency storms; stateful property tests for the state machines.
-- [ ] **Day 99 · M17.** Read Principles of Chaos Engineering. Toxiproxy and every section 12 failure drill, with the invariants check after each.
-- [ ] **Day 100 · M17.** Fix what broke and re-run every test that failed.
-
-### Week 21 · Days 101 to 105 · Results and frontend polish (M17, M18)
-
-- [ ] **Day 101 · M17 · Checkpoint.** `docs/test-results.md`, the resume numbers and the README's Results section. This is plan.md's Phase 6 exit.
-- [ ] **Day 102 · M18.** List every screen and what confused you on it; one layout, type scale and spacing for all of them.
-- [ ] **Day 103 · M18.** Loading, empty and error states on every page.
-- [ ] **Day 104 · M18.** Read web.dev's accessibility course. An axe check in the Playwright tests; a keyboard-only walk through the purchase.
-- [ ] **Day 105 · M18.** Read MDN on Web Locks and BroadcastChannel. Cross-tab logout, and refresh shortly before expiry.
-
-### Week 22 · Days 106 to 110 · Frontend polish (M18)
-
-- [ ] **Day 106 · M18.** Route-level code splitting and a bundle size budget.
-- [ ] **Day 107 · M18.** A production build served from the API's origin; CORS and a Content Security Policy.
-- [ ] **Day 108 · M18.** A phone-width pass (390 px) over every screen.
-- [ ] **Day 109 · M18.** One browser test for the whole purchase, from search to transferred ticket, running in CI.
-- [ ] **Day 110 · M18 · Checkpoint.** A non-technical friend buys a ticket through the UI; fix whatever confused them.
+- [ ] **Tue 24 Nov · M6 · Checkpoint.** Seed 100,000 listings; public search with filters and sorts; keyset paging in the shared helper; indexes measured before and after with `EXPLAIN ANALYZE`; the search page.
+- [ ] **Wed 25 Nov · M7 · Checkpoint.** Reservations with the conditional UPDATE; the 100-buyer race on 4 workers, 20 runs; the three-way locking comparison; the expiry loop and the two-worker test; Reserve and the countdown.
+- [ ] **Thu 26 Nov · M8 · Checkpoint.** Orders with idempotency keys; `fakepay`; payments, signed webhooks and dedupe; payment-aware expiry; reconciliation; checkout and My orders.
+- [ ] **Fri 27 Nov · M9 · Checkpoint.** The outbox, relay, RabbitMQ and Celery; the transfer and notification consumers; beat; the three failure drills; the bought ticket in the buyer's name.
+- [ ] **Sat 28 Nov · M10 · Checkpoint.** Cache-aside with version keys; the Lua token bucket; Redis-down behaviour; the rate-limit message.
+- [ ] **Sun 29 Nov · M11 · Checkpoint.** Metrics, the Grafana dashboard, one trace from API to worker; the image and dependency scans in CI.
+- [ ] **Mon 30 Nov · M12 · Checkpoint.** The test plan, k6 load and spike runs, races at scale, the broker drill, the invariants check, the results and the README.
 
 ## How to avoid building blindly
 

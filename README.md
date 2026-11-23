@@ -16,7 +16,15 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M3 · Identity and auth | Done: register and login with Argon2id; 15-minute JWT access tokens; 7-day refresh tokens that rotate, with reuse detection that revokes the whole session; logout; password change and reset; `get_current_user` and `require_admin`; `GET` and `PATCH /users/me`; CI on every push |
 | M4 · Events, tickets and document storage | Done: admin event management with a status machine; ticket registration; proof of purchase in MinIO (S3) behind 5-minute signed links, typed by its first bytes; admin verification; one 404 for "missing" and "not yours" on every ticket route, proven by a test that enumerates them; screens for all of it |
 | M5 · Listings, verification and audit log | Done: listing a verified ticket at no more than face value; admin review with no self-review; one state machine whose every move is a conditional `UPDATE` plus an audit row in the same transaction; listing history; the event-cancel cascade and listing expiry; races between admins proven with real concurrent transactions; screens for all of it |
-| M6 · Discovery: search, filters, pagination | Next |
+| M6 · Discovery: search, filters, pagination | Next (Tue 24 Nov 2026) |
+| M7 · Reservations and the race | Planned (Wed 25 Nov) |
+| M8 · Orders and payments | Planned (Thu 26 Nov) |
+| M9 · Outbox, worker and transfer | Planned (Fri 27 Nov) |
+| M10 · Redis: caching and rate limits | Planned (Sat 28 Nov) |
+| M11 · Observability and delivery | Planned (Sun 29 Nov) |
+| M12 · Load testing and the numbers | Planned (Mon 30 Nov) |
+
+The roadmap was slimmed to these seven modules on 23 Nov 2026; see [the design](docs/superpowers/specs/2026-11-23-slim-roadmap-m6-m12-design.md) for what was cut and why.
 
 ## Run it
 
@@ -135,7 +143,7 @@ curl -s $B/listings/$LISTING                                                    
 curl -s $B/listings/$LISTING/history -H "Authorization: Bearer $HOLDER" | jq '.items[].action'
 ```
 
-`ACTIVE` listings whose end has passed become `EXPIRED` when the expiry job runs. Until M11 schedules it, run it by hand:
+`ACTIVE` listings whose end has passed become `EXPIRED` when the expiry job runs. Until M9's Celery beat schedules it, run it by hand:
 
 ```bash
 uv run python -m scripts.expire_listings   # Expired 0 listing(s).
@@ -189,7 +197,7 @@ app/
     listings/              listings, the listing state machine, review, history, the event cascade and expiry
     audit/                 the append-only audit log and record(), the one way to write to it
   infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory); later Redis, RabbitMQ
-  workers/                 background jobs (M8 onward)
+  workers/                 background jobs (M9 onward)
 tests/
   unit/                    fast, no external services
   integration/             need Postgres

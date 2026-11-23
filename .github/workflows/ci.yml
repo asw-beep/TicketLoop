@@ -2,7 +2,8 @@
 #   test       the backend: lint, migrations, every test against a real Postgres 17 and MinIO
 #   frontend   the React app: format, lint, types, unit tests, build, and API types in sync
 #   e2e        the browser tests: Chrome clicking through Vite, the API, Postgres, Mailpit and MinIO
-# M16 grows this into the full pipeline (type checks, Redis, RabbitMQ, concurrency tests).
+# Later modules add the services they need (Redis, RabbitMQ, fakepay, the worker), and M11 adds an
+# image build with a health check, Bandit, pip-audit and npm audit.
 name: CI
 
 on:
