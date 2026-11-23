@@ -66,6 +66,9 @@ test("a forgotten password is reset from the emailed link, which then stops work
   await page.getByRole("button", { name: "Log out" }).click();
 
   await page.getByRole("link", { name: "Forgot your password?" }).click();
+  // The address changes before the new page draws, and the login page has an Email field too:
+  // typing before the heading shows would fill the page that is on its way out.
+  await expect(page.getByRole("heading", { name: "Reset password" })).toBeVisible();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: "Send reset link" }).click();
   await expect(page.getByText("a reset link is on its way")).toBeVisible();
