@@ -4,7 +4,7 @@ PostgreSQL 17 is the single source of truth for inventory and money. This docume
 
 The draft is the target. From M2, each module's Alembic migration builds its own tables from it: M3 builds identity, M4 the catalogue, and so on. On 23 Nov 2026 the roadmap was slimmed: `interests`, `refunds`, `disputes`, `dispute_events` and `dispute_evidence` will never be built and are gone from the draft.
 
-**Built so far (M6):** the M2 migration created `users`, `ticket_providers`, `events`, `tickets`, `listings` and `audit_logs`; M3 added `refresh_tokens` and `password_reset_tokens`; M4 added `ticket_documents`, the column `tickets.verification_note`, and one seeded row in `ticket_providers` (`fakeprovider`, FakeProvider) so an admin can create events on a fresh database. Its downgrade removes that row only if no event uses it. M5 added no tables: its migration added five indexes (four on `listings`, one on `audit_logs`, marked below), and M5 is the first module to write `listings` and `audit_logs` rows. M6 added no tables: its migration created the `pg_trgm` extension and seven indexes, measured in [`discovery-performance.md`](discovery-performance.md).
+**Built so far (M7):** the M2 migration created `users`, `ticket_providers`, `events`, `tickets`, `listings` and `audit_logs`; M3 added `refresh_tokens` and `password_reset_tokens`; M4 added `ticket_documents`, the column `tickets.verification_note`, and one seeded row in `ticket_providers` (`fakeprovider`, FakeProvider) so an admin can create events on a fresh database. Its downgrade removes that row only if no event uses it. M5 added no tables: its migration added five indexes (four on `listings`, one on `audit_logs`, marked below), and M5 is the first module to write `listings` and `audit_logs` rows. M6 added no tables: its migration created the `pg_trgm` extension and seven indexes, measured in [`discovery-performance.md`](discovery-performance.md). M7 added `reservations` and its three indexes.
 
 ## Conventions
 
@@ -219,7 +219,7 @@ erDiagram
 | `tickets` | One entitlement to attend. `current_owner_id` changes only when a transfer completes. `verification_note` holds the admin's reason for a decision. | M4 (built) |
 | `ticket_documents` | Pointers to private evidence files in object storage: a random `storage_key` (`ticket-documents/<32 hex>`), the type read from the file's first bytes, and its size. The file name is never stored. At most 5 per ticket, enforced by the service. | M4 (built) |
 | `listings` | One ticket offered at one fixed price. Its row is the lock that decides who gets the ticket. | M5 (built) |
-| `reservations` | A 10-minute hold on a listing for one buyer | M7 |
+| `reservations` | A 10-minute hold on a listing for one buyer | M7 (built) |
 | `orders` | One purchase attempt, created from a reservation | M8 |
 | `idempotency_keys` | The stored response for each `Idempotency-Key`, so a retried request is answered from here instead of done twice | M8 |
 | `payments` | One attempt to collect money for one order | M8 |
@@ -274,7 +274,8 @@ Every index costs write time and disk space, so each one names its query. M6 che
 | `ix_tickets_owner (current_owner_id, created_at, id)`, **built in M6** | `GET /tickets/me`, newest first |
 | `ix_events_city (lower(city))`, **built in M6** | search by city. Without it, a city nobody sells in made the sort index walk every active listing (57 ms on 100,000 listings). |
 | `ix_tickets_category (lower(ticket_category))`, **built in M6** | search by ticket category. Without it, a category nobody sells made the sort index walk every active listing (over 100 ms on 100,000 listings). |
-| `ix_reservations_due (expires_at) WHERE status IN ('CREATED','PAYMENT_PENDING')` | the expiry worker |
+| `ix_reservations_due (expires_at) WHERE status IN ('CREATED','PAYMENT_PENDING')`, **built in M7** | the expiry worker |
+| `ix_reservations_buyer (buyer_id, created_at, id)`, **built in M7** | `GET /reservations/me`. Built in place of the draft's `(listing_id, status)`, which no query needs: a listing's live reservation is found through the unique index. |
 | `ix_orders_buyer (buyer_id, created_at, id)` | `GET /orders/me` with keyset pagination |
 | `ix_payments_unresolved (created_at) WHERE status IN ('CREATED','PENDING')` | reconciliation |
 | `ix_outbox_unpublished (created_at) WHERE published_at IS NULL` | the outbox relay. Partial, so it stays tiny no matter how many events were already published. |

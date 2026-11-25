@@ -85,11 +85,11 @@ class ListingOut(PublicListingOut):
 
 class HistoryEntryOut(ResponseModel):
     """One line of a listing's history. Who acted is a role, never an identity: the seller
-    must not learn which admin reviewed their listing."""
+    must not learn which admin reviewed their listing, or which buyer held it."""
 
     action: str
     from_status: ListingStatus | None
     to_status: ListingStatus | None
-    actor_role: Literal["seller", "admin", "system"]
+    actor_role: Literal["seller", "buyer", "admin", "system"]
     details: dict[str, Any]
     created_at: AwareDatetime

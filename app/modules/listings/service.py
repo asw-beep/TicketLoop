@@ -9,6 +9,7 @@ directly are for changes that are not status moves: created, price_changed, expi
 """
 
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select, update
@@ -23,6 +24,7 @@ from app.modules.events.models import EventStatus
 from app.modules.identity.models import User, UserRole
 from app.modules.listings.errors import (
     BadExpiryError,
+    EventHasReservationsError,
     ListingAlreadyOpenError,
     ListingChangedError,
     ListingNotApprovableError,
@@ -60,6 +62,9 @@ SAFE_HISTORY_KEYS = frozenset(
         "expires_at",
     }
 )
+
+# The listing moves a buyer makes by taking, or giving up, a hold.
+BUYER_ACTIONS = frozenset({"listing.reserved", "listing.released", "listing.expired"})
 
 NEWEST_FIRST = Sort("listings.newest", (Listing.created_at, Listing.id), descending=True)
 OLDEST_FIRST = Sort("listings.oldest", (Listing.created_at, Listing.id))
@@ -276,11 +281,13 @@ def list_history(
 
 
 def _history_entry(row: AuditLog, listing: Listing) -> HistoryEntryOut:
-    """Who acted is shown as a role: the seller never learns which admin it was."""
+    """Who acted is shown as a role: the seller never learns which admin, or which buyer."""
     if row.actor_id is None:
         role = "system"
     elif row.actor_id == listing.seller_id:
         role = "seller"
+    elif row.action in BUYER_ACTIONS:
+        role = "buyer"
     else:
         role = "admin"
     to_status = ListingStatus.DRAFT if row.action == "listing.created" else row.details.get("to")
@@ -353,7 +360,7 @@ def reject_listing(db: Session, listing_id: uuid.UUID, admin: User, reason: str)
 
 def _listing_for_review(db: Session, listing_id: uuid.UUID, admin: User) -> Listing:
     """Self-review first, then the state. Review acts only from PENDING_VERIFICATION, even
-    though ALLOWED has RESERVED -> ACTIVE (a released reservation, M8)."""
+    though ALLOWED has RESERVED -> ACTIVE (a released reservation)."""
     listing = db.get(Listing, listing_id)
     if listing is None:
         raise ListingNotFoundError()
@@ -366,20 +373,22 @@ def _listing_for_review(db: Session, listing_id: uuid.UUID, admin: User) -> List
 
 def cancel_open_listings_for_event(db: Session, event_id: uuid.UUID, actor_id: uuid.UUID) -> int:
     """Cancel the event's DRAFT, PENDING_VERIFICATION and ACTIVE listings, one transition and
-    one audit row each, in the caller's transaction. Returns how many.
+    one audit row each, in the caller's transaction. Returns how many. Refused while any of
+    them is RESERVED: a hold ends within 10 minutes unless a payment is under way, and a
+    payment must not be cancelled underneath the buyer.
 
-    The rows are locked first (in id order, so two callers never deadlock), so none can change
-    status underneath. RESERVED listings cannot exist before M8; M8 must decide what an event
-    cancel does to a reserved listing, whose buyer may be paying at that moment.
+    The rows are locked first, RESERVED ones too. Locking only the ones to cancel would miss a
+    listing being reserved at this moment: our SELECT would wait for that transaction, find the
+    row no longer matches, and skip it.
     """
-    stmt = (
-        select(Listing)
-        .where(Listing.event_id == event_id, Listing.status.in_(SELLER_CANCELLABLE))
-        .order_by(Listing.id)
-        .with_for_update(of=Listing)
-        .execution_options(populate_existing=True)
-    )
-    listings = db.scalars(stmt).all()
+    listings = _lock_open_listings(db, event_id)
+    reserved = sum(listing.status == S.RESERVED for listing in listings)
+    if reserved:
+        raise EventHasReservationsError(
+            f"Tickets held by buyers: {reserved}. A hold ends within 10 minutes unless it is "
+            "being paid for. Try again then.",
+            reserved_listings=reserved,
+        )
     for listing in listings:
         transition(
             db,
@@ -391,9 +400,22 @@ def cancel_open_listings_for_event(db: Session, event_id: uuid.UUID, actor_id: u
     return len(listings)
 
 
+def _lock_open_listings(db: Session, event_id: uuid.UUID) -> Sequence[Listing]:
+    """The event's open listings, locked in id order. A transaction that holds several listings
+    always takes them in id order; expire_reservations() does too, and they meet here."""
+    return db.scalars(
+        select(Listing)
+        .where(Listing.event_id == event_id, Listing.status.in_(OPEN_LISTING_STATUSES))
+        .order_by(Listing.id)
+        .with_for_update(of=Listing)
+        .execution_options(populate_existing=True)
+    ).all()
+
+
 def pull_back_listing_expiry(db: Session, event_id: uuid.UUID, starts_at: datetime) -> int:
     """After an event's start moves, no open listing may expire later than the new start.
     Not a status change, so no listing audit rows; the caller records the count."""
+    _lock_open_listings(db, event_id)  # an UPDATE alone would lock them in any order
     result = db.execute(
         update(Listing)
         .where(
@@ -413,6 +435,7 @@ def push_forward_listing_expiry(
     """After an event is put back, open listings that ended when it started (the default for a
     listing created without an end) end at the new start instead. A listing the seller set to
     end earlier keeps its end. Like the pull-back, no listing audit rows; the caller counts."""
+    _lock_open_listings(db, event_id)
     result = db.execute(
         update(Listing)
         .where(
@@ -426,11 +449,32 @@ def push_forward_listing_expiry(
     return result.rowcount
 
 
+def release_listing(
+    db: Session,
+    listing_id: uuid.UUID,
+    *,
+    actor_id: uuid.UUID | None,
+    reason: str,
+    now: datetime | None = None,
+) -> Listing:
+    """A hold ended without a sale: the RESERVED listing goes back on sale, or is EXPIRED if
+    its own end passed meanwhile. `reason` shows in the seller's history."""
+    listing = db.get_one(Listing, listing_id, populate_existing=True)
+    ended = listing.expires_at <= (now or db.scalar(select(func.now())))
+    return transition(
+        db,
+        listing,
+        ListingStatus.EXPIRED if ended else ListingStatus.ACTIVE,
+        actor_id=actor_id,
+        details={"reason": reason},
+    )
+
+
 def expire_listings(db: Session, now: datetime | None = None) -> int:
     """Move every ACTIVE listing whose expiry has passed to EXPIRED, as the system (no actor).
     Returns how many. SKIP LOCKED: a listing someone is changing right now is left for the
     next run, and two runs at once never wait on each other."""
-    now = now or datetime.now(UTC)
+    now = now or db.scalar(select(func.now()))
     stmt = (
         select(Listing)
         .where(Listing.status == ListingStatus.ACTIVE, Listing.expires_at <= now)

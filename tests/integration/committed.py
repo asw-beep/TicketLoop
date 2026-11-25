@@ -25,10 +25,12 @@ from app.main import create_app
 from app.modules.events.models import Event, TicketProvider
 from app.modules.identity.models import PasswordResetToken, RefreshToken, User
 from app.modules.listings.models import Listing
+from app.modules.reservations.models import Reservation
 from app.modules.tickets.models import Ticket, TicketDocument
 
 # Children before parents, so no foreign key blocks a delete.
 CLEANUP_ORDER = (
+    Reservation,
     Listing,
     TicketDocument,
     Ticket,

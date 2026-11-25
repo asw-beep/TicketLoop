@@ -1,7 +1,7 @@
 """Listings: one ticket offered at one fixed price.
 
 The listing row is the lock target. Reserving a ticket means moving exactly this row from
-ACTIVE to RESERVED with a conditional UPDATE (M8); no other row decides who gets the ticket.
+ACTIVE to RESERVED with a conditional UPDATE (M7); no other row decides who gets the ticket.
 """
 
 import uuid

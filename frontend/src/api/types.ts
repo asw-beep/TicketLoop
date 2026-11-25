@@ -22,6 +22,8 @@ export type ListingPatch = Schemas["ListingPatch"];
 export type ListingStatus = Listing["status"];
 export type HistoryEntry = Schemas["HistoryEntryOut"];
 export type RejectIn = Schemas["RejectIn"];
+export type Reservation = Schemas["ReservationOut"];
+export type ReservationStatus = Reservation["status"];
 /** The search query, without the paging parameters. */
 export type ListingQuery = Omit<
   NonNullable<paths["/api/v1/listings"]["get"]["parameters"]["query"]>,

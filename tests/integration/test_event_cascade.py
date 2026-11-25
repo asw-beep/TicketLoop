@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.modules.audit.models import AuditLog
 from app.modules.events.models import Event
 from app.modules.listings.models import Listing, ListingStatus
-from tests.integration.api import bearer
+from tests.integration.api import bearer, problem_code
 from tests.integration.factories import make_event, make_listing, make_verified_ticket
 
 pytestmark = pytest.mark.integration
@@ -29,9 +29,11 @@ def edit_event(api: TestClient, token: str, event: Event, body: dict[str, Any]) 
 
 
 def one_listing_per_status(db: Session, event: Event) -> dict[str, Listing]:
+    """Except RESERVED, which refuses the cancel (below)."""
     return {
         status: make_listing(db, ticket=make_verified_ticket(db, event_id=event.id), status=status)
         for status in ListingStatus
+        if status != ListingStatus.RESERVED
     }
 
 
@@ -64,6 +66,33 @@ def test_cancelling_an_event_cancels_its_open_listings(
             assert audit_rows(db_session, listing.id, "listing.cancelled") == []
     (event_row,) = audit_rows(db_session, published_event.id, "event.cancelled")
     assert event_row.details["cancelled_listings"] == 3
+
+
+def test_an_event_is_not_cancelled_while_a_buyer_holds_one_of_its_tickets(
+    api: TestClient, db_session: Session, admin: dict[str, str], published_event: Event
+) -> None:
+    ticket = make_verified_ticket(db_session, event_id=published_event.id)
+    reserved = make_listing(db_session, ticket=ticket, status="RESERVED")
+    ticket = make_verified_ticket(db_session, event_id=published_event.id)
+    active = make_listing(db_session, ticket=ticket, status="ACTIVE")
+
+    response = edit_event(api, admin["token"], published_event, {"status": "CANCELLED"})
+
+    assert response.status_code == 409
+    assert problem_code(response) == "event-has-reservations"
+    assert response.json()["reserved_listings"] == 1
+    # All of it, not the part that could be.
+    db_session.expire_all()
+    assert published_event.status == "PUBLISHED"
+    assert (reserved.status, active.status) == ("RESERVED", "ACTIVE")
+    assert audit_rows(db_session, published_event.id, "event.cancelled") == []
+
+    reserved.status = "SOLD"
+    db_session.flush()
+    response = edit_event(api, admin["token"], published_event, {"status": "CANCELLED"})
+    assert response.status_code == 200
+    db_session.expire_all()
+    assert (reserved.status, active.status) == ("SOLD", "CANCELLED")
 
 
 def test_another_events_listings_are_untouched(

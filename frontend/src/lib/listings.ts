@@ -75,7 +75,13 @@ export function historyLabel(entry: HistoryEntry): string {
         ? "Cancelled because the event was cancelled"
         : "Cancelled";
     case "listing.expired":
-      return "Expired";
+      return details.reason === "buyer_cancelled"
+        ? "Hold given up past the listing's end"
+        : "Expired";
+    case "listing.reserved":
+      return "Reserved";
+    case "listing.released":
+      return details.reason === "hold_expired" ? "Hold ran out; back on sale" : "Hold given up";
     default:
       return entry.action;
   }

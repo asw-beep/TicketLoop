@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import type { FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useLocation } from "react-router";
 import { api, unwrap } from "../api/client";
 import { useAuth } from "../auth/AuthProvider";
 import { Field, FormError, SubmitButton, errorsByField, formValues } from "../components/Form";
@@ -8,14 +8,13 @@ import { Ticket } from "../components/Ticket";
 
 export function RegisterPage() {
   const { logIn } = useAuth();
-  const navigate = useNavigate();
+  const { state } = useLocation();
   const register = useMutation({
     mutationFn: async ({ full_name, email, password }: Record<string, string>) => {
       const body = { full_name: full_name!, email: email!, password: password! };
       await unwrap(api.POST("/api/v1/auth/register", { body }));
-      return logIn(body.email, body.password); // straight in, no second form
+      return logIn(body.email, body.password); // straight in; GuestOnly leaves this page
     },
-    onSuccess: () => navigate("/account", { replace: true }),
   });
   const errors = errorsByField(register.error);
 
@@ -29,7 +28,10 @@ export function RegisterPage() {
       stub={<h1>Create account</h1>}
       footer={
         <p>
-          Already have an account? <Link to="/login">Log in</Link>
+          Already have an account?{" "}
+          <Link to="/login" state={state}>
+            Log in
+          </Link>
         </p>
       }
     >

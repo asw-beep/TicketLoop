@@ -12,11 +12,16 @@ export function newEmail(): string {
 
 export async function register(page: Page, email: string, name = "Asha Menon"): Promise<void> {
   await page.goto("/register");
+  await fillRegistration(page, email, name);
+  await expect(page.getByRole("heading", { name: "Your pass" })).toBeVisible();
+}
+
+/** Create an account from the form that is already open. */
+export async function fillRegistration(page: Page, email: string, name: string): Promise<void> {
   await page.getByLabel("Full name").fill(name);
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password").fill(PASSWORD);
   await page.getByRole("button", { name: "Create account" }).click();
-  await expect(page.getByRole("heading", { name: "Your pass" })).toBeVisible();
 }
 
 export async function logIn(page: Page, email: string, password: string): Promise<void> {

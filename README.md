@@ -17,8 +17,8 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M4 · Events, tickets and document storage | Done: admin event management with a status machine; ticket registration; proof of purchase in MinIO (S3) behind 5-minute signed links, typed by its first bytes; admin verification; one 404 for "missing" and "not yours" on every ticket route, proven by a test that enumerates them; screens for all of it |
 | M5 · Listings, verification and audit log | Done: listing a verified ticket at no more than face value; admin review with no self-review; one state machine whose every move is a conditional `UPDATE` plus an audit row in the same transaction; listing history; the event-cancel cascade and listing expiry; races between admins proven with real concurrent transactions; screens for all of it |
 | M6 · Discovery: search, filters, pagination | Done: public search with filters and sorts; keyset pagination on every list; indexes proven with `EXPLAIN ANALYZE` on 100,000 listings ([results](docs/discovery-performance.md)): page 500 in 0.2 ms against 45 ms with `OFFSET`; the front page is the search |
-| M7 · Reservations and the race | Next |
-| M8 · Orders and payments | Planned (Thu 26 Nov) |
+| M7 · Reservations and the race | Done: 10-minute holds by one conditional `UPDATE`; 100 buyers against four API processes end with exactly one winner, 20 rounds in a row; compared with `FOR UPDATE` and `SERIALIZABLE` ([design and numbers](docs/reservation-design.md)); holds expire with `SKIP LOCKED`; an event with a held ticket can't be cancelled; reserve, countdown and cancel on screen |
+| M8 · Orders and payments | Next |
 | M9 · Outbox, worker and transfer | Planned (Fri 27 Nov) |
 | M10 · Redis: caching and rate limits | Planned (Sat 28 Nov) |
 | M11 · Observability and delivery | Planned (Sun 29 Nov) |
@@ -167,6 +167,31 @@ unset DATABASE_URL                           # back to the development database
 curl -s "$B/listings?q=cup&city=Mumbai&max_price_paise=500000&sort=-created_at" | jq '.items[].event.name'
 ```
 
+## Try the reservation
+
+Open a listing from the search in two browsers with two accounts (neither the seller's) and press **Reserve** in both. One gets a page counting down from 10:00; the other is told somebody was first. **Cancel hold** gives the ticket back; **My holds** lists every hold.
+
+```bash
+curl -s -X POST $B/listings/$LISTING/reservations -H "Authorization: Bearer $BUYER"   # 201, or 200 if you hold it
+curl -s $B/reservations/me -H "Authorization: Bearer $BUYER" | jq '.items[0]'
+```
+
+Holds that run out are closed by a loop that Celery beat replaces in M9:
+
+```bash
+uv run python -m scripts.expire_reservations          # every 30 seconds; --once for a single pass
+```
+
+The race itself, against four API processes and a database of its own:
+
+```bash
+uv run pytest tests/concurrency                                              # every race, 3 rounds
+RACE_ROUNDS=20 uv run pytest tests/concurrency/test_reservation_race.py      # the recorded proof
+uv run python -m tests.concurrency.report                                    # three locking strategies, compared
+```
+
+(In PowerShell: `$env:RACE_ROUNDS = '20'` first, and `Remove-Item Env:RACE_ROUNDS` after.)
+
 ## Migrations
 
 ```bash
@@ -215,16 +240,17 @@ app/
     tickets/               ticket registration, evidence uploads and links, admin verification
     listings/              listings, the listing state machine, review, history, the event cascade and expiry
     discovery/             public search: filters, sorts, the event's listings
-    audit/                 the append-only audit log and record(), the one way to write to it
+    reservations/          10-minute holds: the race, cancelling, expiry
+    audit/                 the append-only audit log, record() to write to it, and the state machine class
   infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory); later Redis, RabbitMQ
   workers/                 background jobs (M9 onward)
 tests/
   unit/                    fast, no external services
   integration/             need Postgres
-  concurrency/ failure/ load/   later modules
+  concurrency/             real races: four API processes, 100 buyers; report.py compares strategies
 migrations/                Alembic env.py and one file per schema change
 scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi,
-                           expire_listings, seed_discovery, explain_discovery, databases (throwaway ones), e2e_api
+                           expire_listings, expire_reservations, seed_discovery, explain_discovery, databases (throwaway ones), e2e_api
 frontend/                  React + TypeScript app (Vite); each module adds its screens
   src/api/                 typed client; schema.d.ts is generated from the backend
   src/auth/                access token in memory, refresh through the HttpOnly cookie
@@ -245,8 +271,9 @@ Dockerfile                 the API image
 | [`docs/database-design.md`](docs/database-design.md) | ER diagrams, which constraint enforces which rule, indexes, changes from `plan.md` |
 | [`docs/schema-draft.sql`](docs/schema-draft.sql) | The full target DDL; loads cleanly into Postgres 17 |
 | [`docs/schema-checks.sql`](docs/schema-checks.sql) | Statements that should be rejected by the schema's constraints |
-| [`docs/state-machines.md`](docs/state-machines.md) | Listing, interest, reservation, order, payment and transfer lifecycles |
+| [`docs/state-machines.md`](docs/state-machines.md) | Listing, reservation, order, payment and transfer lifecycles |
 | [`docs/api-contract.md`](docs/api-contract.md) | Every endpoint: who may call it, request, response, errors |
 | [`docs/hard-problems.md`](docs/hard-problems.md) | The six hard problems as exact SQL, with crash analysis |
+| [`docs/reservation-design.md`](docs/reservation-design.md) | How one of 100 buyers wins, and what three locking strategies cost (measured) |
 | [`docs/discovery-performance.md`](docs/discovery-performance.md) | Search query plans and timings on 100,000 listings (generated) |
 | [`docs/purchase-flow.md`](docs/purchase-flow.md) | The end-to-end purchase and what every table holds at each step |

@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import type { FormEvent } from "react";
-import { Link, useLocation, useNavigate } from "react-router";
+import { Link, useLocation } from "react-router";
 import { useAuth } from "../auth/AuthProvider";
 import { clearLoginNotice, useLoginNotice } from "../auth/loginNotice";
 import {
@@ -13,21 +13,13 @@ import {
 } from "../components/Form";
 import { Ticket } from "../components/Ticket";
 
-interface LoginState {
-  from?: string; // where a guard sent the user from, to return there afterwards
-}
-
 export function LoginPage() {
   const { logIn } = useAuth();
-  const navigate = useNavigate();
-  const state = (useLocation().state ?? {}) as LoginState;
+  const { state } = useLocation();
   const notice = useLoginNotice();
   const login = useMutation({
     mutationFn: ({ email, password }: Record<string, string>) => logIn(email!, password!),
-    onSuccess: () => {
-      clearLoginNotice();
-      navigate(state.from ?? "/account", { replace: true });
-    },
+    onSuccess: clearLoginNotice, // GuestOnly leaves this page
   });
   const errors = errorsByField(login.error);
 
@@ -41,7 +33,10 @@ export function LoginPage() {
       stub={<h1>Log in</h1>}
       footer={
         <p>
-          No account yet? <Link to="/register">Create one</Link>
+          No account yet?{" "}
+          <Link to="/register" state={state}>
+            Create one
+          </Link>
         </p>
       }
     >

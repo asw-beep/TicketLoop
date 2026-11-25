@@ -10,9 +10,11 @@ import { EventPage } from "./pages/EventPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ListingPage } from "./pages/ListingPage";
 import { LoginPage } from "./pages/LoginPage";
+import { MyHoldsPage } from "./pages/MyHoldsPage";
 import { MyListingsPage } from "./pages/MyListingsPage";
 import { MyTicketsPage } from "./pages/MyTicketsPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { ReservationPage } from "./pages/ReservationPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { SearchPage } from "./pages/SearchPage";
 import { ApiUnavailablePage, NotFoundPage } from "./pages/StatusPages";
@@ -81,6 +83,22 @@ export function App() {
           />
           {/* Not behind RequireSession: anyone may open an ACTIVE listing's address. */}
           <Route path="/listings/:listingId" element={<ListingPage />} />
+          <Route
+            path="/reservations"
+            element={
+              <RequireSession>
+                <MyHoldsPage />
+              </RequireSession>
+            }
+          />
+          <Route
+            path="/reservations/:reservationId"
+            element={
+              <RequireSession>
+                <ReservationPage />
+              </RequireSession>
+            }
+          />
           <Route
             path="/admin/events"
             element={

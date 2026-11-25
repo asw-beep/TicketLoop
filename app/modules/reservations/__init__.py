@@ -1,1 +1,1 @@
-"""Reservations (M7, M8): interests, allocation strategies, atomic reservation and expiry."""
+"""Reservations (M7): a buyer's 10-minute hold on a listing, the race for it, and its expiry."""

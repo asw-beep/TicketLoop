@@ -14,6 +14,7 @@ from app.core.security import hash_opaque_token, new_opaque_token
 from app.modules.events.models import Event, TicketProvider
 from app.modules.identity.models import PasswordResetToken, RefreshToken, User
 from app.modules.listings.models import Listing
+from app.modules.reservations.models import Reservation
 from app.modules.tickets.models import Ticket, TicketDocument
 
 
@@ -127,3 +128,19 @@ def make_listing(session: Session, **fields: Any) -> Listing:
     if fields.get("status") == "REJECTED":  # ck_listings_rejection_reason
         defaults["rejection_reason"] = "Test reason."
     return _save(session, Listing(**(defaults | fields)))
+
+
+def make_reservation(session: Session, **fields: Any) -> Reservation:
+    """A reservation row. With no `listing`, one is made in the status that goes with it."""
+    status = fields.get("status", "CREATED")
+    listing = fields.pop("listing", None)
+    if listing is None:
+        held = status in ("CREATED", "PAYMENT_PENDING", "CONFIRMED")
+        listing = make_listing(session, status="RESERVED" if held else "ACTIVE")
+    defaults: dict[str, Any] = {
+        "listing_id": listing.id,
+        "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+    }
+    if "buyer_id" not in fields:
+        defaults["buyer_id"] = make_user(session).id
+    return _save(session, Reservation(**(defaults | fields)))

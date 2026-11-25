@@ -1,4 +1,5 @@
-import type { ListingStatus, VerificationStatus } from "../api/types";
+import type { ListingStatus, Reservation, VerificationStatus } from "../api/types";
+import { holdState, type HoldState } from "../lib/reservations";
 
 export const VERIFICATION_NAMES: Record<VerificationStatus, string> = {
   PENDING: "Pending review",
@@ -37,6 +38,29 @@ const LISTING_CLASS: Record<ListingStatus, string> = {
   CANCELLED: "badge",
   EXPIRED: "badge",
 };
+
+const HOLD_NAMES: Record<HoldState["kind"], string> = {
+  held: "On hold",
+  paying: "Payment pending",
+  bought: "Bought",
+  "ran-out": "Ran out",
+  cancelled: "Cancelled",
+  failed: "Payment failed",
+};
+
+const HOLD_CLASS: Record<HoldState["kind"], string> = {
+  held: "badge badge--live",
+  paying: "badge badge--live",
+  bought: "badge badge--ok",
+  "ran-out": "badge",
+  cancelled: "badge",
+  failed: "badge badge--bad",
+};
+
+export function ReservationBadge({ reservation, now }: { reservation: Reservation; now: number }) {
+  const { kind } = holdState(reservation, now);
+  return <span className={HOLD_CLASS[kind]}>{HOLD_NAMES[kind]}</span>;
+}
 
 export function ListingBadge({ status }: { status: ListingStatus }) {
   return <span className={LISTING_CLASS[status]}>{LISTING_NAMES[status]}</span>;

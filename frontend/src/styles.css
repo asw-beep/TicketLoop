@@ -1,6 +1,6 @@
 /* TicketLoop app. The same palette and typeface as documentation/assets/notes.css, so the
    notes and the app read as one project. One loud element per page, the ticket; the rest
-   stays quiet. M18 polishes this; until then it should be clear, accessible and consistent. */
+   stays quiet. */
 
 :root {
   --paper: #e8ecf1;
@@ -696,6 +696,16 @@ a.card__title:hover {
 .field input[type="file"] {
   font: inherit;
   font-size: 0.95rem;
+}
+
+/* ---------- Holds (M7) ---------- */
+
+.countdown {
+  font-size: clamp(2.6rem, 9vw, 4rem);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  margin: 0.2rem 0 0.4rem;
 }
 
 /* ---------- Search (M6) ---------- */

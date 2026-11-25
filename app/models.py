@@ -8,6 +8,7 @@ from app.modules.audit.models import AuditLog
 from app.modules.events.models import Event, TicketProvider
 from app.modules.identity.models import PasswordResetToken, RefreshToken, User
 from app.modules.listings.models import Listing
+from app.modules.reservations.models import Reservation
 from app.modules.tickets.models import Ticket, TicketDocument
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "Listing",
     "PasswordResetToken",
     "RefreshToken",
+    "Reservation",
     "Ticket",
     "TicketDocument",
     "TicketProvider",

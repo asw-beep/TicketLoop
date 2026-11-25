@@ -22,7 +22,8 @@ pytestmark = pytest.mark.integration
 M2_TABLES = {"users", "ticket_providers", "events", "tickets", "listings", "audit_logs"}
 M3_TABLES = {"refresh_tokens", "password_reset_tokens"}
 M4_TABLES = {"ticket_documents"}
-ALL_TABLES = M2_TABLES | M3_TABLES | M4_TABLES
+M7_TABLES = {"reservations"}
+ALL_TABLES = M2_TABLES | M3_TABLES | M4_TABLES | M7_TABLES
 
 
 def tables(engine: Engine) -> set[str]:

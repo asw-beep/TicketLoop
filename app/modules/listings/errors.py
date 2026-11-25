@@ -93,3 +93,11 @@ class OwnListingReviewError(PermissionDeniedError):
 
     code = "own-listing-review"
     title = "You cannot review your own listing"
+
+
+class EventHasReservationsError(ConflictError):
+    """An event cannot be cancelled while a buyer is holding one of its tickets: a hold may be
+    a payment in progress. Carries `reserved_listings`, how many."""
+
+    code = "event-has-reservations"
+    title = "A buyer is holding one of this event's tickets"

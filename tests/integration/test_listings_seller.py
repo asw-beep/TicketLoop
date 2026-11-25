@@ -248,7 +248,7 @@ def test_if_the_audit_write_fails_the_status_change_does_not_commit(
     def broken_record(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("the audit write failed")
 
-    monkeypatch.setattr("app.modules.listings.state.record", broken_record)
+    monkeypatch.setattr("app.modules.audit.machine.record", broken_record)
     with TestClient(db_app, raise_server_exceptions=False) as client:
         response = submit(client, user["token"], listing)
 

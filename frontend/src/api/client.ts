@@ -4,6 +4,7 @@
  */
 import createClient from "openapi-fetch";
 import { getAccessToken, refreshAccessToken } from "../auth/session";
+import { noteServerDate } from "../lib/clock";
 import { ApiError, errorFor, type Problem } from "./problem";
 import type { paths } from "./schema";
 
@@ -17,6 +18,7 @@ export async function authFetch(request: Request): Promise<Response> {
   const sentToken = getAccessToken();
   const retry = request.clone(); // a body can be read only once, so keep a copy for the retry
   const response = await fetch(withToken(request, sentToken));
+  noteServerDate(response.headers.get("Date"));
   if (!sentToken || !(await isExpiredToken(response))) return response;
 
   const freshToken = await refreshAccessToken();

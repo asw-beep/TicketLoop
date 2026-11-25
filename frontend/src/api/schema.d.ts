@@ -452,6 +452,27 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/listings/{listing_id}/reservations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Reserve
+     * @description Hold an ACTIVE listing for 10 minutes while you pay. Of many buyers at once exactly one
+     *     gets it. Asking again while you hold it returns the hold you have.
+     */
+    post: operations["reserve_api_v1_listings__listing_id__reservations_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/listings/{listing_id}/submit": {
     parameters: {
       query?: never;
@@ -466,6 +487,66 @@ export interface paths {
      * @description Send your DRAFT listing for review.
      */
     post: operations["submit_listing_api_v1_listings__listing_id__submit_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/reservations/me": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * My Reservations
+     * @description Your reservations: the ones still waiting for you first, then newest first.
+     */
+    get: operations["my_reservations_api_v1_reservations_me_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/reservations/{reservation_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Reservation
+     * @description One reservation, for its buyer, the listing's seller and admins.
+     */
+    get: operations["get_reservation_api_v1_reservations__reservation_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/reservations/{reservation_id}/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Cancel Reservation
+     * @description Give up your hold before paying. The ticket goes back on sale.
+     */
+    post: operations["cancel_reservation_api_v1_reservations__reservation_id__cancel_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -812,7 +893,7 @@ export interface components {
     /**
      * HistoryEntryOut
      * @description One line of a listing's history. Who acted is a role, never an identity: the seller
-     *     must not learn which admin reviewed their listing.
+     *     must not learn which admin reviewed their listing, or which buyer held it.
      */
     HistoryEntryOut: {
       /** Action */
@@ -821,7 +902,7 @@ export interface components {
        * Actor Role
        * @enum {string}
        */
-      actor_role: "seller" | "admin" | "system";
+      actor_role: "seller" | "buyer" | "admin" | "system";
       /**
        * Created At
        * Format: date-time
@@ -987,6 +1068,13 @@ export interface components {
       /** Next Cursor */
       next_cursor: string | null;
     };
+    /** Page[ReservationOut] */
+    Page_ReservationOut_: {
+      /** Items */
+      items: components["schemas"]["ReservationOut"][];
+      /** Next Cursor */
+      next_cursor: string | null;
+    };
     /** Page[TicketOut] */
     Page_TicketOut_: {
       /** Items */
@@ -1073,6 +1161,62 @@ export interface components {
     RejectIn: {
       /** Reason */
       reason: string;
+    };
+    /**
+     * ReservationOut
+     * @description `Reservation` in the API contract. Never says who the buyer is: the seller may see it.
+     */
+    ReservationOut: {
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      listing: components["schemas"]["ReservedListingOut"];
+      /**
+       * Listing Id
+       * Format: uuid
+       */
+      listing_id: string;
+      status: components["schemas"]["ReservationStatus"];
+    };
+    /**
+     * ReservationStatus
+     * @enum {string}
+     */
+    ReservationStatus:
+      "CREATED" | "PAYMENT_PENDING" | "CONFIRMED" | "EXPIRED" | "FAILED" | "CANCELLED";
+    /**
+     * ReservedListingOut
+     * @description What is being held. The buyer cannot read GET /listings/{id} once the listing is
+     *     RESERVED, so the reservation carries what its page shows. Not the listing's status or
+     *     seller: a hold that ended gives no right to follow what happens to the ticket next.
+     */
+    ReservedListingOut: {
+      /** Asking Price Paise */
+      asking_price_paise: number;
+      event: components["schemas"]["ListingEventSummary"];
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Original Price Paise */
+      original_price_paise: number;
+      /** Seat Details */
+      seat_details: string | null;
+      /** Ticket Category */
+      ticket_category: string;
     };
     /**
      * TicketIn
@@ -2160,6 +2304,46 @@ export interface operations {
       };
     };
   };
+  reserve_api_v1_listings__listing_id__reservations_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        listing_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description You already hold it */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReservationOut"];
+        };
+      };
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReservationOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   submit_listing_api_v1_listings__listing_id__submit_post: {
     parameters: {
       query?: never;
@@ -2178,6 +2362,102 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ListingOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  my_reservations_api_v1_reservations_me_get: {
+    parameters: {
+      query?: {
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_ReservationOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_reservation_api_v1_reservations__reservation_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        reservation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReservationOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  cancel_reservation_api_v1_reservations__reservation_id__cancel_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        reservation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReservationOut"];
         };
       };
       /** @description Validation Error */

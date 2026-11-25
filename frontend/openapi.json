@@ -409,14 +409,14 @@
         "type": "object"
       },
       "HistoryEntryOut": {
-        "description": "One line of a listing's history. Who acted is a role, never an identity: the seller\nmust not learn which admin reviewed their listing.",
+        "description": "One line of a listing's history. Who acted is a role, never an identity: the seller\nmust not learn which admin reviewed their listing, or which buyer held it.",
         "properties": {
           "action": {
             "title": "Action",
             "type": "string"
           },
           "actor_role": {
-            "enum": ["seller", "admin", "system"],
+            "enum": ["seller", "buyer", "admin", "system"],
             "title": "Actor Role",
             "type": "string"
           },
@@ -796,6 +796,31 @@
         "title": "Page[PublicListingOut]",
         "type": "object"
       },
+      "Page_ReservationOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReservationOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": ["items", "next_cursor"],
+        "title": "Page[ReservationOut]",
+        "type": "object"
+      },
       "Page_TicketOut_": {
         "properties": {
           "items": {
@@ -987,6 +1012,91 @@
         },
         "required": ["reason"],
         "title": "RejectIn",
+        "type": "object"
+      },
+      "ReservationOut": {
+        "description": "`Reservation` in the API contract. Never says who the buyer is: the seller may see it.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "listing": {
+            "$ref": "#/components/schemas/ReservedListingOut"
+          },
+          "listing_id": {
+            "format": "uuid",
+            "title": "Listing Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReservationStatus"
+          }
+        },
+        "required": ["id", "listing_id", "status", "expires_at", "created_at", "listing"],
+        "title": "ReservationOut",
+        "type": "object"
+      },
+      "ReservationStatus": {
+        "enum": ["CREATED", "PAYMENT_PENDING", "CONFIRMED", "EXPIRED", "FAILED", "CANCELLED"],
+        "title": "ReservationStatus",
+        "type": "string"
+      },
+      "ReservedListingOut": {
+        "description": "What is being held. The buyer cannot read GET /listings/{id} once the listing is\nRESERVED, so the reservation carries what its page shows. Not the listing's status or\nseller: a hold that ended gives no right to follow what happens to the ticket next.",
+        "properties": {
+          "asking_price_paise": {
+            "title": "Asking Price Paise",
+            "type": "integer"
+          },
+          "event": {
+            "$ref": "#/components/schemas/ListingEventSummary"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "original_price_paise": {
+            "title": "Original Price Paise",
+            "type": "integer"
+          },
+          "seat_details": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seat Details"
+          },
+          "ticket_category": {
+            "title": "Ticket Category",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event",
+          "ticket_category",
+          "seat_details",
+          "asking_price_paise",
+          "original_price_paise"
+        ],
+        "title": "ReservedListingOut",
         "type": "object"
       },
       "TicketIn": {
@@ -3115,6 +3225,63 @@
         "tags": ["listings"]
       }
     },
+    "/api/v1/listings/{listing_id}/reservations": {
+      "post": {
+        "description": "Hold an ACTIVE listing for 10 minutes while you pay. Of many buyers at once exactly one\ngets it. Asking again while you hold it returns the hold you have.",
+        "operationId": "reserve_api_v1_listings__listing_id__reservations_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "listing_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Listing Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationOut"
+                }
+              }
+            },
+            "description": "You already hold it"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reserve",
+        "tags": ["reservations"]
+      }
+    },
     "/api/v1/listings/{listing_id}/submit": {
       "post": {
         "description": "Send your DRAFT listing for review.",
@@ -3160,6 +3327,169 @@
         ],
         "summary": "Submit Listing",
         "tags": ["listings"]
+      }
+    },
+    "/api/v1/reservations/me": {
+      "get": {
+        "description": "Your reservations: the ones still waiting for you first, then newest first.",
+        "operationId": "my_reservations_api_v1_reservations_me_get",
+        "parameters": [
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ReservationOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Reservations",
+        "tags": ["reservations"]
+      }
+    },
+    "/api/v1/reservations/{reservation_id}": {
+      "get": {
+        "description": "One reservation, for its buyer, the listing's seller and admins.",
+        "operationId": "get_reservation_api_v1_reservations__reservation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "reservation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Reservation",
+        "tags": ["reservations"]
+      }
+    },
+    "/api/v1/reservations/{reservation_id}/cancel": {
+      "post": {
+        "description": "Give up your hold before paying. The ticket goes back on sale.",
+        "operationId": "cancel_reservation_api_v1_reservations__reservation_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "reservation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Reservation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReservationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Cancel Reservation",
+        "tags": ["reservations"]
       }
     },
     "/api/v1/tickets": {

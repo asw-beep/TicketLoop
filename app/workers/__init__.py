@@ -1,1 +1,1 @@
-"""Background jobs: reservation expiry (M8), then Celery tasks and beat schedules (M11)."""
+"""Background jobs: Celery tasks, the beat schedule and the outbox relay (M9)."""

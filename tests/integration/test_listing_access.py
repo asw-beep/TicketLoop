@@ -27,11 +27,13 @@ SELLER_ROUTES = {
     ("DELETE", "/api/v1/listings/{listing_id}"),
     ("GET", "/api/v1/listings/{listing_id}/history"),
 }
+# For anyone but the seller. test_reservations.py covers what each gets.
+BUYER_ROUTES = {("POST", "/api/v1/listings/{listing_id}/reservations")}
 ADMIN_ROUTES = {
     ("POST", "/api/v1/admin/listings/{listing_id}/approve"),
     ("POST", "/api/v1/admin/listings/{listing_id}/reject"),
 }
-LISTING_ROUTES = {GET_LISTING} | SELLER_ROUTES | ADMIN_ROUTES
+LISTING_ROUTES = {GET_LISTING} | SELLER_ROUTES | BUYER_ROUTES | ADMIN_ROUTES
 BODIES: dict[tuple[str, str], dict[str, Any]] = {
     ("PATCH", "/api/v1/listings/{listing_id}"): {"asking_price_paise": 100},
     ("POST", "/api/v1/admin/listings/{listing_id}/reject"): {"reason": "x"},

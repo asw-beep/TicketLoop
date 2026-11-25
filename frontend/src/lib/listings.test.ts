@@ -54,6 +54,18 @@ describe("isFullListing", () => {
   });
 });
 
+describe("historyLabel for a reserved listing", () => {
+  it.each([
+    ["listing.reserved", {}, "Reserved"],
+    ["listing.released", { reason: "hold_expired" }, "Hold ran out; back on sale"],
+    ["listing.released", { reason: "buyer_cancelled" }, "Hold given up"],
+    ["listing.expired", { reason: "buyer_cancelled" }, "Hold given up past the listing's end"],
+    ["listing.expired", {}, "Expired"],
+  ])("%s %j", (action, details, label) => {
+    expect(historyLabel(entry(action, details))).toBe(label);
+  });
+});
+
 function entry(action: string, details: Record<string, unknown> = {}): HistoryEntry {
   return {
     action,

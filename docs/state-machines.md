@@ -96,7 +96,7 @@ As built in M5:
 - **Each action names its own from-states.** `ALLOWED` describes the whole machine, including `RESERVED → ACTIVE`, which no M5 route may make. So the service checks first: edits from `DRAFT`, `PENDING_VERIFICATION` or `ACTIVE`; the seller cancels from the same three; an admin cancels only `ACTIVE` (a pending listing is rejected, not cancelled); review acts only from `PENDING_VERIFICATION`. Each refusal is its own 409 (`listing-not-editable`, `listing-not-cancellable`, `listing-not-pending`) naming the current status.
 - **`PENDING_VERIFICATION` does not expire.** Nobody can buy a pending listing, so its expiry passing harms nobody. Approve refuses one whose expiry has passed (409 `listing-not-approvable`); the seller can move the expiry and it can be approved, or the admin rejects it.
 - **The expiry follows the event.** When an admin moves an event's `starts_at` earlier, every open listing whose `expires_at` is later than the new start is pulled back to it in the same transaction. When they move it later, every open listing that ended at the old start (the default for a listing created without an end) moves to the new start; one the seller set to end earlier keeps its end. It is not a status change, so it writes no listing audit rows; the event's audit row records how many moved (`listings_expiry_moved`).
-- **Event cancel cascades.** See the table. From M7, an event with a `RESERVED` listing cannot be cancelled (409 `event-has-reservations`): its buyer may be paying, and a payment must not be cancelled by an admin's click.
+- **Event cancel cascades.** See the table. Since M7, an event with a `RESERVED` listing cannot be cancelled (409 `event-has-reservations`): its buyer may be paying, and a payment must not be cancelled by an admin's click.
 - **A price edit pins what it checked.** `PATCH` repeats the status, price and expiry it read in its `WHERE` clause, so it cannot land on a listing an admin rejected a moment ago, and two price cuts racing cannot end with the higher one written last.
 
 ## Reservation (M7, M8)
@@ -125,6 +125,13 @@ stateDiagram-v2
 | PAYMENT_PENDING | CONFIRMED | `payment.succeeded` webhook or reconciliation | system | Payment `→ SUCCEEDED`, order `→ PAID`, outbox `payment.succeeded`. |
 | PAYMENT_PENDING | FAILED | `payment.failed` webhook or reconciliation | system | Payment `→ FAILED`, order `→ PAYMENT_FAILED`, listing back to `ACTIVE`. |
 | PAYMENT_PENDING | EXPIRED | expiry worker, after asking the gateway | system | Only when `expires_at + 15 min grace <= now()` **and** the gateway says the intent was never paid. Payment `→ FAILED` (reason `timeout`), order `→ CANCELLED`, listing back to `ACTIVE`. If the gateway says paid, apply success instead. If the gateway cannot be reached, do nothing and try later. |
+
+As built in M7 (`PAYMENT_PENDING` and later moves arrive with M8):
+
+- **The reservation moves first, then its listing.** Cancelling and expiring both lock the reservation and then release the listing, so they cannot wait on each other. Releasing goes through `release_listing()`, which picks `ACTIVE` or `EXPIRED` by the listing's own end; no route calls it directly.
+- **A hold past its end is over even before the expiry job reaches it.** `reserve` answers its own buyer 409 `listing-not-available` with `reason: hold-ended` rather than handing back a hold nobody can pay for. It can still be cancelled, which puts the ticket back on sale sooner.
+- **The expiry job gives each row a savepoint.** One row that cannot expire is logged and left; the others in the batch still do.
+- **One state machine class.** `app/modules/audit/machine.py` holds the conditional `UPDATE`, the `ALLOWED` check and the audit row; listings and reservations each configure one.
 
 The rule from FR-07: the expiry worker's normal scan touches **only** `CREATED`. A `PAYMENT_PENDING` reservation means money may be moving; it is resolved by asking the gateway, never by the clock alone. See hard problem 5 in [`hard-problems.md`](hard-problems.md).
 

@@ -4,12 +4,12 @@ For each problem: the exact statements in order, why they are correct, and what 
 
 | # | Problem | Main mechanism | Database backstop | Module |
 | --- | --- | --- | --- | --- |
-| 1 | Double booking | Conditional `UPDATE ... WHERE status = 'ACTIVE'` | `uq_reservations_one_live_per_listing` | M8 |
-| 2 | Duplicate orders | `idempotency_keys` row in the same transaction | `uq_orders_reservation` | M9 |
-| 3 | Duplicate or forged webhooks | HMAC check, then dedupe insert in the same transaction as the effect | `uq_payment_events_provider_event` | M10 |
-| 4 | Lost events | Transactional outbox plus idempotent consumers | `pk_processed_events` | M11 |
-| 5 | Expiry racing payment | Both sides use conditional updates on `status = 'CREATED'`; `PAYMENT_PENDING` is resolved by asking the gateway | row lock on the reservation | M8, M10 |
-| 6 | Drift | Reconciliation through the same transition functions, recorded per run | conditional updates make re-runs no-ops | M10 |
+| 1 | Double booking | Conditional `UPDATE ... WHERE status = 'ACTIVE'` | `uq_reservations_one_live_per_listing` | M7 (built) |
+| 2 | Duplicate orders | `idempotency_keys` row in the same transaction | `uq_orders_reservation` | M8 |
+| 3 | Duplicate or forged webhooks | HMAC check, then dedupe insert in the same transaction as the effect | `uq_payment_events_provider_event` | M8 |
+| 4 | Lost events | Transactional outbox plus idempotent consumers | `pk_processed_events` | M9 |
+| 5 | Expiry racing payment | Both sides use conditional updates on `status = 'CREATED'`; `PAYMENT_PENDING` is resolved by asking the gateway | row lock on the reservation | M7 (expiry), M8 |
+| 6 | Drift | Reconciliation through the same transition functions, recorded per run | conditional updates make re-runs no-ops | M8 |
 
 Two Postgres facts the answers lean on:
 
@@ -36,15 +36,11 @@ RETURNING id;
 -- 0 rows: ROLLBACK and return 409 (or 200 if this buyer already holds the live reservation).
 
 -- S2. Create the hold.
-INSERT INTO reservations (listing_id, buyer_id, interest_id, status, expires_at)
-VALUES (:listing_id, :buyer_id, :interest_id, 'CREATED', now() + interval '10 minutes')
+INSERT INTO reservations (listing_id, buyer_id, status, expires_at)
+VALUES (:listing_id, :buyer_id, 'CREATED', now() + interval '10 minutes')
 RETURNING id, expires_at;
 
--- S3. Only when allocation picked an interest.
-UPDATE interests SET status = 'SELECTED', updated_at = now()
- WHERE id = :interest_id AND status = 'ACTIVE';
-
--- S4. Audit, and from M11 the outbox event that notifies the seller.
+-- S3. Audit, and from M9 the outbox event that notifies the seller.
 INSERT INTO audit_logs (actor_id, entity_type, entity_id, action, request_id, details)
 VALUES (:buyer_id, 'listing', :listing_id, 'listing.reserved', :request_id,
         jsonb_build_object('reservation_id', :reservation_id));
@@ -54,7 +50,7 @@ VALUES ('reservation', :reservation_id, 'reservation.created', :payload);
 COMMIT;
 ```
 
-**Why it works.** All 100 transactions run S1 against the same row. The first takes the row lock; the other 99 queue behind it. When the first commits, each waiting transaction re-checks `status = 'ACTIVE'`, finds `RESERVED`, and updates zero rows. No Python code reads the status first, so there is no gap between check and write.
+**Why it works.** Every transaction that reaches S1 runs it against the same row. The first takes the row lock; the others queue behind it. When the first commits, each waiting transaction re-checks `status = 'ACTIVE'`, finds `RESERVED`, and updates zero rows. The app does read the listing before S1, to answer 404, 403 and the commonest 409s without a lock, but that read decides nothing: whatever it saw, S1 checks again as it writes, so there is no gap between check and write.
 
 **The backstop.** If a future code path forgot S1 and inserted a reservation directly, `uq_reservations_one_live_per_listing` would reject the second live reservation.
 
@@ -63,7 +59,7 @@ COMMIT;
 | S1, S2 or S3 (before COMMIT) | Postgres rolls the whole transaction back when the connection drops | Listing still `ACTIVE`. Nothing leaked. |
 | COMMIT, before the response reaches the client | Reservation exists | Client sees a timeout and retries; S1 matches 0 rows, but this buyer holds the live reservation, so the API returns it with 200. |
 
-**Test (M8):** `uvicorn --workers 4` in Docker, 100 threads with 100 different users firing at once. Assert 1 × 201, 99 × 409, exactly one live reservation row, listing `RESERVED`. Run it 20 times.
+**Built in M7.** `tests/concurrency/test_reservation_race.py`: four API processes, 100 threads with 100 different users firing at once. 1 × 201, 99 × 409, exactly one live reservation row, listing `RESERVED`, one audit row each; 20 rounds in a row. The comparison with `FOR UPDATE` and `SERIALIZABLE` is in [`reservation-design.md`](reservation-design.md).
 
 ---
 
@@ -133,7 +129,7 @@ COMMIT;
 
 `POST /payments/intents` cannot hold one transaction open across an HTTP call to the gateway, so it uses the key in two phases: commit the key row with `locked_at = now()`, call the gateway, then store the response and clear `locked_at`. A request that finds the key locked gets 409 and retries later; a lock older than 2 minutes is treated as abandoned.
 
-**Test (M9):** 50 threads, same key, same body: one order, 50 identical bodies. Same key, different body: 422.
+**Test (M8):** 50 threads, same key, same body: one order, 50 identical bodies. Same key, different body: 422.
 
 ---
 
@@ -204,7 +200,7 @@ COMMIT;  -- then return 200
 | S1 to S5 (before COMMIT) | Rolled back, dedupe row included | The gateway retries; processed fresh. |
 | COMMIT, before the 200 | Effect and dedupe row committed | The gateway retries; S1 conflicts; 200; nothing changes twice. |
 
-**Test (M10):** one webhook delivered 10 times: one state change, one outbox row. A forged signature: 401, no rows. A late webhook after reconciliation: `IGNORED`.
+**Test (M8):** one webhook delivered 10 times: one state change, one outbox row. A forged signature: 401, no rows. A late webhook after reconciliation: `IGNORED`.
 
 ---
 
@@ -279,7 +275,7 @@ COMMIT;  -- then ack the message
 
 **At-least-once delivery plus idempotent consumers gives an exactly-once effect.** Exactly-once delivery itself is impossible when either side can crash between doing and acknowledging.
 
-**Test (M11):** stop RabbitMQ, make payments, watch outbox rows pile up, start RabbitMQ, see all published. `docker kill` a worker mid-task: the message is redelivered and skipped.
+**Test (M9):** stop RabbitMQ, make payments, watch outbox rows pile up, start RabbitMQ, see all published. `docker kill` a worker mid-task: the message is redelivered and skipped.
 
 ---
 
@@ -328,7 +324,7 @@ UPDATE payments
 BEGIN;
 
 -- E1. Claim due CREATED reservations. PAYMENT_PENDING is deliberately NOT in this scan.
-SELECT id, listing_id, interest_id
+SELECT id, listing_id
   FROM reservations
  WHERE status = 'CREATED' AND expires_at <= now()
  ORDER BY expires_at
@@ -344,8 +340,6 @@ UPDATE listings
  WHERE id = :listing_id AND status = 'RESERVED';
 UPDATE orders SET status = 'CANCELLED', updated_at = now()
  WHERE reservation_id = :reservation_id AND status = 'CREATED';
-UPDATE interests SET status = 'EXPIRED', updated_at = now()
- WHERE id = :interest_id AND status = 'SELECTED';
 INSERT INTO audit_logs (...) VALUES (...);    -- reservation.expired
 INSERT INTO outbox_events (...) VALUES (...); -- notify buyer and seller
 
@@ -375,7 +369,7 @@ The gateway is called only after P1 commits, so money can move only for a reserv
 | P4, before P5 | Gateway intent exists, we never saved its id | Reconciliation repeats P4 with the same key; the gateway returns the **same** intent rather than a second one. |
 | E2, before COMMIT | Rolled back | The next pass expires it again. |
 
-**Tests (M8, M10):** two expiry workers at once expire each reservation exactly once (count audit rows). Expiry racing payment success, run 50 times, never releases a paid listing.
+**Tests.** M7: two expiry workers at once expire each reservation exactly once (count audit rows), and a cancel against an expiry releases the listing once. M8: expiry racing payment success, run 50 times, never releases a paid listing.
 
 ---
 
@@ -428,4 +422,4 @@ UPDATE reconciliation_runs
 | G1 | A run stuck `RUNNING` | The next run marks stale `RUNNING` rows (older than 30 minutes) `FAILED`, then starts fresh. |
 | Some fixes committed | Those payments are final | The next run skips them and fixes the rest. |
 
-**Test (M10):** make the gateway "forget" to send webhooks for 20 payments; one run fixes all 20; a second run fixes 0.
+**Test (M8):** make the gateway "forget" to send webhooks for 20 payments; one run fixes all 20; a second run fixes 0.

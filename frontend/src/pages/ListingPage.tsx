@@ -14,6 +14,7 @@ import {
   errorsByField,
   formValues,
 } from "../components/Form";
+import { ReserveTicket } from "../components/ReserveTicket";
 import { Ticket as TicketCard } from "../components/Ticket";
 import {
   formatPaise,
@@ -57,7 +58,14 @@ export function ListingPage() {
   }
   if (listing.error) return <FormError error={listing.error} />;
   if (!listing.data) return null;
-  if (!isFullListing(listing.data)) return <ListingCard listing={listing.data} />;
+  if (!isFullListing(listing.data)) {
+    return (
+      <>
+        <ListingCard listing={listing.data} />
+        <ReserveTicket listing={listing.data} />
+      </>
+    );
+  }
   const viewer: Viewer = listing.data.seller_id === user?.id ? "seller" : "admin";
   return <ManagedListing listing={listing.data} viewer={viewer} />;
 }
@@ -341,6 +349,7 @@ function ChangePriceForm({
 const BY: Record<HistoryEntry["actor_role"], Record<Viewer, string>> = {
   seller: { seller: "by you", admin: "by the seller" },
   admin: { seller: "by an admin", admin: "by an admin" },
+  buyer: { seller: "by a buyer", admin: "by a buyer" },
   system: { seller: "automatically", admin: "automatically" },
 };
 

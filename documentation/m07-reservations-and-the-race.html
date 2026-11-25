@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M7 Reservations</title>
+  <meta name="description" content="TicketLoop M7: 100 buyers press Reserve on one ticket and exactly one gets it. The conditional UPDATE, the race harness, three locking strategies measured, and how to explain them in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Reservations and the race</h1>
+      <p class="ticket__summary">A buyer presses Reserve and holds the ticket for ten minutes. If a hundred press it at the same moment, across four API processes, one gets it and ninety-nine are told so. I proved that with a harness that really does race them, compared three ways of locking, and kept the one that does the check and the write in a single statement. Holds that run out put their ticket back on sale.</p>
+      <p class="ticket__fineprint">Done when: the 100-buyer race passes 20 runs in a row against four API processes, and the comparison of locking strategies is recorded with its numbers.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M7</span>
+      <span class="ticket__days">25 Nov</span>
+      <span class="stamp">Done<br>25 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">Reserving is one transaction at Read Committed. First <code>UPDATE listings SET status = 'RESERVED' WHERE id = :id AND status = 'ACTIVE' …</code>, then the reservation row with an end ten minutes away, then an audit row for each. No earlier read decides anything, so there's no gap for another buyer to get into. The row lock queues everyone else, and Postgres re-checks their <code>WHERE</code> against the committed row and changes nothing.</p>
+        <p class="pitch">Under that sits a partial unique index: at most one live reservation per listing. If some future code path forgot the conditional UPDATE, the database would still refuse the second hold.</p>
+        <p class="pitch">I tested it the way it fails in production. Four API processes, a hundred real HTTP clients with their own accounts and open connections, released by a barrier, and the outcome read from the database and not from the responses. Twenty rounds in a row, one winner each. I also ran the same race with <code>SELECT … FOR UPDATE</code> and with <code>SERIALIZABLE</code>, so I can say what each costs rather than repeat what a book says.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Reserve</span><span class="built__note"><code>POST /listings/{id}/reservations</code>: 201 with a hold, 200 if you already have it, 409 with a <code>reason</code> (<code>reserved</code>, <code>sold</code>, <code>expired</code>, <code>hold-ended</code>) otherwise. Sellers can't reserve their own ticket.</span><code>app/modules/reservations/service.py</code></li>
+          <li><span class="built__what">Hold pages</span><span class="built__note"><code>GET /reservations/{id}</code>, <code>/reservations/me</code> (live ones first) and <code>/cancel</code>. A hold that isn't yours is the same 404 as one that doesn't exist.</span><code>app/modules/reservations/router.py</code></li>
+          <li><span class="built__what">One state machine class</span><span class="built__note">The conditional UPDATE, the <code>ALLOWED</code> table and the audit row that M5 wrote for listings are now a class. Listings and reservations each configure one, and M8 will add orders and payments.</span><code>app/modules/audit/machine.py</code></li>
+          <li><span class="built__what">Expiry</span><span class="built__note"><code>expire_reservations()</code> claims due holds with <code>FOR UPDATE SKIP LOCKED</code>, a savepoint per row, and releases each listing in the same transaction. It never touches a hold that's being paid for. A loop script runs it every 30 seconds until Celery beat takes over in M9.</span><code>scripts/expire_reservations.py</code></li>
+          <li><span class="built__what">Release</span><span class="built__note">One function puts a listing back: <code>ACTIVE</code>, or <code>EXPIRED</code> if its own end passed while it was held. Cancelling and expiring both go through it.</span><code>app/modules/listings/service.py</code></li>
+          <li><span class="built__what">Event cancel</span><span class="built__note">Refused with 409 <code>event-has-reservations</code> while any ticket is held. Someone may be paying.</span><code>app/modules/listings/service.py</code></li>
+          <li><span class="built__what">The race harness</span><span class="built__note">Starts four API processes on a throwaway database, opens every buyer's connection, and releases them together. Checks statuses, reasons, rows, listing status and audit counts in the database.</span><code>tests/concurrency/harness.py</code> <code>tests/concurrency/test_reservation_race.py</code></li>
+          <li><span class="built__what">The comparison</span><span class="built__note"><code>FOR UPDATE</code> and <code>SERIALIZABLE</code> versions of reserve, in the tests and never in the app, raced by the same harness. A report script writes the table.</span><code>tests/concurrency/strategies.py</code> <code>tests/concurrency/report.py</code> <code>docs/reservation-design.md</code></li>
+          <li><span class="built__what">Screens</span><span class="built__note"><strong>Reserve</strong> on a listing, a hold page with a countdown, <strong>Cancel hold</strong>, <strong>My holds</strong>, and the seller's history.</span><code>frontend/src/pages/ReservationPage.tsx</code> <code>frontend/src/components/ReserveTicket.tsx</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">One hundred buyers, one ticket</h2>
+      <div class="section__body">
+        <p>Four API processes, each with its own connection pool. A hundred requests arrive within a few milliseconds of each other.</p>
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>Everyone runs the same UPDATE</strong><p><code>WHERE id = :id AND status = 'ACTIVE' AND seller_id &lt;&gt; :buyer AND expires_at &gt; now()</code>. The first to reach the row takes its lock. The others wait for it, inside Postgres.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>The winner finishes its transaction</strong><p>The audit row for the listing, the reservation with <code>expires_at = now() + 10 minutes</code>, the audit row for the reservation, commit. The lock is held for those few statements and nothing else: no network call, no Python check between read and write.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The waiting UPDATEs wake up</strong><p>At Read Committed, Postgres re-evaluates each waiting <code>WHERE</code> against the new version of the row. The status is <code>RESERVED</code> now, so they match nothing.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>No row means a question</strong><p>The service reads the listing once to say why. If this buyer already holds it, 200 with the hold they have, which makes a double-click and a retried request harmless. Otherwise 409 <code>listing-not-available</code> with <code>reason: reserved</code>.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>Most losers never wait at all</strong><p>Those who arrive after the commit read <code>RESERVED</code> straight away, without a lock.</p></div></li>
+          <li><span class="flow__n">6</span><div class="flow__text"><strong>If the code were wrong</strong><p>A second INSERT would hit <code>uq_reservations_one_live_per_listing</code>. The insert is in a savepoint, so that becomes the same 409 rather than a 500.</p></div></li>
+        </ol>
+<pre><code><span class="c"># app/modules/audit/machine.py: every status change in the app</span>
+changed = db.execute(
+    update(Model)
+    .where(Model.id == row.id, Model.status == seen, *where)
+    .values(status=to, **values)
+).rowcount
+if changed != 1:
+    raise self.changed(...)
+record(db, actor_id=actor_id, action=self.action[(seen, to)], ...)</code></pre>
+        <h3>What it measured</h3>
+        <p>100 buyers, 4 API processes, 20 rounds per strategy, PostgreSQL 17 in Docker, all on my laptop (16 logical CPUs). Times as the buyer saw them, queueing included. The table is generated into <code>docs/reservation-design.md</code>.</p>
+        <ul class="tight">
+          <li><strong>Conditional UPDATE: p50 340 ms, p95 460 ms, no retries.</strong></li>
+          <li><strong><code>SELECT … FOR UPDATE</code>: p50 656 ms, p95 1,192 ms.</strong> Every loser takes the lock in turn to read that it lost.</li>
+          <li><strong><code>SERIALIZABLE</code> with a retry: p50 436 ms, p95 549 ms, 128 transactions run again</strong> over the 20 rounds.</li>
+          <li><strong>All three ended every round with exactly one winner.</strong> The choice is about cost and about how easy each is to get wrong.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>Run <code>docker compose up -d db mailpit minio</code>, the API, and <code>npm run dev</code> in <code>frontend/</code>. Open one listing in two browsers with two accounts and press <strong>Reserve</strong> in both.</p>
+        <ul class="built">
+          <li><span class="built__what">Reserve</span><span class="built__note">On any listing that's on sale and isn't yours. A guest is asked to log in and comes back to the same ticket.</span><code>/listings/:listingId</code></li>
+          <li><span class="built__what">Your hold</span><span class="built__note">The ticket, a countdown by the server's clock, and <strong>Cancel hold</strong>.</span><code>/reservations/:reservationId</code></li>
+          <li><span class="built__what">My holds</span><span class="built__note">Every hold, the live ones first.</span><code>/reservations</code></li>
+        </ul>
+        <figure class="shot">
+          <img src="assets/m07-reserve.png" alt="A listing page: the ticket with event, seat, asking price and face value, and below it a panel headed Buy this ticket with a Reserve button." loading="lazy" width="1100" height="900">
+          <figcaption>A ticket on sale, as a buyer sees it.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m07-hold.png" alt="The hold page: the ticket with a blue stub reading Your hold, the status On hold, and a large countdown at 9:57 with a Cancel hold button." loading="lazy" width="1100" height="900">
+          <figcaption>Ten minutes, by the server's clock.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+        <h3>The race</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A conditional UPDATE</h4>
+            <p class="decision__over">Instead of <code>SELECT … FOR UPDATE</code>, then check, then write</p>
+            <p>It's the same lock taken by fewer statements. The check and the write are one statement, so nobody can forget the check, and the lock is held for the shortest time. On my laptop it halved the median and cut p95 by more than half.</p>
+          </div>
+          <div class="decision">
+            <h4>Read Committed</h4>
+            <p class="decision__over">Instead of <code>SERIALIZABLE</code></p>
+            <p>Serializable is correct and almost as fast here, but every caller must be ready to run its whole transaction again, and forgetting that turns a conflict into a 500. The one invariant I need is about one row, and a row lock covers it.</p>
+          </div>
+          <div class="decision">
+            <h4>A Postgres row as the lock</h4>
+            <p class="decision__over">Instead of a lock in Redis</p>
+            <p>A Redis lock can vanish in a failover or expire during a pause, and Postgres would still have to be asked who won. So it would be a second system that can disagree with the first. Nothing that decides who gets a ticket reads Redis.</p>
+          </div>
+          <div class="decision">
+            <h4>A partial unique index as well</h4>
+            <p class="decision__over">Instead of trusting the code</p>
+            <p>The index costs one small write and turns a future mistake into a refused insert instead of two people with one seat.</p>
+          </div>
+          <div class="decision">
+            <h4>200 for the buyer who already holds it</h4>
+            <p class="decision__over">Instead of 409 for everyone else</p>
+            <p>A double-click, a retry after a lost response and a second tab are all the same buyer asking for what they have. They get it.</p>
+          </div>
+        </div>
+
+        <h3>Holds</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A hold past its end is over at once</h4>
+            <p class="decision__over">Instead of waiting for the job to close it</p>
+            <p>Between the end and the next pass the row still says <code>CREATED</code>. Returning it as a live hold would promise something that can't be paid for, so reserving again answers <code>hold-ended</code>.</p>
+          </div>
+          <div class="decision">
+            <h4>A savepoint per row in the expiry job</h4>
+            <p class="decision__over">Instead of one transaction for the batch</p>
+            <p>One row that can't expire would otherwise take the other ninety-nine with it, every 30 seconds, forever. Now it's logged and skipped.</p>
+          </div>
+          <div class="decision">
+            <h4>The reservation locks before its listing, everywhere</h4>
+            <p class="decision__over">Instead of whichever is handy</p>
+            <p>Cancel and expiry touch the same two rows. Taking them in one order means they can wait for each other but never deadlock. A transaction that holds several listings takes them in id order, for the same reason.</p>
+          </div>
+          <div class="decision">
+            <h4>Refuse to cancel an event with a held ticket</h4>
+            <p class="decision__over">Instead of cancelling the hold too</p>
+            <p>A hold ends by itself in ten minutes, unless a payment is under way, and that must never be cut off by an admin's click. The cancel locks the <code>RESERVED</code> listings too, so one being reserved at that moment can't slip through.</p>
+          </div>
+        </div>
+
+        <h3>Proof</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Four API processes</h4>
+            <p class="decision__over">Instead of threads in one Python process</p>
+            <p>A lock in one process's memory would pass a single-process test and protect nothing. Four interpreters share only Postgres.</p>
+          </div>
+          <div class="decision">
+            <h4>Check the database, not just the responses</h4>
+            <p class="decision__over">Instead of counting status codes</p>
+            <p>An oversold ticket with tidy responses is still oversold. Every round checks the rows, the listing and the audit counts.</p>
+          </div>
+          <div class="decision">
+            <h4>Break it on purpose</h4>
+            <p class="decision__over">Instead of trusting a green test</p>
+            <p>A race test can pass because nothing raced. I changed the event cancel to lock only the cancellable listings, and the test failed three times out of three. Then I put it back.</p>
+          </div>
+          <div class="decision">
+            <h4>The alternatives live in the tests</h4>
+            <p class="decision__over">Instead of a setting in the app</p>
+            <p>The app has one way to reserve. A switch would be dead code someone could turn on.</p>
+          </div>
+        </div>
+
+        <h3>Frontend</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Count down by the server's clock</h4>
+            <p class="decision__over">Instead of the browser's</p>
+            <p>A laptop five minutes fast would show five minutes less than the buyer has. Every response carries a <code>Date</code>, so the page knows the difference.</p>
+          </div>
+          <div class="decision">
+            <h4>The page goes by what it can see</h4>
+            <p class="decision__over">Instead of asking every second</p>
+            <p>The countdown is local arithmetic. It asks again every 30 seconds in case the hold was given up in another tab.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>How do you stop two people buying the same ticket?</summary>
+          <div class="qa__a">
+            <p>One conditional UPDATE. <code>UPDATE listings SET status = 'RESERVED' WHERE id = :id AND status = 'ACTIVE'</code> either changes one row or none, and whoever changed it has the ticket. Postgres takes a row lock for the update, so concurrent ones queue, and when the first commits the others re-check their condition against the new row and match nothing. There's no read-then-write in Python, so there's no window. A partial unique index on live reservations per listing backs it up.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What exactly happens to the waiting transactions at Read Committed?</summary>
+          <div class="qa__a">
+            <p>They block on the row lock inside their UPDATE. When the holder commits, Postgres takes the updated row version and re-evaluates the <code>WHERE</code> against it; that's sometimes called EvalPlanQual. If it no longer matches, the row is skipped and the UPDATE reports zero rows. At Repeatable Read the same wait would end in error 40001 instead, because the row changed after the snapshot. If the holder rolls back, the next one in line gets its turn.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why not <code>SELECT … FOR UPDATE</code>?</summary>
+          <div class="qa__a">
+            <p>It works, and I measured it. The difference is that the check happens in Python, so the lock is held across extra round trips, and every loser has to take the lock in turn just to find out. With 100 buyers the median went from 340 ms to 656 and p95 from 460 ms to 1.2 s. I do use <code>FOR UPDATE</code> where a decision needs several rows to hold still: cancelling an event locks all its open listings, in id order.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>And <code>SERIALIZABLE</code>?</summary>
+          <div class="qa__a">
+            <p>Also correct. Postgres tracks what each transaction read and aborts one when the pattern could not have happened one after another; you get 40001 and run it again. It's attractive when an invariant spans many rows. Here it cost about six retries a round and the retry loop has to wrap the whole transaction, so it can't live in a service function. For an invariant on one row it's more machinery than the problem needs.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you know the test really races?</summary>
+          <div class="qa__a">
+            <p>Three things. The buyers have their connections open and wait at a barrier, so the requests leave together. The API is four processes, so nothing in one process's memory can serialise them. And I broke the code to see the test fail: with the event cancel locking one status too few, the race test failed every time. A race test can't prove there's no race, it can only fail to find one, so I also say why the code is right.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What if the server dies after the UPDATE and before the INSERT?</summary>
+          <div class="qa__a">
+            <p>They're one transaction, so Postgres rolls both back when the connection drops, and the listing is <code>ACTIVE</code> again. If it dies after the commit but before the response, the hold exists and the buyer doesn't know; they press again and get 200 with it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do holds expire, and what if two workers run at once?</summary>
+          <div class="qa__a">
+            <p>A job claims due rows with <code>FOR UPDATE SKIP LOCKED</code>, so two workers pick different rows and neither waits. Each row is expired with a conditional UPDATE on <code>status = 'CREATED'</code> and its listing released in the same transaction. The test runs two workers over sixty due holds and counts audit rows: one <code>reservation.expired</code> each.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What if a hold expires at the moment the buyer cancels?</summary>
+          <div class="qa__a">
+            <p>Both are <code>UPDATE … WHERE status = 'CREATED'</code> on the reservation. One changes a row, and only that one goes on to release the listing; the other gets nothing and stops. The test races them and checks there's exactly one ending and one release.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does the expiry job skip holds that are being paid for?</summary>
+          <div class="qa__a">
+            <p>Because money may be moving. The clock knows the ten minutes are up; it doesn't know whether the payment went through. Giving the ticket to someone else and then learning the first buyer paid is the one mistake that can't be undone nicely. From M8 those are settled by asking the payment gateway.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Could cancel and expiry deadlock?</summary>
+          <div class="qa__a">
+            <p>They'd need to take two locks in opposite orders. Both lock the reservation first and the listing second. Reserving goes the other way round, but the reservation it inserts doesn't exist yet, so nobody else can be holding it. The deadlock I did have was elsewhere: one expiry pass holds many listings, and so does an admin cancelling an event. Both now lock listings in id order.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why 409 and not 404 for the losers?</summary>
+          <div class="qa__a">
+            <p>They were looking at a ticket that was publicly on sale a moment ago, so its existence is no secret, and "someone else is holding it" is useful: it may come back in ten minutes. Drafts and rejected listings were never public, and stay 404.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What does the seller see?</summary>
+          <div class="qa__a">
+            <p>Their listing's history: reserved by a buyer, hold given up by a buyer, hold ran out automatically. A role and never an identity. The reservation itself doesn't say who the buyer is either, because the seller is allowed to read it.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>One shared port hung on Windows.</strong> <code>uvicorn --workers 4</code> shares a listening socket between processes, and on Windows a few requests never got an answer, so the barrier timed out. Four processes with a port each gave the same four interpreters and an even spread of buyers.</li>
+          <li><strong>The test client was the bottleneck.</strong> A hundred clients each loading the system's certificate bundle took longer than the race. They only speak plain HTTP, so certificate checking is off and one client per server is shared.</li>
+          <li><strong>Event cancel locked the wrong rows.</strong> It locked the listings it would cancel, so a listing being reserved at that instant, already <code>RESERVED</code> in another uncommitted transaction, was skipped. The result was a cancelled event with a held ticket. It now locks <code>RESERVED</code> ones as well and refuses if it finds any.</li>
+          <li><strong>Expiry deadlocked with an event change.</strong> An expiry pass released listings in the order their holds had ended, while an admin cancelling or moving that event locked them in id order. Each could hold what the other wanted, and the admin got a 500. The test that sets 20 ended holds against each kind of change failed all three ways; locking in id order on both sides fixed it.</li>
+          <li><strong>A duel that only one side could win.</strong> Two requests released at the same instant gave the same winner every round, so one outcome was never tested. One side now gets a head start that grows each round, and the test fails unless both outcomes turn up.</li>
+          <li><strong>A buyer can't read the listing they're holding.</strong> A reserved listing is 404 to everyone but the seller and admins, so the hold page would have had nothing to show. The reservation carries the few facts it needs.</li>
+          <li><strong>Logging in forgot where you were.</strong> Pressing "Log in to reserve" sometimes ended on the account page: the guard that sends logged-in people away from <code>/login</code> ran before the form's own redirect. There's now one redirect, in the guard, and a browser test for it.</li>
+          <li><strong>Countdown by the wrong clock.</strong> With the browser an hour ahead, every hold looked finished. The page now counts by the <code>Date</code> header, and a browser test sets the server an hour behind.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>No paying yet.</strong> M8 adds orders and payments; until then a hold can only be given up or run out.</li>
+          <li><strong>The expiry loop is a script</strong> you run in a terminal. M9 hands it to Celery beat.</li>
+          <li><strong>One buyer can hold many tickets at once.</strong> Nothing limits it per account yet; M10's rate limits slow it down.</li>
+          <li><strong>The race is on one machine.</strong> Buyers, API and database share a laptop, so the times compare strategies and say nothing about production speed.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db mailpit minio
+uv run alembic upgrade head
+uv run pytest tests/integration/test_reservations.py tests/integration/test_reservation_expiry.py
+uv run pytest tests/concurrency                                              <span class="c"># every race, 3 rounds</span>
+RACE_ROUNDS=20 uv run pytest tests/concurrency/test_reservation_race.py      <span class="c"># the recorded proof</span>
+uv run python -m tests.concurrency.report                                    <span class="c"># the comparison, into docs/reservation-design.md</span>
+uv run python -m scripts.expire_reservations --once                          <span class="c"># Expired 0 reservation(s).</span>
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 uv run pytest                           <span class="c"># 722 tests, what CI runs</span>
+
+cd frontend &amp;&amp; npm run dev     <span class="c"># localhost:5173</span>
+npm test                       <span class="c"># 119 unit tests</span>
+npm run e2e                    <span class="c"># 18 browser tests, 2 for this module</span>
+gh run list --workflow ci.yml --limit 3</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m06-discovery-search-filters-pagination.html">Previous<strong>M6 Discovery</strong></a>
+    <span class="pager__next">Next<br><strong>M8 Orders and payments</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>
