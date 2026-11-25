@@ -33,6 +33,9 @@ export function Layout({ children }: { children: ReactNode }) {
           TicketLoop
         </Link>
         <nav aria-label="Main">
+          <NavLink to="/" end>
+            Find tickets
+          </NavLink>
           {status === "signed-in" && user && (
             <>
               <NavLink to="/tickets">My tickets</NavLink>

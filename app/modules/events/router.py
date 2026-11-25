@@ -1,12 +1,16 @@
 """HTTP routes for events and ticket providers. Thin: validate, call the service, shape."""
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
+from pydantic import AwareDatetime
 
 from app.core.pagination import Cursor, Limit, Page
+from app.core.search import SearchText
 from app.infrastructure.database.session import DbSession
 from app.modules.events import service
+from app.modules.events.models import EventCategory
 from app.modules.events.schemas import EventIn, EventOut, EventPatch, ProviderIn, ProviderOut
 from app.modules.identity.dependencies import AdminUser
 
@@ -15,9 +19,26 @@ admin_events_router = APIRouter(prefix="/admin", tags=["admin: events"])
 
 
 @events_router.get("", response_model=Page[EventOut])
-def list_events(db: DbSession, cursor: Cursor = None, limit: Limit = 20) -> Page[EventOut]:
-    """Published events, soonest first. Filters and search arrive in M6."""
-    items, next_cursor = service.list_published_events(db, cursor, limit)
+def list_events(
+    db: DbSession,
+    q: Annotated[SearchText | None, Query(description="Part of the event's name")] = None,
+    category: EventCategory | None = None,
+    city: SearchText | None = None,
+    # AwareDatetime: a time without a timezone is a 422, never guessed to be UTC.
+    starts_after: AwareDatetime | None = None,
+    starts_before: AwareDatetime | None = None,
+    cursor: Cursor = None,
+    limit: Limit = 20,
+) -> Page[EventOut]:
+    """Published events, soonest first."""
+    filters = service.EventFilters(
+        q=q or None,
+        category=category,
+        city=city or None,
+        starts_after=starts_after,
+        starts_before=starts_before,
+    )
+    items, next_cursor = service.list_published_events(db, filters, cursor, limit)
     return Page[EventOut](items=items, next_cursor=next_cursor)
 
 

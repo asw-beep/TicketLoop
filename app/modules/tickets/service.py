@@ -12,7 +12,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.pagination import paginate
+from app.core.pagination import Sort, paginate
 from app.infrastructure.database.errors import violated_constraint
 from app.modules.audit.service import record
 from app.modules.events.errors import EventNotFoundError
@@ -28,6 +28,9 @@ from app.modules.tickets.errors import (
 )
 from app.modules.tickets.models import Ticket, VerificationStatus
 from app.modules.tickets.schemas import TicketIn, VerifyIn
+
+NEWEST_FIRST = Sort("tickets.newest", (Ticket.created_at, Ticket.id), descending=True)
+OLDEST_FIRST = Sort("tickets.oldest", (Ticket.created_at, Ticket.id))
 
 
 def get_visible_ticket(db: Session, ticket_id: uuid.UUID, user: User) -> Ticket:
@@ -72,24 +75,16 @@ def register_ticket(db: Session, owner: User, data: TicketIn) -> Ticket:
 def list_my_tickets(
     db: Session, owner: User, cursor: str | None, limit: int
 ) -> tuple[list[Ticket], str | None]:
-    stmt = (
-        select(Ticket)
-        .where(Ticket.current_owner_id == owner.id)
-        .order_by(Ticket.created_at.desc(), Ticket.id.desc())
-    )
-    return paginate(db, stmt, cursor, limit)
+    stmt = select(Ticket).where(Ticket.current_owner_id == owner.id)
+    return paginate(db, stmt, NEWEST_FIRST, cursor, limit)
 
 
 def list_pending_tickets(
     db: Session, cursor: str | None, limit: int
 ) -> tuple[list[Ticket], str | None]:
     """The review queue, oldest first."""
-    stmt = (
-        select(Ticket)
-        .where(Ticket.verification_status == VerificationStatus.PENDING)
-        .order_by(Ticket.created_at, Ticket.id)
-    )
-    return paginate(db, stmt, cursor, limit)
+    stmt = select(Ticket).where(Ticket.verification_status == VerificationStatus.PENDING)
+    return paginate(db, stmt, OLDEST_FIRST, cursor, limit)
 
 
 def verify_ticket(db: Session, ticket_id: uuid.UUID, admin: User, data: VerifyIn) -> Ticket:

@@ -189,10 +189,8 @@ jobs:
           docker logs minio
           exit 1
 
-      - name: Migrate
-        run: uv run alembic upgrade head
-
-      # Playwright starts the API and the dev server itself (playwright.config.ts).
+      # Playwright starts the API and the dev server itself (playwright.config.ts); the API
+      # creates and migrates its own database first.
       - name: Browser tests
         working-directory: frontend
         run: npx playwright test

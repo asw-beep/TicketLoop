@@ -4,7 +4,7 @@ PostgreSQL 17 is the single source of truth for inventory and money. This docume
 
 The draft is the target. From M2, each module's Alembic migration builds its own tables from it: M3 builds identity, M4 the catalogue, and so on. On 23 Nov 2026 the roadmap was slimmed: `interests`, `refunds`, `disputes`, `dispute_events` and `dispute_evidence` will never be built and are gone from the draft.
 
-**Built so far (M5):** the M2 migration created `users`, `ticket_providers`, `events`, `tickets`, `listings` and `audit_logs`; M3 added `refresh_tokens` and `password_reset_tokens`; M4 added `ticket_documents`, the column `tickets.verification_note`, and one seeded row in `ticket_providers` (`fakeprovider`, FakeProvider) so an admin can create events on a fresh database. Its downgrade removes that row only if no event uses it. M5 added no tables: its migration added five indexes (four on `listings`, one on `audit_logs`, marked below), and M5 is the first module to write `listings` and `audit_logs` rows.
+**Built so far (M6):** the M2 migration created `users`, `ticket_providers`, `events`, `tickets`, `listings` and `audit_logs`; M3 added `refresh_tokens` and `password_reset_tokens`; M4 added `ticket_documents`, the column `tickets.verification_note`, and one seeded row in `ticket_providers` (`fakeprovider`, FakeProvider) so an admin can create events on a fresh database. Its downgrade removes that row only if no event uses it. M5 added no tables: its migration added five indexes (four on `listings`, one on `audit_logs`, marked below), and M5 is the first module to write `listings` and `audit_logs` rows. M6 added no tables: its migration created the `pg_trgm` extension and seven indexes, measured in [`discovery-performance.md`](discovery-performance.md).
 
 ## Conventions
 
@@ -259,18 +259,21 @@ Application code checks every rule first, to give a helpful error. The database 
 
 ## Indexes and the queries they serve
 
-Every index costs write time and disk space, so each one names its query. M6 checks the discovery ones with `EXPLAIN ANALYZE` on 100,000 rows; drop any that the plan never uses.
+Every index costs write time and disk space, so each one names its query. M6 checked the discovery ones with `EXPLAIN ANALYZE` on 100,000 listings ([results](discovery-performance.md)); every search index is used by at least one plan. Two serve lists outside that report: `ix_tickets_owner` and the M5 ones.
 
 | Index | Query it serves |
 | --- | --- |
-| `ix_listings_event (event_id)`, **built in M5** | the event-cancel cascade and the expiry pull-back. Postgres does not index foreign keys on its own. M6 may widen it to `(event_id, status)` for `GET /events/{id}/listings`. |
+| `ix_listings_event (event_id)`, **built in M5** | the event-cancel cascade and the expiry pull-back. Postgres does not index foreign keys on its own. M6 measured `GET /events/{id}/listings` on it at about 0.25 ms, so it was not widened to `(event_id, status)`. |
 | `ix_listings_seller (seller_id, created_at, id)`, **built in M5** | `GET /listings/me`, newest first. Built in place of the draft's `(seller_id, status)`: the list is sorted by time, and one seller's rows are few enough to filter by status. |
-| `ix_listings_active_by_price (asking_price_paise, id) WHERE status = 'ACTIVE'` | search sorted by price, keyset cursor on `(price, id)` |
-| `ix_listings_active_by_created (created_at, id) WHERE status = 'ACTIVE'` | search sorted by newest |
+| `ix_listings_active_by_price (asking_price_paise, id) WHERE status = 'ACTIVE'`, **built in M6** | search sorted by price, keyset cursor on `(price, id)` |
+| `ix_listings_active_by_created (created_at, id) WHERE status = 'ACTIVE'`, **built in M6** | search sorted by newest |
 | `ix_listings_active_expiry (expires_at) WHERE status = 'ACTIVE'`, **built in M5** | `scripts/expire_listings.py` |
 | `ix_listings_review_queue (created_at, id) WHERE status = 'PENDING_VERIFICATION'`, **built in M5** | `GET /admin/listings/pending`, oldest first |
-| `ix_events_name_trgm` (GIN, trigram) | `WHERE name ILIKE '%coldplay%'`, which a B-tree cannot serve |
-| `ix_events_status_starts (status, starts_at)` | `GET /events`, upcoming published events |
+| `ix_events_name_trgm` (GIN, trigram), **built in M6** | `WHERE name ILIKE '%coldplay%'`, which a B-tree cannot serve |
+| `ix_events_status_starts (status, starts_at, id)`, **built in M6** | `GET /events`, published events soonest first, keyset on `(starts_at, id)` |
+| `ix_tickets_owner (current_owner_id, created_at, id)`, **built in M6** | `GET /tickets/me`, newest first |
+| `ix_events_city (lower(city))`, **built in M6** | search by city. Without it, a city nobody sells in made the sort index walk every active listing (57 ms on 100,000 listings). |
+| `ix_tickets_category (lower(ticket_category))`, **built in M6** | search by ticket category. Without it, a category nobody sells made the sort index walk every active listing (over 100 ms on 100,000 listings). |
 | `ix_reservations_due (expires_at) WHERE status IN ('CREATED','PAYMENT_PENDING')` | the expiry worker |
 | `ix_orders_buyer (buyer_id, created_at, id)` | `GET /orders/me` with keyset pagination |
 | `ix_payments_unresolved (created_at) WHERE status IN ('CREATED','PENDING')` | reconciliation |

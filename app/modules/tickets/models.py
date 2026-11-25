@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, UniqueConstraint, text
+from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.infrastructure.database.base import Base, CreatedAt, Timestamps, UUIDPrimaryKey, one_of
@@ -50,6 +50,12 @@ class Ticket(UUIDPrimaryKey, Timestamps, Base):
             one_of("verification_status", VerificationStatus), name="verification_status"
         ),
         CheckConstraint(one_of("status", TicketStatus), name="status"),
+        # GET /tickets/me, newest first.
+        Index("ix_tickets_owner", "current_owner_id", "created_at", "id"),
+        # Search by ticket category, in any case (M6). An index on an expression also gives the
+        # planner statistics about it; without them it guesses, and walks every listing looking
+        # for a category that hardly exists.
+        Index("ix_tickets_category", text("lower(ticket_category)")),
     )
 
     event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("events.id"))

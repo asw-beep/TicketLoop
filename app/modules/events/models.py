@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, ForeignKey, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Index, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infrastructure.database.base import Base, CreatedAt, Timestamps, UUIDPrimaryKey, one_of
@@ -41,6 +41,19 @@ class Event(UUIDPrimaryKey, Timestamps, Base):
     __table_args__ = (
         CheckConstraint(one_of("category", EventCategory), name="category"),
         CheckConstraint(one_of("status", EventStatus), name="status"),
+        # WHERE name ILIKE '%coldplay%'. A B-tree only helps when the start of the text is
+        # known; trigrams (every run of three letters) find it anywhere. Needs pg_trgm.
+        Index(
+            "ix_events_name_trgm",
+            "name",
+            postgresql_using="gin",
+            postgresql_ops={"name": "gin_trgm_ops"},
+        ),
+        # Search by city, ignoring case. Without it a city nobody is selling in ("Bangalore"
+        # for Bengaluru) makes the sort index walk every ACTIVE listing looking for a match.
+        Index("ix_events_city", text("lower(city)")),
+        # GET /events: published events, soonest first.
+        Index("ix_events_status_starts", "status", "starts_at", "id"),
     )
 
     name: Mapped[str]

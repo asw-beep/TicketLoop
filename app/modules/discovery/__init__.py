@@ -1,1 +1,1 @@
-"""Discovery (M6): search, filters and keyset pagination over active listings."""
+"""Discovery (M6): public search over the listings on sale."""

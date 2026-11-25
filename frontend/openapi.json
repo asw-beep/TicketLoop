@@ -658,6 +658,11 @@
         "title": "ListingPatch",
         "type": "object"
       },
+      "ListingSort": {
+        "enum": ["price", "-price", "created_at", "-created_at"],
+        "title": "ListingSort",
+        "type": "string"
+      },
       "ListingStatus": {
         "enum": [
           "DRAFT",
@@ -764,6 +769,31 @@
         },
         "required": ["items", "next_cursor"],
         "title": "Page[ListingOut]",
+        "type": "object"
+      },
+      "Page_PublicListingOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PublicListingOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": ["items", "next_cursor"],
+        "title": "Page[PublicListingOut]",
         "type": "object"
       },
       "Page_TicketOut_": {
@@ -2094,9 +2124,95 @@
     },
     "/api/v1/events": {
       "get": {
-        "description": "Published events, soonest first. Filters and search arrive in M6.",
+        "description": "Published events, soonest first.",
         "operationId": "list_events_api_v1_events_get",
         "parameters": [
+          {
+            "description": "Part of the event's name",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Part of the event's name",
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EventCategory"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "city",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "City"
+            }
+          },
+          {
+            "in": "query",
+            "name": "starts_after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Starts After"
+            }
+          },
+          {
+            "in": "query",
+            "name": "starts_before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Starts Before"
+            }
+          },
           {
             "description": "next_cursor from the previous page",
             "in": "query",
@@ -2197,6 +2313,203 @@
         "tags": ["events"]
       }
     },
+    "/api/v1/events/{event_id}/listings": {
+      "get": {
+        "description": "One published event's tickets on sale now. Same filters and sorts as `GET /listings`.",
+        "operationId": "event_listings_api_v1_events__event_id__listings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "event_id",
+            "required": true,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Id"
+            }
+          },
+          {
+            "description": "`price` and `created_at` ascend; a leading `-` descends",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListingSort",
+              "default": "price",
+              "description": "`price` and `created_at` ascend; a leading `-` descends"
+            }
+          },
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Part of the event's name",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Part of the event's name",
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EventCategory"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "city",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "City"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ticket_category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ticket Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_price_paise",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 10000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Price Paise"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_price_paise",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 10000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Price Paise"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_PublicListingOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Event Listings",
+        "tags": ["discovery"]
+      }
+    },
     "/api/v1/health": {
       "get": {
         "operationId": "health_api_v1_health_get",
@@ -2227,6 +2540,201 @@
       }
     },
     "/api/v1/listings": {
+      "get": {
+        "description": "Tickets on sale now, cheapest first unless you ask otherwise.",
+        "operationId": "search_listings_api_v1_listings_get",
+        "parameters": [
+          {
+            "description": "`price` and `created_at` ascend; a leading `-` descends",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ListingSort",
+              "default": "price",
+              "description": "`price` and `created_at` ascend; a leading `-` descends"
+            }
+          },
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Part of the event's name",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Part of the event's name",
+              "title": "Q"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EventCategory"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "city",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "City"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ticket_category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Ticket Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "min_price_paise",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 10000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Price Paise"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_price_paise",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 10000000,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Price Paise"
+            }
+          },
+          {
+            "in": "query",
+            "name": "event_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Event Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_PublicListingOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Listings",
+        "tags": ["discovery"]
+      },
       "post": {
         "description": "Offer a ticket you own at no more than face value. It starts as a DRAFT; submit it to\nsend it for review.",
         "operationId": "create_listing_api_v1_listings_post",

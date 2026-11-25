@@ -16,8 +16,8 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M3 · Identity and auth | Done: register and login with Argon2id; 15-minute JWT access tokens; 7-day refresh tokens that rotate, with reuse detection that revokes the whole session; logout; password change and reset; `get_current_user` and `require_admin`; `GET` and `PATCH /users/me`; CI on every push |
 | M4 · Events, tickets and document storage | Done: admin event management with a status machine; ticket registration; proof of purchase in MinIO (S3) behind 5-minute signed links, typed by its first bytes; admin verification; one 404 for "missing" and "not yours" on every ticket route, proven by a test that enumerates them; screens for all of it |
 | M5 · Listings, verification and audit log | Done: listing a verified ticket at no more than face value; admin review with no self-review; one state machine whose every move is a conditional `UPDATE` plus an audit row in the same transaction; listing history; the event-cancel cascade and listing expiry; races between admins proven with real concurrent transactions; screens for all of it |
-| M6 · Discovery: search, filters, pagination | Next (Tue 24 Nov 2026) |
-| M7 · Reservations and the race | Planned (Wed 25 Nov) |
+| M6 · Discovery: search, filters, pagination | Done: public search with filters and sorts; keyset pagination on every list; indexes proven with `EXPLAIN ANALYZE` on 100,000 listings ([results](docs/discovery-performance.md)): page 500 in 0.2 ms against 45 ms with `OFFSET`; the front page is the search |
+| M7 · Reservations and the race | Next |
 | M8 · Orders and payments | Planned (Thu 26 Nov) |
 | M9 · Outbox, worker and transfer | Planned (Fri 27 Nov) |
 | M10 · Redis: caching and rate limits | Planned (Sat 28 Nov) |
@@ -149,6 +149,24 @@ curl -s $B/listings/$LISTING/history -H "Authorization: Bearer $HOLDER" | jq '.i
 uv run python -m scripts.expire_listings   # Expired 0 listing(s).
 ```
 
+## Try the search
+
+http://localhost:5173 is the search page, with or without an account. To see it full, seed a separate database with 2,000 events and 100,000 listings (Faker; it refuses any database whose name does not end in `_perf`) and run the API against it:
+
+```bash
+export DATABASE_URL=postgresql+psycopg://ticketloop:ticketloop@localhost:5432/ticketloop_perf
+uv run python -m scripts.seed_discovery --reset
+uv run python -m scripts.explain_discovery   # every query's plan, page 1 against page 500; writes docs/discovery-performance.md
+uv run uvicorn app.main:app
+unset DATABASE_URL                           # back to the development database
+```
+
+(In PowerShell: `$env:DATABASE_URL = '…'`, and `Remove-Item Env:DATABASE_URL` after.)
+
+```bash
+curl -s "$B/listings?q=cup&city=Mumbai&max_price_paise=500000&sort=-created_at" | jq '.items[].event.name'
+```
+
 ## Migrations
 
 ```bash
@@ -177,7 +195,8 @@ The frontend, from `frontend/`:
 
 ```bash
 npm test                  # unit tests (Vitest)
-npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit minio`
+npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit minio`.
+                          # They start their own API (8001) and dev server (5174) on their own database, ticketloop_e2e
 npm run typecheck && npm run lint && npm run format:check
 npm run api:types         # after changing the API: regenerate openapi.json and the TypeScript types
 ```
@@ -195,6 +214,7 @@ app/
     events/                events, ticket providers, the event status machine, admin event routes
     tickets/               ticket registration, evidence uploads and links, admin verification
     listings/              listings, the listing state machine, review, history, the event cascade and expiry
+    discovery/             public search: filters, sorts, the event's listings
     audit/                 the append-only audit log and record(), the one way to write to it
   infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory); later Redis, RabbitMQ
   workers/                 background jobs (M9 onward)
@@ -203,7 +223,8 @@ tests/
   integration/             need Postgres
   concurrency/ failure/ load/   later modules
 migrations/                Alembic env.py and one file per schema change
-scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi, expire_listings
+scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi,
+                           expire_listings, seed_discovery, explain_discovery, databases (throwaway ones), e2e_api
 frontend/                  React + TypeScript app (Vite); each module adds its screens
   src/api/                 typed client; schema.d.ts is generated from the backend
   src/auth/                access token in memory, refresh through the HttpOnly cookie
@@ -227,4 +248,5 @@ Dockerfile                 the API image
 | [`docs/state-machines.md`](docs/state-machines.md) | Listing, interest, reservation, order, payment and transfer lifecycles |
 | [`docs/api-contract.md`](docs/api-contract.md) | Every endpoint: who may call it, request, response, errors |
 | [`docs/hard-problems.md`](docs/hard-problems.md) | The six hard problems as exact SQL, with crash analysis |
+| [`docs/discovery-performance.md`](docs/discovery-performance.md) | Search query plans and timings on 100,000 listings (generated) |
 | [`docs/purchase-flow.md`](docs/purchase-flow.md) | The end-to-end purchase and what every table holds at each step |

@@ -1,5 +1,5 @@
 /** Short names for the API's shapes, all generated from the backend's OpenAPI schema. */
-import type { components } from "./schema";
+import type { components, paths } from "./schema";
 
 type Schemas = components["schemas"];
 
@@ -22,3 +22,8 @@ export type ListingPatch = Schemas["ListingPatch"];
 export type ListingStatus = Listing["status"];
 export type HistoryEntry = Schemas["HistoryEntryOut"];
 export type RejectIn = Schemas["RejectIn"];
+/** The search query, without the paging parameters. */
+export type ListingQuery = Omit<
+  NonNullable<paths["/api/v1/listings"]["get"]["parameters"]["query"]>,
+  "cursor" | "limit" | "event_id"
+>;

@@ -698,6 +698,63 @@ a.card__title:hover {
   font-size: 0.95rem;
 }
 
+/* ---------- Search (M6) ---------- */
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 1rem 1.25rem;
+  margin-top: 1.5rem;
+}
+
+.filters__wide {
+  grid-column: 1 / -1;
+}
+
+.price {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.price strong {
+  font-weight: 750;
+  font-size: 1.1rem;
+}
+
+.price__was {
+  color: var(--ink-faint);
+  font-size: 0.9rem;
+}
+
+.pass__name a {
+  color: inherit;
+  text-decoration-color: var(--rule);
+}
+
+.pass__name a:hover {
+  color: var(--link);
+}
+
+.panel--wide {
+  max-width: none;
+}
+
+.panel--wide > .field {
+  max-width: 16rem;
+  margin-top: 1rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .empty {
   margin-top: 1.5rem;
   color: var(--ink-soft);

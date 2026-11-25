@@ -67,6 +67,20 @@ class Listing(UUIDPrimaryKey, Timestamps, Base):
             "expires_at",
             postgresql_where=text("status = 'ACTIVE'"),
         ),
+        # Search sorted by price, and by date (M6), in either direction: a B-tree reads
+        # backwards just as well. Partial, because only ACTIVE listings are ever searched.
+        Index(
+            "ix_listings_active_by_price",
+            "asking_price_paise",
+            "id",
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
+        Index(
+            "ix_listings_active_by_created",
+            "created_at",
+            "id",
+            postgresql_where=text("status = 'ACTIVE'"),
+        ),
         # A seller's own listings, newest first.
         Index("ix_listings_seller", "seller_id", "created_at", "id"),
         # The event-cancel cascade and the expiry pull-back. Postgres does not index foreign keys.

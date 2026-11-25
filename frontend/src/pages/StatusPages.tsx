@@ -1,14 +1,5 @@
-import { Link, Navigate } from "react-router";
-import { useAuth } from "../auth/AuthProvider";
+import { Link } from "react-router";
 import { Ticket } from "../components/Ticket";
-
-/** "/" has nothing of its own until events exist (M4): send people where they can act. */
-export function HomeRedirect() {
-  const { status } = useAuth();
-  if (status === "signed-in") return <Navigate to="/account" replace />;
-  if (status === "signed-out") return <Navigate to="/login" replace />;
-  return null;
-}
 
 export function ApiUnavailablePage() {
   return (

@@ -6,6 +6,7 @@ import { AccountPage } from "./pages/AccountPage";
 import { AdminEventsPage } from "./pages/AdminEventsPage";
 import { AdminListingsPage } from "./pages/AdminListingsPage";
 import { AdminTicketsPage } from "./pages/AdminTicketsPage";
+import { EventPage } from "./pages/EventPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
 import { ListingPage } from "./pages/ListingPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -13,7 +14,8 @@ import { MyListingsPage } from "./pages/MyListingsPage";
 import { MyTicketsPage } from "./pages/MyTicketsPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
-import { ApiUnavailablePage, HomeRedirect, NotFoundPage } from "./pages/StatusPages";
+import { SearchPage } from "./pages/SearchPage";
+import { ApiUnavailablePage, NotFoundPage } from "./pages/StatusPages";
 import { TicketPage } from "./pages/TicketPage";
 
 export function App() {
@@ -25,7 +27,8 @@ export function App() {
         <ApiUnavailablePage />
       ) : (
         <Routes>
-          <Route path="/" element={<HomeRedirect />} />
+          <Route path="/" element={<SearchPage />} />
+          <Route path="/events/:eventId" element={<EventPage />} />
           <Route
             path="/login"
             element={

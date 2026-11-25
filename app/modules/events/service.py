@@ -11,14 +11,16 @@ COMPLETED events are final: nothing about them changes again.
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.pagination import paginate
+from app.core.pagination import Sort, paginate
+from app.core.search import LIKE_ESCAPE, contains
 from app.infrastructure.database.errors import violated_constraint
 from app.modules.audit.service import record
 from app.modules.events.errors import (
@@ -29,7 +31,7 @@ from app.modules.events.errors import (
     ProviderCodeTakenError,
     ProviderNotFoundError,
 )
-from app.modules.events.models import Event, EventStatus, TicketProvider
+from app.modules.events.models import Event, EventCategory, EventStatus, TicketProvider
 from app.modules.events.schemas import EventIn, EventPatch, ProviderIn
 from app.modules.identity.models import User
 from app.modules.listings.service import (
@@ -46,15 +48,37 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
 }
 FINAL_STATUSES = {EventStatus.CANCELLED, EventStatus.COMPLETED}
 
-# Ties on start time are broken by id, so every page has a fixed order.
-_BY_START = (Event.starts_at, Event.id)
+SOONEST_FIRST = Sort("events.starts_at", (Event.starts_at, Event.id))
+
+
+@dataclass(frozen=True)
+class EventFilters:
+    q: str | None = None
+    category: EventCategory | None = None
+    city: str | None = None
+    starts_after: datetime | None = None
+    starts_before: datetime | None = None
+
+
+def published_events_stmt(filters: EventFilters) -> Select[tuple[Event]]:
+    stmt = select(Event).where(Event.status == EventStatus.PUBLISHED)
+    if filters.q is not None:
+        stmt = stmt.where(Event.name.ilike(contains(filters.q), escape=LIKE_ESCAPE))
+    if filters.category is not None:
+        stmt = stmt.where(Event.category == filters.category)
+    if filters.city is not None:
+        stmt = stmt.where(func.lower(Event.city) == func.lower(filters.city))
+    if filters.starts_after is not None:
+        stmt = stmt.where(Event.starts_at > filters.starts_after)
+    if filters.starts_before is not None:
+        stmt = stmt.where(Event.starts_at < filters.starts_before)
+    return stmt
 
 
 def list_published_events(
-    db: Session, cursor: str | None, limit: int
+    db: Session, filters: EventFilters, cursor: str | None, limit: int
 ) -> tuple[list[Event], str | None]:
-    stmt = select(Event).where(Event.status == EventStatus.PUBLISHED).order_by(*_BY_START)
-    return paginate(db, stmt, cursor, limit)
+    return paginate(db, published_events_stmt(filters), SOONEST_FIRST, cursor, limit)
 
 
 def get_published_event(db: Session, event_id: uuid.UUID) -> Event:
@@ -66,7 +90,7 @@ def get_published_event(db: Session, event_id: uuid.UUID) -> Event:
 
 
 def list_all_events(db: Session, cursor: str | None, limit: int) -> tuple[list[Event], str | None]:
-    return paginate(db, select(Event).order_by(*_BY_START), cursor, limit)
+    return paginate(db, select(Event), SOONEST_FIRST, cursor, limit)
 
 
 def create_event(db: Session, data: EventIn, admin: User) -> Event:

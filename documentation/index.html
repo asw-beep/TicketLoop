@@ -79,13 +79,19 @@
             </a>
           </li>
           <li>
-            <div class="mod mod--next">
+            <a class="mod mod--done" href="m06-discovery-search-filters-pagination.html">
               <span class="mod__num">M6</span>
-              <span class="mod__body"><span class="mod__title">Discovery</span><span class="mod__goal">Search, filters, keyset pagination, indexes checked with EXPLAIN ANALYZE</span></span>
+              <span class="mod__body"><span class="mod__title">Discovery: search, filters, pagination</span><span class="mod__goal">Public search over 100,000 listings, keyset paging on every list, indexes proven with EXPLAIN ANALYZE: page 500 in 0.2 ms against 45 ms with OFFSET</span></span>
+              <span class="mod__status">Done 25 Nov</span>
+            </a>
+          </li>
+          <li>
+            <div class="mod mod--next">
+              <span class="mod__num">M7</span>
+              <span class="mod__body"><span class="mod__title">Reservations and the race</span><span class="mod__goal">Conditional UPDATE reservations, 100 buyers for one ticket, three locking strategies compared, safe expiry</span></span>
               <span class="mod__status">Up next</span>
             </div>
           </li>
-          <li><div class="mod mod--later"><span class="mod__num">M7</span><span class="mod__body"><span class="mod__title">Reservations and the race</span><span class="mod__goal">Conditional UPDATE reservations, 100 buyers for one ticket, three locking strategies compared, safe expiry</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M8</span><span class="mod__body"><span class="mod__title">Orders and payments</span><span class="mod__goal">Idempotency-Key orders, a fake gateway with HMAC-signed webhooks, dedupe and reconciliation</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M9</span><span class="mod__body"><span class="mod__title">Outbox, worker and transfer</span><span class="mod__goal">Transactional outbox, RabbitMQ and Celery, idempotent consumers, dead-letter queue, the ticket changes hands</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M10</span><span class="mod__body"><span class="mod__title">Redis: caching and rate limits</span><span class="mod__goal">Cache-aside reads with versioned invalidation, a Lua token bucket on hot endpoints</span></span></div></li>

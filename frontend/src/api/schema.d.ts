@@ -291,7 +291,7 @@ export interface paths {
     };
     /**
      * List Events
-     * @description Published events, soonest first. Filters and search arrive in M6.
+     * @description Published events, soonest first.
      */
     get: operations["list_events_api_v1_events_get"];
     put?: never;
@@ -311,6 +311,26 @@ export interface paths {
     };
     /** Get Event */
     get: operations["get_event_api_v1_events__event_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/events/{event_id}/listings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Event Listings
+     * @description One published event's tickets on sale now. Same filters and sorts as `GET /listings`.
+     */
+    get: operations["event_listings_api_v1_events__event_id__listings_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -343,7 +363,11 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    get?: never;
+    /**
+     * Search Listings
+     * @description Tickets on sale now, cheapest first unless you ask otherwise.
+     */
+    get: operations["search_listings_api_v1_listings_get"];
     put?: never;
     /**
      * Create Listing
@@ -908,6 +932,11 @@ export interface components {
       expires_at?: string | null;
     };
     /**
+     * ListingSort
+     * @enum {string}
+     */
+    ListingSort: "price" | "-price" | "created_at" | "-created_at";
+    /**
      * ListingStatus
      * @enum {string}
      */
@@ -948,6 +977,13 @@ export interface components {
     Page_ListingOut_: {
       /** Items */
       items: components["schemas"]["ListingOut"][];
+      /** Next Cursor */
+      next_cursor: string | null;
+    };
+    /** Page[PublicListingOut] */
+    Page_PublicListingOut_: {
+      /** Items */
+      items: components["schemas"]["PublicListingOut"][];
       /** Next Cursor */
       next_cursor: string | null;
     };
@@ -1735,6 +1771,12 @@ export interface operations {
   list_events_api_v1_events_get: {
     parameters: {
       query?: {
+        /** @description Part of the event's name */
+        q?: string | null;
+        category?: components["schemas"]["EventCategory"] | null;
+        city?: string | null;
+        starts_after?: string | null;
+        starts_before?: string | null;
         /** @description next_cursor from the previous page */
         cursor?: string | null;
         /** @description Items per page, 1 to 100 */
@@ -1797,6 +1839,51 @@ export interface operations {
       };
     };
   };
+  event_listings_api_v1_events__event_id__listings_get: {
+    parameters: {
+      query?: {
+        /** @description `price` and `created_at` ascend; a leading `-` descends */
+        sort?: components["schemas"]["ListingSort"];
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+        /** @description Part of the event's name */
+        q?: string | null;
+        category?: components["schemas"]["EventCategory"] | null;
+        city?: string | null;
+        ticket_category?: string | null;
+        min_price_paise?: number | null;
+        max_price_paise?: number | null;
+      };
+      header?: never;
+      path: {
+        event_id: string | null;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_PublicListingOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   health_api_v1_health_get: {
     parameters: {
       query?: never;
@@ -1822,6 +1909,50 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["HealthResponse"];
+        };
+      };
+    };
+  };
+  search_listings_api_v1_listings_get: {
+    parameters: {
+      query?: {
+        /** @description `price` and `created_at` ascend; a leading `-` descends */
+        sort?: components["schemas"]["ListingSort"];
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+        /** @description Part of the event's name */
+        q?: string | null;
+        category?: components["schemas"]["EventCategory"] | null;
+        city?: string | null;
+        ticket_category?: string | null;
+        min_price_paise?: number | null;
+        max_price_paise?: number | null;
+        event_id?: string | null;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_PublicListingOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };

@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M6 Discovery</title>
+  <meta name="description" content="TicketLoop M6: public search over 100,000 listings with keyset pagination and indexes proven by EXPLAIN ANALYZE. What was built, the decisions behind it, and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Discovery: search, filters, pagination</h1>
+      <p class="ticket__summary">Anyone can search the tickets on sale without an account: by event name, category, city, ticket category and price, sorted by price or date. Every list in the API now pages by the last row's sort values instead of an offset, so page 500 costs what page 1 costs. The indexes are there because EXPLAIN ANALYZE on 100,000 listings said so, and a script fails if a plan stops using them.</p>
+      <p class="ticket__fineprint">Done when: at 100,000 listings no search query scans the whole listings table, and page 500 takes within 20% of page 1's time.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M6</span>
+      <span class="ticket__days">25 Nov</span>
+      <span class="stamp">Done<br>25 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">Search is one SQL statement: the active listings joined to their event and ticket, narrowed by whichever filters came in, sorted by price or creation time. It's public, and the response shape has no seller, documents or provider references in it, so there's nothing to leak.</p>
+        <p class="pitch">Paging is keyset. The cursor holds the last row's sort value and its id, and the next page is <code>WHERE (asking_price_paise, id) &gt; (:price, :id)</code>, which an index on those two columns answers by jumping straight to the place. With an offset, page 500 read and threw away 9,980 rows and took about 45 ms. With the keyset it takes about 0.2 ms, the same as page 1.</p>
+        <p class="pitch">I measured rather than guessed. A seed script builds 2,000 events and 100,000 listings in a separate database, and a second script runs <code>EXPLAIN ANALYZE</code> on the API's own statements with and without the indexes. It writes a report and exits 1 if any page reads more than a small slice of <code>listings</code>, by any kind of scan.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Keyset paging</span><span class="built__note"><code>Sort(name, keys, descending)</code> names one order; <code>paginate()</code> applies it, adds the row comparison, asks for one row more than the page, and builds the next cursor from the last row's own key values. All eight existing lists moved to it and no client changed, because the cursor was always opaque.</span><code>app/core/pagination.py</code></li>
+          <li><span class="built__what">Cursor checks</span><span class="built__note">The cursor carries the sort's name, so one from another sort is 400 <code>bad-cursor</code>. Each value must parse as exactly its column's type: an int inside the column's range, a datetime with a zone, a UUID, text without NULs. Anything else is a 400, never a 500 from Postgres.</span><code>app/core/pagination.py</code> <code>tests/unit/test_pagination.py</code></li>
+          <li><span class="built__what">Search</span><span class="built__note"><code>GET /listings</code> and <code>GET /events/{id}/listings</code>: <code>q</code>, category, city, ticket category, price range, event, and four sorts. Only <code>ACTIVE</code> listings whose end hasn't passed. A lowest price above the highest is 422 <code>bad-price-range</code>.</span><code>app/modules/discovery/</code></li>
+          <li><span class="built__what">Event filters</span><span class="built__note"><code>GET /events</code> gains <code>q</code>, category, city and a start-date range.</span><code>app/modules/events/service.py</code></li>
+          <li><span class="built__what">Safe search text</span><span class="built__note">Trimmed, at most 100 characters, no NUL. Blank means no filter. <code>%</code> and <code>_</code> are escaped, so searching for <code>50%</code> finds names with a percent sign, not everything.</span><code>app/core/search.py</code></li>
+          <li><span class="built__what">Indexes</span><span class="built__note">Two partial indexes on active listings (by price, by creation time), a trigram index on event names, events by status and start and by lower-cased city, tickets by owner and by lower-cased category.</span><code>migrations/versions/2026_11_25_1e89a2dcf2cc_…</code></li>
+          <li><span class="built__what">Seed and proof</span><span class="built__note"><code>seed_discovery</code> fills a <code>_perf</code> database with COPY in seconds, the same rows every time. <code>explain_discovery</code> runs each query shape before and after the indexes and writes the report.</span><code>scripts/seed_discovery.py</code> <code>scripts/explain_discovery.py</code> <code>docs/discovery-performance.md</code></li>
+          <li><span class="built__what">Throwaway databases</span><span class="built__note">One helper creates and drops databases for tests, browser tests and measurements, and refuses any name that doesn't end in <code>_test</code>, <code>_e2e</code> or <code>_perf</code>.</span><code>scripts/databases.py</code></li>
+          <li><span class="built__what">Screens</span><span class="built__note">The front page is now search for everyone, with the whole search in the address; an event page lists that event's tickets. Both use <strong>Load more</strong> over the cursor.</span><code>frontend/src/pages/SearchPage.tsx</code> <code>EventPage.tsx</code></li>
+          <li><span class="built__what">Browser tests</span><span class="built__note">They now start their own API and dev server on their own ports, against their own database, recreated each run. They can't touch what I'm developing against.</span><code>frontend/e2e/env.ts</code> <code>scripts/e2e_api.py</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">One page of a search, step by step</h2>
+      <div class="section__body">
+        <p>A buyer presses <strong>Load more</strong> under "Tickets in Mumbai, cheapest first".</p>
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>The filters are parsed</strong><p>FastAPI builds a frozen <code>ListingFilters</code> from the query string. Text is trimmed and checked, prices must be between 0 and ₹1,00,000, and the range must make sense. A bad value is a 422 before any SQL runs.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>The cursor is decoded and checked</strong><p>Base64, then JSON: <code>{"s": "search.price", "k": [125000, "5f0c…"]}</code>. The sort's name must match this request's sort, the count must match, and each value must fit its column. Otherwise 400 <code>bad-cursor</code>.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The statement is built</strong><p>Active and unexpired listings, joined once to <code>events</code> and once to <code>tickets</code>; those joins serve both the filter and the response. City is compared as <code>lower(city) = lower(:city)</code>.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>The keyset condition goes in</strong><p><code>WHERE (asking_price_paise, id) &gt; (125000, '5f0c…') ORDER BY asking_price_paise, id LIMIT 21</code>. Postgres compares the pair as one row value, so equal prices are split by id and nothing repeats or goes missing.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>The index does the work</strong><p><code>ix_listings_active_by_price</code> is a partial index, so it only holds active listings, already in this order. Postgres descends to the cursor's place and reads forward until it has 21 matches.</p></div></li>
+          <li><span class="flow__n">6</span><div class="flow__text"><strong>The 21st row is the answer to "is there more?"</strong><p>Twenty rows go out. If a 21st came back, the next cursor is the 20th row's price and id. If not, <code>next_cursor</code> is null, and the button disappears.</p></div></li>
+        </ol>
+<pre><code>row = tuple_(*sort.keys)                                <span class="c"># app/core/pagination.py</span>
+bound = tuple_(*(literal(v, k.type) for v, k in zip(values, sort.keys, strict=True)))
+stmt = stmt.where(row &lt; bound if sort.descending else row &gt; bound)
+order = (key.desc() if sort.descending else key.asc() for key in sort.keys)
+return stmt.add_columns(*sort.keys).order_by(*order).limit(limit + 1)</code></pre>
+        <h3>What it measured</h3>
+        <p>2,000 events, 100,000 listings, about 80,000 of them active. PostgreSQL 17 in Docker on my laptop, warm cache, default settings. The full table is in <code>docs/discovery-performance.md</code>.</p>
+        <ul class="tight">
+          <li><strong>Page 500, keyset: 0.18 to 0.21 ms</strong> across the four sorts, 1.04 to 1.12 times page 1. <strong>With <code>OFFSET</code>: 45 to 56 ms</strong>, 250 to 295 times page 1.</li>
+          <li><strong>Search with no filter: about 80 ms before the indexes, under 0.2 ms after.</strong> Before, it was a sequential scan and a sort.</li>
+          <li><strong>A rare name search: 1 ms before, 0.06 ms after</strong>, through the trigram index on event names.</li>
+          <li><strong>A filter that matches nothing is the worst case</strong> for an index in sort order, because it walks every row looking for a first match. A category nobody sells took over 100 ms that way, and a city nobody sells in took 57 ms and read all 79,825 active listings. With indexes on <code>lower(ticket_category)</code> and <code>lower(city)</code> both take about 0.05 ms and read none.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>Run <code>docker compose up -d db mailpit minio</code>, the API, and <code>npm run dev</code> in <code>frontend/</code>, then open <code>localhost:5173</code>. To see it full of tickets, point the API at the seeded <code>ticketloop_perf</code> database (README, "Try the search").</p>
+        <ul class="built">
+          <li><span class="built__what">Find tickets</span><span class="built__note">The front page, for everyone. Filters, sort, results and <strong>Load more</strong>. The address holds the search, so it can be shared, bookmarked and reached with Back.</span><code>/</code></li>
+          <li><span class="built__what">Event</span><span class="built__note">An event's date and venue, and every ticket on sale for it, sorted.</span><code>/events/:eventId</code></li>
+        </ul>
+        <figure class="shot">
+          <img src="assets/m06-search.png" alt="The Find tickets page: a filter form with event, city, category, ticket category, lowest and highest price and a sort, above a list of tickets with event, date, venue, ticket category, asking price and face value." loading="lazy" width="1100" height="900">
+          <figcaption>The front page, against 100,000 seeded listings.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m06-event.png" alt="An event page: the event&#x27;s name, date, venue and city on a stub, then the tickets on sale for it sorted by price." loading="lazy" width="1100" height="900">
+          <figcaption>One event's tickets, cheapest first.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+        <h3>Paging</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Keyset for every list</h4>
+            <p class="decision__over">Instead of <code>LIMIT … OFFSET</code>, which M4 and M5 used</p>
+            <p>An offset makes Postgres produce every earlier row and throw it away, so cost grows with the page number. It's also wrong when rows arrive: a new row ahead of the reader shifts everything by one, and one listing shows up twice. A keyset has neither problem. What it gives up is "jump to page 37" and a total count, and a ticket search needs neither.</p>
+          </div>
+          <div class="decision">
+            <h4>A row comparison</h4>
+            <p class="decision__over">Instead of <code>price &gt; :p OR (price = :p AND id &gt; :id)</code></p>
+            <p>They mean the same, but Postgres turns <code>(price, id) &gt; (:p, :id)</code> into one index range condition and starts reading at the right place. The <code>OR</code> form usually becomes a filter, or a bitmap of two scans, and loses the point. The limit is that every key runs in the same direction, so a sort is all ascending or all descending.</p>
+          </div>
+          <div class="decision">
+            <h4>The sort's name inside the cursor</h4>
+            <p class="decision__over">Instead of just the values</p>
+            <p>A price cursor holds an integer and an id. Handed to a date sort it might fail, or worse, half work. With the name inside, a cursor from another sort is a clean 400.</p>
+          </div>
+          <div class="decision">
+            <h4>Read the key values back from the query</h4>
+            <p class="decision__over">Instead of reading them off the ORM object</p>
+            <p><code>paginate()</code> adds the sort's key expressions to the SELECT. M7's "live reservations first" sorts by a CASE expression, which isn't an attribute on any object, and it works without a second definition in Python.</p>
+          </div>
+          <div class="decision">
+            <h4>The cursor isn't signed</h4>
+            <p class="decision__over">Instead of an HMAC over it</p>
+            <p>It grants nothing. It says where to start reading in a list the caller may read anyway, and every value is checked against its column's type. Signing would add a key to manage and stop nobody doing anything.</p>
+          </div>
+        </div>
+
+        <h3>Search</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Hide active listings past their end</h4>
+            <p class="decision__over">Instead of trusting the status alone</p>
+            <p>The expiry job runs on a timer. Between a listing's end and the next run it's still <code>ACTIVE</code> in the table but can't be reserved, so showing it would send buyers to a dead end.</p>
+          </div>
+          <div class="decision">
+            <h4>ILIKE with a trigram index</h4>
+            <p class="decision__over">Instead of Postgres full-text search, or Elasticsearch</p>
+            <p>People search event names by fragments: "sharma", "cup". A trigram index serves <code>ILIKE '%sharma%'</code>, which a B-tree can't. Full-text search stems and matches words, which is better for prose and worse for half a name. A separate search server is another thing to keep in sync for 2,000 event names.</p>
+          </div>
+          <div class="decision">
+            <h4>Two partial indexes on active listings</h4>
+            <p class="decision__over">Instead of one index on <code>(status, price, id)</code></p>
+            <p>Every search asks for active listings and nothing else does. A partial index leaves out the sold, cancelled and draft rows, so it stays as small as the number of tickets on sale, however long the site runs.</p>
+          </div>
+          <div class="decision">
+            <h4><code>ix_tickets_category</code> and <code>ix_events_city</code>, added after measuring</h4>
+            <p class="decision__over">Instead of leaving the filter to the sort index</p>
+            <p>The spec named four indexes "plus whatever EXPLAIN shows". EXPLAIN showed a category nobody sells walking all 80,000 active listings. The planner now starts from the few matching tickets instead. <code>ix_events_city</code> is the same story for a city.</p>
+          </div>
+          <div class="decision">
+            <h4>422 for a price range that can't match</h4>
+            <p class="decision__over">Instead of an empty page</p>
+            <p>An empty page says "nothing on sale". The truth is a typo in the form.</p>
+          </div>
+        </div>
+
+        <h3>Proof</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Explain the API's own statement</h4>
+            <p class="decision__over">Instead of a copy of the SQL in the script</p>
+            <p><code>search_stmt()</code> and <code>page_stmt()</code> are the functions the route calls. A hand-copied query would drift and keep passing.</p>
+          </div>
+          <div class="decision">
+            <h4>Count the rows read, not just the scan's name</h4>
+            <p class="decision__over">Instead of failing only on "Seq Scan"</p>
+            <p>The first version of the check passed a search that read every active listing, because it read them through an index. A full index walk and a sequential scan cost the same; the check now counts the rows each plan touches and fails above 10,000.</p>
+          </div>
+          <div class="decision">
+            <h4>Drop the indexes in a transaction that rolls back</h4>
+            <p class="decision__over">Instead of a second database without them</p>
+            <p>DDL is transactional in Postgres. "Before" and "after" run on the same rows, the same statistics and the same cache.</p>
+          </div>
+        </div>
+
+        <h3>Frontend</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>The address is the search</h4>
+            <p class="decision__over">Instead of component state</p>
+            <p>Reload, share, bookmark and Back all work for free. The form is a draft; pressing Search writes it to the address, and the query key is built from the address.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>How does keyset pagination work, and why is it fast?</summary>
+          <div class="qa__a">
+            <p>The client sends back where the last page ended: the last row's sort value and id. The next page is <code>WHERE (price, id) &gt; (:price, :id) ORDER BY price, id LIMIT n</code>. With an index on <code>(price, id)</code>, Postgres walks down the B-tree to that exact spot, which costs the tree's height, three or four pages, then reads n entries. The cost depends on the page size, not on how deep the reader is. I measured it: page 500 took 0.18 ms against 0.17 ms for page 1. The same page by <code>OFFSET 9980</code> took about 45 ms, because Postgres fetches and discards every earlier row.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does the sort need the id at the end?</summary>
+          <div class="qa__a">
+            <p>Because prices tie. If twelve listings cost ₹1,500 and the page ends in the middle of them, "price &gt; 1500" skips the rest and "price &gt;= 1500" repeats the first half. Adding the unique id makes the order total, so there's exactly one place the next page starts. The tests page through rows with equal prices and equal timestamps, in both directions, and check that each appears once.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What does keyset pagination give up?</summary>
+          <div class="qa__a">
+            <p>Jumping to an arbitrary page and cheap totals. The client can only go forward from a row it has seen. It also needs a fixed set of sorts, since each needs a unique tail and ideally an index. For a search page with Load more that's a good trade. For an admin table with page numbers I'd think again.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What if a row changes between two pages?</summary>
+          <div class="qa__a">
+            <p>If a listing's price drops below the cursor while I'm reading, I miss it; if it rises above, I may see it again at its new place. Keyset paging is stable against inserts and deletes before the cursor, which an offset isn't, but it isn't a snapshot. For a shop front that's fine: reserving checks the listing's real state with its own conditional UPDATE in M7.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why a partial index rather than a normal one?</summary>
+          <div class="qa__a">
+            <p>Because every search asks for <code>status = 'ACTIVE'</code>. A partial index <code>WHERE status = 'ACTIVE'</code> holds only those rows: smaller, more of it in memory, and cheaper to maintain, since a sold or cancelled listing just leaves it. The planner uses it only when the query's WHERE implies the index's, so the status condition must be in the query, and it is, in one place.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How did you decide which indexes to add?</summary>
+          <div class="qa__a">
+            <p>By measuring. I seeded 100,000 listings, ran <code>EXPLAIN (ANALYZE)</code> on every filter and sort with and without each index, and read the plans. The interesting result was that the sort indexes make most filters fast, because Postgres can walk in order and stop after 20 matches. The case that breaks is a filter matching almost nothing: it walks the whole index and never stops early. A category nobody sells took over 100 ms and a misspelt city took 57 ms, so both columns got an index. My first check missed the city because I only tried cities that exist, and because it looked for the words "Seq Scan" instead of counting rows.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Reading an EXPLAIN ANALYZE plan, what do you look at first?</summary>
+          <div class="qa__a">
+            <p>The actual rows and loops against the estimates, since a bad estimate is what picks a bad plan. Then which node takes the time (its actual total times its loops), whether it's a sequential scan on a big table, and "Rows Removed by Filter", which is work thrown away. Then whether there's a sort that an index order could have avoided. I run each query several times and take the median, because the first run pays for a cold cache.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why doesn't <code>ILIKE '%cup%'</code> use a B-tree?</summary>
+          <div class="qa__a">
+            <p>A B-tree orders strings from the left, so it can find a prefix but not something in the middle. A trigram index stores every three-letter piece of each name; the search is split into the same pieces and the index finds the names having all of them, then rechecks. It needs at least three characters to be selective, and the planner knows: for a common word it prefers the sort index, and for a rare one it uses the trigrams. The plans show both.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you stop someone searching for <code>%</code> from matching everything?</summary>
+          <div class="qa__a">
+            <p>By escaping <code>\</code>, <code>%</code> and <code>_</code> before wrapping the text in <code>%…%</code>, and naming the escape character in the query. The value is always a bound parameter, so it was never SQL injection; it's about the search meaning what it says. A NUL byte is refused with a 422, because Postgres text can't hold one and it would have been a 500.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What can someone do by tampering with a cursor?</summary>
+          <div class="qa__a">
+            <p>Start reading somewhere else in a list they can already read. The cursor only adds a comparison to a query whose filters and permissions come from the request and the token. What could go wrong is a 500, by putting a string where an integer goes or a number too big for the column, so each value is checked against its column's type and anything else is 400 <code>bad-cursor</code>.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you know public search never leaks the seller?</summary>
+          <div class="qa__a">
+            <p>The response model doesn't have the fields. <code>PublicListingOut</code> is a separate schema, not the full one with things removed, and <code>GET /listings</code> declares it as its response. A test compares the JSON keys of a result with the exact expected set, so adding a field to the wrong schema fails.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>The search joined <code>events</code> twice.</strong> A ticket loads its own event eagerly by default, and the search already joins events through the listing. The generated SQL had both. <code>contains_eager(Listing.ticket).lazyload(Ticket.event)</code> removed the second. I only saw it because the plan showed a join I hadn't written.</li>
+          <li><strong>A bool passed for a price.</strong> In Python <code>isinstance(True, int)</code> is true, so a cursor holding <code>true</code> got through to Postgres as an integer. The check compares <code>type(value) is int</code>.</li>
+          <li><strong>A number that fits JSON and not the column.</strong> Python reads any size of integer; a <code>bigint</code> column doesn't, and psycopg's error was a 500. The range is now checked by column type.</li>
+          <li><strong>A lone surrogate.</strong> <code>"\ud800"</code> is valid JSON and not valid UTF-8, so it can't be sent to Postgres. Another 500 turned into a 400.</li>
+          <li><strong>The seed finished and the plans were wrong.</strong> Right after a bulk load Postgres has no statistics, so it guesses. The seed script ends with <code>ANALYZE</code>.</li>
+          <li><strong>Browser tests shared my development database.</strong> A search test needs to know what's on sale, and mine had my own rows in it. They now have their own database, API and dev server, and never reuse a server that's already running.</li>
+          <li><strong>Measuring at 0.15 ms is noisy.</strong> One run of page 500 could be 30% off one run of page 1, and running all of one and then all of the other once gave 1.5x from nothing but a busy laptop. The comparison now takes them in turns and compares the medians of 101 runs each.</li>
+          <li><strong>A city nobody sells in read the whole table.</strong> The final review searched for "Bangalore" in data that says Bengaluru. Postgres has no statistics for <code>lower(city)</code>, guessed hundreds of matches, and walked the price index to the end looking for them: 79,825 listings for an empty page, on the likeliest typo a buyer makes. An expression index gave it both the rows and the statistics.</li>
+          <li><strong>Pressing Enter threw the keyboard away.</strong> The search form was keyed on the address, so every search rebuilt it and focus fell to the page. It's now rebuilt only when the address changes from outside the form (Back, a link, Clear), and a browser test checks the focus stays.</li>
+          <li><strong>A price cut while someone was paging showed a listing twice.</strong> Keyset paging can't prevent it: the row really did move past the cursor. The page shows each listing once, as it last came back.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>No total count.</strong> Counting 80,000 matches would cost more than the page itself.</li>
+          <li><strong>Name search only.</strong> <code>q</code> matches the event's name, not its venue or organiser.</li>
+          <li><strong>No caching yet.</strong> M10 puts Redis in front of these reads, and M12 measures whether it's worth it.</li>
+          <li><strong>A very short search (one or two letters) can't use trigrams.</strong> It falls back to the sort index, which is fast because short fragments match often.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db mailpit minio
+uv run alembic upgrade head
+uv run pytest tests/unit/test_pagination.py tests/integration/test_pagination_db.py   <span class="c"># keyset paging</span>
+uv run pytest tests/integration/test_discovery.py                  <span class="c"># search, filters, sorts</span>
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 uv run pytest                 <span class="c"># 615 tests, what CI runs</span>
+
+export DATABASE_URL=postgresql+psycopg://ticketloop:ticketloop@localhost:5432/ticketloop_perf
+uv run python -m scripts.seed_discovery --reset    <span class="c"># 2,000 events, 100,000 listings</span>
+uv run python -m scripts.explain_discovery         <span class="c"># Result: PASS, and docs/discovery-performance.md</span>
+uv run uvicorn app.main:app --port 8000            <span class="c"># browse the seeded tickets at localhost:5173</span>
+unset DATABASE_URL
+
+cd frontend &amp;&amp; npm run dev     <span class="c"># localhost:5173</span>
+npm test                       <span class="c"># 92 unit tests</span>
+npm run e2e                    <span class="c"># 16 browser tests, 3 for this module</span>
+gh run list --workflow ci.yml --limit 3</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m05-listings-verification-and-audit-log.html">Previous<strong>M5 Listings, verification and audit log</strong></a>
+    <span class="pager__next">Next<br><strong>M7 Reservations and the race</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

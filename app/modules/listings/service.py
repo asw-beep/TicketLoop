@@ -15,7 +15,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.pagination import paginate
+from app.core.pagination import Sort, paginate
 from app.infrastructure.database.errors import violated_constraint
 from app.modules.audit.models import AuditLog
 from app.modules.audit.service import record
@@ -60,6 +60,10 @@ SAFE_HISTORY_KEYS = frozenset(
         "expires_at",
     }
 )
+
+NEWEST_FIRST = Sort("listings.newest", (Listing.created_at, Listing.id), descending=True)
+OLDEST_FIRST = Sort("listings.oldest", (Listing.created_at, Listing.id))
+HISTORY_ORDER = Sort("audit.oldest", (AuditLog.created_at, AuditLog.id))
 
 
 def can_see_everything(listing: Listing, user: User | None) -> bool:
@@ -147,8 +151,7 @@ def list_my_listings(
         stmt = stmt.where(Listing.status == status)
     if ticket_id is not None:
         stmt = stmt.where(Listing.ticket_id == ticket_id)
-    stmt = stmt.order_by(Listing.created_at.desc(), Listing.id.desc())
-    return paginate(db, stmt, cursor, limit)
+    return paginate(db, stmt, NEWEST_FIRST, cursor, limit)
 
 
 def require_seller(listing: Listing, user: User) -> None:
@@ -265,12 +268,10 @@ def list_history(
     listing = get_listing_for(db, listing_id, user)
     if not can_see_everything(listing, user):
         raise ListingNotFoundError()
-    stmt = (
-        select(AuditLog)
-        .where(AuditLog.entity_type == "listing", AuditLog.entity_id == listing.id)
-        .order_by(AuditLog.created_at, AuditLog.id)
+    stmt = select(AuditLog).where(
+        AuditLog.entity_type == "listing", AuditLog.entity_id == listing.id
     )
-    rows, next_cursor = paginate(db, stmt, cursor, limit)
+    rows, next_cursor = paginate(db, stmt, HISTORY_ORDER, cursor, limit)
     return [_history_entry(row, listing) for row in rows], next_cursor
 
 
@@ -297,12 +298,8 @@ def list_pending_listings(
     db: Session, cursor: str | None, limit: int
 ) -> tuple[list[Listing], str | None]:
     """The review queue, oldest first."""
-    stmt = (
-        select(Listing)
-        .where(Listing.status == ListingStatus.PENDING_VERIFICATION)
-        .order_by(Listing.created_at, Listing.id)
-    )
-    return paginate(db, stmt, cursor, limit)
+    stmt = select(Listing).where(Listing.status == ListingStatus.PENDING_VERIFICATION)
+    return paginate(db, stmt, OLDEST_FIRST, cursor, limit)
 
 
 def list_all_listings(
@@ -318,8 +315,7 @@ def list_all_listings(
         stmt = stmt.where(Listing.status == status)
     if ticket_id is not None:
         stmt = stmt.where(Listing.ticket_id == ticket_id)
-    stmt = stmt.order_by(Listing.created_at.desc(), Listing.id.desc())
-    return paginate(db, stmt, cursor, limit)
+    return paginate(db, stmt, NEWEST_FIRST, cursor, limit)
 
 
 def approve_listing(db: Session, listing_id: uuid.UUID, admin: User) -> Listing:

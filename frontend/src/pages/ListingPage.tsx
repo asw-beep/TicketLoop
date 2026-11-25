@@ -23,11 +23,8 @@ import {
   paiseToRupeesInput,
 } from "../lib/format";
 import { checkAskingPrice, historyLabel, isFullListing, sellerActions } from "../lib/listings";
+import { isUuid } from "../lib/uuid";
 import { NotFoundPage } from "./StatusPages";
-
-// A listing ID is a UUID. Anything else in the address (like "me") is not a listing, and must
-// not reach the API: GET /listings/me is the seller's list, a different shape.
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** One listing's cache entries, including its history. Not under "listings" (the lists). */
 const listingKey = (listingId: string) => ["listing", listingId] as const;
@@ -38,7 +35,7 @@ type Viewer = "seller" | "admin";
 export function ListingPage() {
   const { listingId = "" } = useParams();
   const { status, user } = useAuth();
-  const isListingId = UUID.test(listingId);
+  const isListingId = isUuid(listingId);
   const listing = useQuery({
     // Who is asking changes the answer (public or full shape), so it is part of the key, and
     // the request waits until we know whether anyone is signed in.
@@ -85,7 +82,14 @@ function ListingCard({
       }
       footer={footer}
     >
-      <p className="pass__name">{listing.event.name}</p>
+      <p className="pass__name">
+        {/* Only a listing on sale is sure to have an event with a public page. */}
+        {listing.status === "ACTIVE" ? (
+          <Link to={`/events/${listing.event.id}`}>{listing.event.name}</Link>
+        ) : (
+          listing.event.name
+        )}
+      </p>
       <p className="pass__email">
         {listing.event.venue}, {listing.event.city} · {formatWhen(listing.event.starts_at)}
       </p>

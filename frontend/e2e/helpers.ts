@@ -2,6 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { expect } from "@playwright/test";
 import type { Browser, Page } from "@playwright/test";
+import { PYTHON_ENV } from "./env";
 
 export const PASSWORD = "correct horse battery staple";
 
@@ -26,7 +27,9 @@ export async function logIn(page: Page, email: string, password: string): Promis
 
 /** Make an account an admin, the way an operator does: the script in scripts/make_admin.py. */
 export function makeAdmin(email: string): void {
-  execFileSync("uv", ["run", "--directory", "..", "python", "-m", "scripts.make_admin", email]);
+  execFileSync("uv", ["run", "--directory", "..", "python", "-m", "scripts.make_admin", email], {
+    env: { ...process.env, ...PYTHON_ENV },
+  });
 }
 
 /** A datetime-local value a month from now, so the event is always in the future. */
@@ -92,4 +95,20 @@ export async function verifyTicket(
   await queued.getByLabel("Transfer eligible").setChecked(eligible);
   await queued.getByRole("button", { name: "Verify" }).click();
   await expect(page.getByText(`Verified: ${eventName},`)).toBeVisible();
+}
+
+/** As the seller on their verified ticket's page: offer it at `price` and send it for review. */
+export async function listTicket(page: Page, price: string): Promise<void> {
+  const form = page.getByRole("form", { name: "List this ticket" });
+  await form.getByLabel("Asking price (₹)").fill(price);
+  await form.getByRole("button", { name: "Submit for review" }).click();
+  await expect(page.getByRole("heading", { name: "Status" })).toContainText("Pending review");
+}
+
+/** As a signed-in admin: approve the event's listing from the review queue. */
+export async function approveListing(page: Page, eventName: string): Promise<void> {
+  await page.getByRole("link", { name: "Review listings" }).click();
+  const queued = page.getByRole("listitem", { name: eventName });
+  await queued.getByRole("button", { name: "Approve" }).click();
+  await expect(page.getByText(`Approved: ${eventName}.`)).toBeVisible();
 }
