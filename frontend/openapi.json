@@ -2832,6 +2832,7 @@
     },
     "/api/v1/events/{event_id}": {
       "get": {
+        "description": "A published event. Cached (M10) until any event changes; a 404 is never cached.",
         "operationId": "get_event_api_v1_events__event_id__get",
         "parameters": [
           {

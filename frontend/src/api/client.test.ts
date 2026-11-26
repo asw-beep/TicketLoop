@@ -135,6 +135,18 @@ describe("unwrap", () => {
     await expect(call).rejects.toMatchObject({ code: "wrong-password", message: "wrong-password" });
   });
 
+  it("keeps how long a 429 says to wait", async () => {
+    const limited = problem(429, "rate-limited");
+    limited.headers.set("Retry-After", "12");
+    serverAnswers(limited);
+
+    const call = unwrap(
+      api.POST("/api/v1/auth/login", { body: { email: "a@b.co", password: "x" } }),
+    );
+
+    await expect(call).rejects.toMatchObject({ code: "rate-limited", retryAfter: 12 });
+  });
+
   it("returns the data on success", async () => {
     setAccessToken("good");
     serverAnswers(ok({ id: "u1" }));

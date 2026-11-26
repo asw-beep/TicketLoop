@@ -434,3 +434,15 @@ UPDATE reconciliation_runs
 | Some fixes committed | Those payments are final | The next run skips them and fixes the rest. |
 
 **Built in M8.** `scripts/reconcile_payments.py` by hand, and in Docker every 2 minutes by Celery beat (M9). The gateway is made to "forget" the webhooks of 20 payments: one run fixes all 20, a second fixes 0. Runs at once, and a run racing the late webhook, settle each payment once.
+
+---
+
+## Where Redis is not (M10)
+
+Redis (M10) caches search and the event page, and counts requests for the rate limits. It takes no part in any answer above: who holds a listing, what an order costs, whether a payment settled and who owns a ticket are all read and written in Postgres, under the statements shown. A cache that is wrong, empty or gone changes what a page shows for a few seconds, never what happens.
+
+**A stale search page.** A cached page can show a listing as on sale a moment after someone reserved it. Reserving it runs S1 of problem 1, the conditional `UPDATE ... WHERE status = 'ACTIVE'`, against the row itself, so the second buyer gets 409 `listing-not-available`, exactly as if the page had been fresh.
+
+**How stale.** A commit that writes to `listings` or `events` bumps a version number in Redis after the commit, and every cached key contains the versions it was built from, so the next reader builds a new key and goes to Postgres. A reader reads the versions before it queries Postgres: if a writer commits in between, the reader's page is stored under the old version, which nobody looks up again. Bumped before the commit instead, a reader could fill the new version with the rows from before it, and keep serving them for the whole expiry. The commit may release savepoints on the way (reserving and the expiry job do); those don't count, only the transaction's own commit bumps. If the bump can't be made (Redis died at that instant, or this process has stopped asking it for a few seconds), it is owed, and made by the process's first call to Redis once it answers.
+
+**A dead Redis.** Every Redis call has a quarter-second timeout and no retries, and the first failure opens a breaker: no request asks Redis again until a background ping, every 5 seconds, gets an answer. Only the request that finds Redis gone waits, a timeout or, in Docker, the few seconds a stopped container's name takes to fail to resolve. Reads go to Postgres (`X-Cache: BYPASS`) and the rate limits let everything through. Refusing every login because the limiter is down would turn a cache outage into a full one; the cost is that, for as long as Redis is down, nothing is limited.

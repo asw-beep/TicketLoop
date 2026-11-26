@@ -1,9 +1,11 @@
 """HTTP routes for reservations. Thin: validate, call the service, shape."""
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends, Response
 
+from app.api.rate_limits import per_user
 from app.core.pagination import Cursor, Limit, Page
 from app.infrastructure.database.session import DbSession
 from app.modules.identity.dependencies import CurrentUser
@@ -20,7 +22,11 @@ reservations_router = APIRouter(tags=["reservations"])
     responses={200: {"model": ReservationOut, "description": "You already hold it"}},
 )
 def reserve(
-    listing_id: uuid.UUID, user: CurrentUser, db: DbSession, response: Response
+    listing_id: uuid.UUID,
+    user: CurrentUser,
+    db: DbSession,
+    response: Response,
+    _: Annotated[None, Depends(per_user("reserve"))],
 ) -> ReservationOut:
     """Hold an ACTIVE listing for 10 minutes while you pay. Of many buyers at once exactly one
     gets it. Asking again while you hold it returns the hold you have."""

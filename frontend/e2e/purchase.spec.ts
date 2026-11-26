@@ -62,6 +62,10 @@ test("a buyer finds a ticket, reserves it, gives it up, and another buyer buys i
   await buyer.getByRole("link", { name: "Log in to reserve" }).click();
   await logIn(buyer, buyerEmail, PASSWORD);
   await expect(buyer).toHaveURL(listingUrl);
+  // Someone else's listing is not one of "My listings", though its address starts the same.
+  const myListings = buyer.getByRole("link", { name: "My listings" });
+  await expect(myListings).toBeVisible();
+  await expect(myListings).not.toHaveAttribute("aria-current", "page");
 
   // Another buyer already has the page open.
   const rival = await newPage(browser);

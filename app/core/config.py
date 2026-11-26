@@ -94,6 +94,19 @@ class Settings(BaseSettings):
     ticket_provider_failures: int = 0
     ticket_provider_delay_seconds: float = 0.0
 
+    # Redis (M10): a cache for the public reads and the rate limiter. Never part of a decision
+    # about a ticket or money, and both fail open: Redis down means slower, not wrong.
+    redis_url: str = "redis://localhost:6379/0"
+    redis_timeout_seconds: float = 0.25
+    cache_enabled: bool = True
+    cache_ttl_min_seconds: int = 30
+    cache_ttl_max_seconds: int = 60
+    rate_limit_enabled: bool = True
+    rate_limit_login_per_minute: int = 5  # per email and address; password-reset requests too
+    rate_limit_reserve_per_minute: int = 10  # per user
+    rate_limit_payment_per_minute: int = 10  # per user, payment intents
+    rate_limit_search_per_minute: int = 60  # per address
+
     @property
     def storage_public_endpoint(self) -> str:
         """The storage host the browser reaches, used to sign download links."""

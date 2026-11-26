@@ -309,7 +309,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Get Event */
+    /**
+     * Get Event
+     * @description A published event. Cached (M10) until any event changes; a 404 is never cached.
+     */
     get: operations["get_event_api_v1_events__event_id__get"];
     put?: never;
     post?: never;

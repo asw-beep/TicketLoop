@@ -38,6 +38,14 @@ export const PYTHON_ENV = {
   // The worker and relay the API starts use queues of their own, so a development worker on
   // the same RabbitMQ never takes the browser tests' messages.
   QUEUE_PREFIX: "e2e-",
+  // A Redis database of their own, emptied when the API starts. The cache stays on, so the
+  // browser tests also show it never serves a page a change has made stale. The limits are
+  // raised out of the way: every test comes from one address, and the admin logs in often.
+  REDIS_URL: "redis://localhost:6379/1",
+  RATE_LIMIT_LOGIN_PER_MINUTE: "10000",
+  RATE_LIMIT_RESERVE_PER_MINUTE: "10000",
+  RATE_LIMIT_PAYMENT_PER_MINUTE: "10000",
+  RATE_LIMIT_SEARCH_PER_MINUTE: "10000",
   LOG_JSON: "false",
   LOG_LEVEL: "WARNING",
 };

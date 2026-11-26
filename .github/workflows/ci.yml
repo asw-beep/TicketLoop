@@ -52,6 +52,16 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # The cache and the rate limiter (M10).
+      redis:
+        image: redis:8.4.0-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
     env:
       # The job runs on the runner itself, so Postgres is at localhost, as on a laptop.
@@ -63,6 +73,8 @@ jobs:
       REQUIRE_STORAGE: "1"
       # And fail, don't skip, if the messaging drills cannot reach RabbitMQ.
       REQUIRE_BROKER: "1"
+      # And fail, don't skip, if the cache and rate-limit tests cannot reach Redis.
+      REQUIRE_REDIS: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -183,6 +195,16 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # The cache and the rate limiter (M10).
+      redis:
+        image: redis:8.4.0-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
 
     env:
       DATABASE_URL: postgresql+psycopg://ticketloop:ticketloop@localhost:5432/ticketloop

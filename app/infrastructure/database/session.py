@@ -16,6 +16,8 @@ from fastapi import Depends, Request
 from sqlalchemy import Connection, Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.infrastructure.redis.invalidation import attach
+
 
 def create_session_factory(bind: Engine | Connection) -> sessionmaker[Session]:
     return sessionmaker(
@@ -31,6 +33,8 @@ def create_session_factory(bind: Engine | Connection) -> sessionmaker[Session]:
 
 def get_db(request: Request) -> Iterator[Session]:
     session: Session = request.app.state.session_factory()
+    # Its commit bumps the cache versions of what it wrote (app/infrastructure/redis).
+    attach(session, getattr(request.app.state, "cache", None))
     try:
         yield session  # the route runs here
         session.commit()

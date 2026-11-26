@@ -20,8 +20,8 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M7 · Reservations and the race | Done: 10-minute holds by one conditional `UPDATE`; 100 buyers against four API processes end with exactly one winner, 20 rounds in a row; compared with `FOR UPDATE` and `SERIALIZABLE` ([design and numbers](docs/reservation-design.md)); holds expire with `SKIP LOCKED`; an event with a held ticket can't be cancelled; reserve, countdown and cancel on screen |
 | M8 · Orders and payments | Done: idempotent orders at the server's price; a pretend gateway, fakepay, that can be late, silent, repeat itself or forge; HMAC-signed webhooks applied exactly once; reconciliation that repairs what a webhook never told us; a paid ticket is never released, 50 races in a row; checkout, order page and My orders on screen |
 | M9 · Outbox, worker and transfer | Done: every event written in the transaction of its change and published by a relay that waits out a dead broker; RabbitMQ and Celery with late acknowledgement and dead-letter queues; consumers that do their work once however often a message arrives; the ticket moves to its buyer through an idempotent provider call, or to review; a broker outage, a killed worker and a poison message, all automated drills; the order page follows the ticket to My tickets |
-| M10 · Redis: caching and rate limits | Next |
-| M11 · Observability and delivery | Planned (Sun 29 Nov) |
+| M10 · Redis: caching and rate limits | Done: search and the event page cached in Redis under versioned keys that a commit to `listings` or `events` makes unreachable, found by the session, so no write in the API or the worker can forget; 30 to 60 second jittered expiry; `X-Cache` on every cached route; token buckets in one Lua script on Redis's clock for login, password reset, reserve, payment and search, with `429` and `Retry-After`; when Redis is down every route still answers, uncached and unlimited, and only the request that finds it gone waits; a countdown on every form that can be refused |
+| M11 · Observability and delivery | Next |
 | M12 · Load testing and the numbers | Planned (Mon 30 Nov) |
 
 The roadmap was slimmed to these seven modules on 23 Nov 2026; see [the design](docs/superpowers/specs/2026-11-23-slim-roadmap-m6-m12-design.md) for what was cut and why.
@@ -30,7 +30,7 @@ The roadmap was slimmed to these seven modules on 23 Nov 2026; see [the design](
 
 You need Docker Desktop, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and Node 24 LTS for the frontend.
 
-**Everything in containers** (Postgres, Mailpit, MinIO, fakepay, RabbitMQ, then a one-off `migrate` job, then the API, the Celery worker, beat and the outbox relay):
+**Everything in containers** (Postgres, Mailpit, MinIO, fakepay, RabbitMQ, Redis, then a one-off `migrate` job, then the API, the Celery worker, beat and the outbox relay):
 
 ```bash
 docker compose up --build
@@ -41,11 +41,12 @@ curl localhost:8000/api/v1/health
 **Day to day** (everything but the API in Docker, the API and the frontend on Windows, both reloading as you edit):
 
 ```bash
-docker compose up -d db mailpit minio fakepay rabbitmq worker beat relay
+docker compose up -d db mailpit minio fakepay rabbitmq redis worker beat relay
                                       # Postgres, a fake inbox at http://localhost:8025, S3 storage,
                                       # the pretend payment gateway at http://localhost:8090,
                                       # RabbitMQ (its console at http://localhost:15672, ticketloop /
-                                      # ticketloop), and the worker, beat and relay that move tickets
+                                      # ticketloop), Redis for the cache and the rate limits, and the
+                                      # worker, beat and relay that move tickets
 cp .env.example .env                  # optional; the defaults already match compose
 uv sync                               # create .venv and install dependencies
 uv run alembic upgrade head           # create or update the tables
@@ -247,6 +248,35 @@ The drills, by hand:
 
 (In PowerShell: `$env:RACE_ROUNDS = '20'` first, and `Remove-Item Env:RACE_ROUNDS` after.)
 
+## Watch the cache and the limits
+
+Search (`GET /listings` and `GET /events/{id}/listings`, first page) and the event page (`GET /events/{id}`) are cached in Redis for 30 to 60 seconds. Every answer says how it was served in `X-Cache`: `MISS` (computed, then stored), `HIT` (from Redis), or `BYPASS` (not cached: a later page, caching off, or Redis down). Any committed change to a listing or an event, from the API or the worker, makes the cached pages that depend on it unreachable at once (a change made by one of the hand-run scripts in `scripts/` shows within a minute), so a reservation, a review or an edit is never hidden behind a stale page.
+
+```bash
+curl -si "$B/listings?q=coldplay" | grep -i x-cache     # MISS
+curl -si "$B/listings?q=coldplay" | grep -i x-cache     # HIT
+docker compose exec redis redis-cli --scan --pattern 'cache:*'   # the keys and the versions
+```
+
+The rate limits are token buckets in Redis. Over the limit, the API answers `429` with `Retry-After` and the problem type `rate-limited`, and the form shows a countdown.
+
+| Route | Limit (a minute) | Counted per | Setting |
+| --- | --- | --- | --- |
+| `POST /auth/login`, `POST /auth/password-reset/request` | 5 | email and address, each route its own bucket | `RATE_LIMIT_LOGIN_PER_MINUTE` |
+| `POST /listings/{id}/reservations` | 10 | user | `RATE_LIMIT_RESERVE_PER_MINUTE` |
+| `POST /payments/intents` | 10 | user | `RATE_LIMIT_PAYMENT_PER_MINUTE` |
+| `GET /listings`, `GET /events/{id}/listings` | 60 | address | `RATE_LIMIT_SEARCH_PER_MINUTE` |
+
+```bash
+for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' $B/auth/login \
+  -H 'content-type: application/json' -d '{"email":"a@b.co","password":"wrong"}'; done
+# 401 401 401 401 401 429
+```
+
+**Redis is down:** `docker compose stop redis`. Every route still answers, from Postgres, with `X-Cache: BYPASS` and no limits; the API logs `redis.unavailable` once, stops asking Redis, and pings it in the background every 5 seconds until it answers (`redis.available`). Only the request that found it gone waited: in Docker, about 4 seconds, while the stopped container's name fails to resolve. `docker compose start redis` and caching and limits come back by themselves. Redis never decides anything that matters: who holds a ticket, what was paid and who owns it are all Postgres.
+
+`CACHE_ENABLED=false` or `RATE_LIMIT_ENABLED=false` turns either off; `REDIS_URL` says where Redis is.
+
 ## Migrations
 
 ```bash
@@ -268,6 +298,7 @@ uv run pytest -m integration
 REQUIRE_POSTGRES=1 uv run pytest   # fail instead of skip without Postgres, as CI does
 REQUIRE_STORAGE=1 uv run pytest    # the same for the MinIO tests (docker compose up -d minio)
 REQUIRE_BROKER=1 uv run pytest     # and for the RabbitMQ drills (docker compose up -d rabbitmq)
+REQUIRE_REDIS=1 uv run pytest      # and for the cache and rate-limit tests (docker compose up -d redis)
 uv run ruff check .
 uv run ruff format .
 ```
@@ -276,10 +307,10 @@ The frontend, from `frontend/`:
 
 ```bash
 npm test                  # unit tests (Vitest)
-npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit minio rabbitmq`.
+npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit minio rabbitmq redis`.
                           # They start their own API (8001) with a worker and relay beside it,
                           # fakepay (8091) and dev server (5174), on their own database,
-                          # ticketloop_e2e, and their own queues (prefix e2e-)
+                          # ticketloop_e2e, their own queues (prefix e2e-) and Redis database 1
 npm run typecheck && npm run lint && npm run format:check
 npm run api:types         # after changing the API: regenerate openapi.json and the TypeScript types
 ```
@@ -306,7 +337,7 @@ app/
     notifications/         in-app notifications, written by a consumer, read through two routes
     idempotency/           Idempotency-Key: a request sent twice does its work once
     audit/                 the append-only audit log, record() to write to it, and the state machine class
-  infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory), the payment gateway's client, the pretend ticket provider; later Redis
+  infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory), the payment gateway's client, the pretend ticket provider, Redis (the cache, the session hooks that invalidate it, the rate limiter)
   workers/                 Celery: the app and its queues, the tasks around the consumers, the scheduled jobs, the relay's loop
 fakepay/                   the pretend payment gateway: its own app, database and checkout page
 tests/
@@ -325,7 +356,7 @@ frontend/                  React + TypeScript app (Vite); each module adds its s
 .github/workflows/ci.yml   backend tests, frontend checks and browser tests on every push
 docs/                      design documents (below)
 documentation/             one HTML page per finished module for revision and interview prep; open index.html
-docker-compose.yml         Postgres, Mailpit, MinIO, fakepay, RabbitMQ, the migrate job, the API, the worker, beat, the relay
+docker-compose.yml         Postgres, Mailpit, MinIO, fakepay, RabbitMQ, Redis, the migrate job, the API, the worker, beat, the relay
 Dockerfile                 the API image, which also runs fakepay, the worker, beat and the relay
 ```
 

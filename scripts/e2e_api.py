@@ -4,7 +4,9 @@ Playwright starts this (frontend/playwright.config.ts). Every run drops `ticketl
 creates it and migrates it, so a run never sees rows an earlier run, or a person, left behind.
 Then it starts a Celery worker and the outbox relay beside the API, so a paid order goes on to
 hand the ticket over, as in Docker. They use the queues of QUEUE_PREFIX (env.ts sets "e2e-"),
-so a development worker on the same RabbitMQ never takes their messages.
+so a development worker on the same RabbitMQ never takes their messages. And it empties the
+Redis database of REDIS_URL (env.ts: database 1), so no cached page from an earlier run, built
+on an earlier database, is served to this one.
 
     DATABASE_URL=.../ticketloop_e2e QUEUE_PREFIX=e2e- uv run python -m scripts.e2e_api --port 8001
 """
@@ -14,10 +16,12 @@ import subprocess
 import sys
 
 import uvicorn
+from redis.exceptions import RedisError
 from sqlalchemy import make_url
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.infrastructure.database.engine import create_db_engine
+from app.infrastructure.redis import create_redis
 from app.workers.celery_app import QUEUES
 from scripts.databases import is_throwaway, recreate_database, upgrade
 
@@ -36,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = create_db_engine(settings)
     upgrade(engine)
     engine.dispose()
+    empty_redis(settings)
 
     prefix = settings.queue_prefix
     queues = ",".join(f"{prefix}{name}" for name in QUEUES)
@@ -54,6 +59,19 @@ def main(argv: list[str] | None = None) -> int:
         for process in helpers:
             process.kill()
     return 0
+
+
+def empty_redis(settings: Settings) -> None:
+    client = create_redis(settings)
+    if client.connection_pool.connection_kwargs.get("db", 0) == 0:
+        print("Not emptying Redis database 0: set REDIS_URL to another.", file=sys.stderr)
+        return
+    try:
+        client.flushdb()
+    except RedisError as error:  # the API runs without it, slower
+        print(f"Redis not emptied: {error}", file=sys.stderr)
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M10 Redis</title>
+  <meta name="description" content="TicketLoop M10: search and the event page cached in Redis under versioned keys that a commit makes unreachable, token-bucket rate limits in one Lua script, and an app that gives the same answers with Redis stopped. How it works and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Redis: caching and rate limits</h1>
+      <p class="ticket__summary">Search is the page everyone loads, and most of the time nothing has changed since the last person loaded it. So I put Redis in front of it, and in front of the event page: answers kept for under a minute, and made unreachable the moment a listing or an event changes. The same Redis counts requests, so a script trying passwords or grabbing tickets is told to wait. And when Redis is gone, nothing breaks: every answer comes from Postgres, unlimited, until it's back.</p>
+      <p class="ticket__fineprint">Done when: with Redis stopped the app gives the same answers, only slower, and the hit ratio is measurable. Every cached route says <code>X-Cache: HIT</code>, <code>MISS</code> or <code>BYPASS</code>; with Redis stopped they all say <code>BYPASS</code> and the bodies are the same, which a test checks route by route.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M10</span>
+      <span class="ticket__days">26 Nov</span>
+      <span class="stamp">Done<br>26 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">Search and the event page are cache-aside: look in Redis, and on a miss ask Postgres and store the answer for 30 to 60 seconds, a different time for each key so a batch filled together doesn't expire together. The key holds every filter, the sort and the limit, hashed, so two different searches can never share a page.</p>
+        <p class="pitch">Invalidation is by version number. Every key contains the current version of what it was built from, like <code>cache:search:listings41:…</code>. Any commit that writes to <code>listings</code> bumps that number, so the next reader builds a new key and goes to Postgres; the old entries are never deleted, just never looked up again. The bump happens after the commit, and it's done by the database session itself, so no write in the API or the worker can forget it.</p>
+        <p class="pitch">The rate limits are token buckets, one Lua script that refills, takes a token and saves in one atomic step on Redis's own clock. Five logins a minute per email and address, ten reservations and ten payment attempts per user, sixty searches per address. Over the limit is a <code>429</code> with <code>Retry-After</code>, and the form counts it down. If Redis is down, the request that finds out pays one timeout; after that no request asks Redis, a background ping checks every five seconds for its return, and everything is served uncached and unlimited meanwhile.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Redis in the stack</span><span class="built__note"><code>redis:8.4.0-alpine</code> in Compose and CI, with no persistence: it holds nothing that can't be rebuilt. One client per process, with a 0.25 second timeout and no retries.</span><code>docker-compose.yml</code> <code>app/infrastructure/redis/client.py</code></li>
+          <li><span class="built__what">The cache</span><span class="built__note"><code>versions()</code>, <code>get()</code>, <code>set()</code> with a jittered expiry, and <code>bump()</code>. Every Redis error is caught, counted and trips the breaker; the caller just sees "not cached".</span><code>app/infrastructure/redis/cache.py</code></li>
+          <li><span class="built__what">The breaker</span><span class="built__note">After a Redis error, no request asks Redis again until a background <code>PING</code>, every 5 seconds, gets an answer. Without it, a dead Redis would cost every request a timeout. It logs <code>redis.unavailable</code> once per outage and <code>redis.available</code> when Redis is back.</span><code>app/infrastructure/redis/breaker.py</code></li>
+          <li><span class="built__what">Invalidation by the session</span><span class="built__note">Hooks on every SQLAlchemy session: any insert, update or delete on <code>listings</code> or <code>events</code> marks it, whether a state machine's conditional <code>UPDATE</code>, a bulk one or an object flushed. On commit the marked versions are bumped; on rollback the marks are dropped. The API's sessions and the worker's both carry the cache.</span><code>app/infrastructure/redis/invalidation.py</code> <code>app/workers/runtime.py</code></li>
+          <li><span class="built__what">Cached routes</span><span class="built__note"><code>cached_json()</code> reads the versions, builds the key, and answers raw JSON with <code>X-Cache</code>. The first page of <code>GET /listings</code> and <code>GET /events/{id}/listings</code>, and <code>GET /events/{id}</code>. Later pages and anything that depends on who's asking are never cached.</span><code>app/api/caching.py</code> <code>app/modules/discovery/router.py</code> <code>app/modules/events/router.py</code></li>
+          <li><span class="built__what">The token bucket</span><span class="built__note">One Lua script: read the tokens and when they were last counted, add what has dripped in since by Redis's <code>TIME</code>, take one or say how long until the next, save, and set the key to expire once it would be full again.</span><code>app/infrastructure/redis/limiter.py</code></li>
+          <li><span class="built__what">The limits</span><span class="built__note">A dependency per route: reserve and payment intents per user, both searches per address. Login and the password-reset request call it with the email, trimmed and lowercased and hashed, plus the address, before the password is checked.</span><code>app/api/rate_limits.py</code> <code>app/modules/identity/router.py</code></li>
+          <li><span class="built__what">Counters</span><span class="built__note">Hits, misses, bypasses, errors, and allowed, refused and skipped requests, counted in each process. M11 puts them on <code>/metrics</code>.</span><code>app/infrastructure/redis/stats.py</code></li>
+          <li><span class="built__what">The message</span><span class="built__note"><code>ApiError</code> keeps <code>Retry-After</code> and when it arrived. Every form shows one message for a 429, "Too many tries. Try again in 12 seconds.", counting down to "You can try again now."</span><code>frontend/src/lib/rateLimit.ts</code> <code>frontend/src/components/Form.tsx</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">A search, a reservation, the next search</h2>
+      <div class="section__body">
+        <p>Three requests a few seconds apart, and what Redis and Postgres each do.</p>
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>The first search misses</strong><p><code>MGET cache:version:listings</code> says 41. The key is <code>cache:search:listings41:&lt;hash of the filters, sort and limit&gt;</code>. Not there, so Postgres runs the search, the JSON is stored for, say, 47 seconds, and the answer says <code>X-Cache: MISS</code>.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>The second search hits</strong><p>Same filters, same version, same key. Redis has it: the stored bytes are sent as they are, with <code>X-Cache: HIT</code>. Postgres isn't asked.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>Someone reserves</strong><p>The reservation's conditional <code>UPDATE listings … WHERE status = 'ACTIVE'</code> marks the session. The transaction commits; then the hook runs <code>INCR cache:version:listings</code>, now 42. Only the transaction's own commit counts: the reservation released a savepoint on the way, and that bumps nothing. If Redis can't be reached right then, the commit has still happened: the bump is owed, and made by this process's first call to Redis once it answers.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>The next search misses</strong><p>The version is 42, so the key is new. Postgres runs the search; the reserved ticket isn't in it. The page stored under 41 is still in Redis, and expires on its own.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>A buyer with the old page</strong><p>Someone who loaded the page before the reservation clicks the ticket and presses Reserve. The conditional <code>UPDATE</code> matches no row: <code>409 listing-not-available</code>, the same as without a cache. Redis decides what a page shows, never what happens.</p></div></li>
+        </ol>
+<pre><code><span class="c"># app/api/caching.py: the version is read before Postgres is</span>
+seen = cache.versions(*depends_on)                 <span class="c"># MGET, one round trip</span>
+key = f"cache:{name}:{versions}:{sha256(params)[:32]}"
+found = cache.get(key)
+if found is not None:
+    return answer(found, "HIT")
+body = compute().model_dump_json().encode()         <span class="c"># Postgres</span>
+cache.set(key, body)                               <span class="c"># 30 to 60 s, jittered</span>
+return answer(body, "MISS")</code></pre>
+        <h3>Why the version is read first, and bumped after the commit</h3>
+        <p>A reader and a writer at the same moment. If the reader reads version 41, then queries Postgres, and the writer commits and bumps to 42 in between, the reader stores a page that may be from before the commit, under 41. Nobody looks up 41 again. Had the writer bumped before its commit, the reader could read 42, query Postgres before the commit is visible, and store the old rows under the new version, where everyone would find them for up to a minute. A test checks the bump runs after the session's savepoint is released, and fails if the hook is moved to <code>before_commit</code>.</p>
+        <h3>The trade-off: fail open</h3>
+        <p>When Redis is down, the limiter lets everything through. I chose that on purpose. The alternative, refusing every login and every reservation until Redis is back, turns a cache outage into a full outage, and the cache is the least important thing we run.</p>
+        <p>What it costs: while Redis is down, nobody is rate limited, so a password-guessing script gets as many tries as it can send. What's still in its way: every login runs Argon2id, about 50 milliseconds of CPU and 64 MiB of memory per guess on my laptop, so each core checks twenty-odd guesses a second at most, whoever sends them, and every failed login is in the logs. An outage long enough to matter shows up as <code>redis.unavailable</code> in the logs and as counters on <code>/metrics</code> from M11, so someone notices. If this were a bank, I'd fail closed on login only; for a ticket marketplace, staying up wins.</p>
+        <h3>Measured</h3>
+        <p>On my laptop, against the Docker stack, the first page of an unfiltered search: <strong>7.9 ms</strong> on a miss, <strong>5.1 ms</strong> on a hit (the median of 20 each, by <code>curl -w %{time_total}</code>, with the version bumped before every miss). That's with seven listings on sale, so Postgres had almost nothing to do and most of both numbers is the trip through Docker's network on Windows. What the cache is for shows up under load, when a thousand people load the same page: M12 runs that, cache on against cache off.</p>
+        <p>And with Redis stopped: the first search took <strong>3.96 s</strong> (the stopped container's name failing to resolve), the next 29, one every half second, about <strong>7 ms</strong> each, all <code>BYPASS</code>. Started again, the background ping found it within 6 seconds and searches were <code>MISS</code>, then <code>HIT</code>. One log line each way.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>There's one new thing on screen, the same on every form that can be refused: log in, reset a password, search, reserve, pay. It reads <code>Retry-After</code> and counts down.</p>
+        <figure class="shot">
+          <img src="assets/m10-login.png" alt="The login form with a red message above it: Too many tries. Try again in 12 seconds." loading="lazy" width="1100" height="760">
+          <figcaption>The sixth login in a minute. The same words whether or not the account exists.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m10-search.png" alt="The Find tickets page with its filters, and below the Search button a red message: Too many tries. Try again in 38 seconds." loading="lazy" width="1100" height="900">
+          <figcaption>Search, sixty a minute per address.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m10-reserve.png" alt="A listing for Monsoon Beats 2027 in dark mode, with a message under Buy this ticket: Too many tries. Try again in 27 seconds. The Reserve button is below it." loading="lazy" width="1100" height="1000">
+          <figcaption>Reserve, ten a minute per person, in dark mode.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+        <h3>The cache</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Version numbers in the keys</h4>
+            <p class="decision__over">Instead of deleting keys on write</p>
+            <p>Deleting means knowing every key a change affects: every search that might include that listing, with every filter. A version makes them all unreachable with one <code>INCR</code>.</p>
+          </div>
+          <div class="decision">
+            <h4>Invalidated by the session</h4>
+            <p class="decision__over">Instead of a call in each service</p>
+            <p>A call in each service works until someone writes a new path and forgets it. The session sees every write, including the state machines' raw <code>UPDATE</code>s and the worker's.</p>
+          </div>
+          <div class="decision">
+            <h4>One <code>events</code> version</h4>
+            <p class="decision__over">Instead of one per event</p>
+            <p>A bulk <code>UPDATE</code> doesn't say which events it touched without parsing its <code>WHERE</code>. Admins change events a few times a day; throwing away every event page then costs nothing.</p>
+          </div>
+          <div class="decision">
+            <h4>Cache the first page only</h4>
+            <p class="decision__over">Instead of every page</p>
+            <p>Almost everyone looks at the first page. Later pages are keyed by a cursor, so they'd rarely be asked for twice before expiring.</p>
+          </div>
+          <div class="decision">
+            <h4>30 to 60 seconds, jittered</h4>
+            <p class="decision__over">Instead of a fixed expiry</p>
+            <p>Entries filled together would expire together and send every reader to Postgres at the same moment. Spread over 30 seconds, they don't.</p>
+          </div>
+          <div class="decision">
+            <h4>Store the JSON bytes</h4>
+            <p class="decision__over">Instead of storing the objects</p>
+            <p>A hit sends the bytes as they are, with no parsing or validation. And the body on a hit is byte for byte the body on a miss.</p>
+          </div>
+        </div>
+
+        <h3>The limits</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A token bucket</h4>
+            <p class="decision__over">Instead of a fixed window</p>
+            <p>A fixed window allows twice the limit across a boundary, five at 0:59 and five at 1:00. A bucket allows a burst up to the limit, then a steady drip.</p>
+          </div>
+          <div class="decision">
+            <h4>One Lua script</h4>
+            <p class="decision__over">Instead of <code>GET</code> then <code>SET</code></p>
+            <p>Two requests at once would both read one token left and both take it. A script runs alone in Redis, so read, refill and take are one step.</p>
+          </div>
+          <div class="decision">
+            <h4>Redis's clock</h4>
+            <p class="decision__over">Instead of the API's clock</p>
+            <p>Four API processes have four clocks. The bucket's refill must be measured with one.</p>
+          </div>
+          <div class="decision">
+            <h4>Login on email and address</h4>
+            <p class="decision__over">Instead of address only</p>
+            <p>Address only, a whole office or a phone network shares one limit. Email only, anyone can lock someone out of their account. Both together slow down guessing one account from one place, which is the attack.</p>
+          </div>
+          <div class="decision">
+            <h4>The socket's address</h4>
+            <p class="decision__over">Instead of <code>X-Forwarded-For</code></p>
+            <p>Anyone can write that header and get a new bucket for every request. Behind a real proxy, the proxy sets the address.</p>
+          </div>
+          <div class="decision">
+            <h4>Fail open</h4>
+            <p class="decision__over">Instead of failing closed</p>
+            <p>See the trade-off above: staying up beats perfect throttling, and Argon2id still slows the guesses.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>What is cache-aside?</summary>
+          <div class="qa__a">
+            <p>The application owns the cache. On a read it looks in Redis; on a miss it asks the database and stores the result. Writes go to the database only. The cache never talks to the database, so if it's empty or gone, the application still works, just slower.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you invalidate?</summary>
+          <div class="qa__a">
+            <p>With version numbers. Each key includes the current version of the tables it depends on. After a commit that writes to <code>listings</code>, I increment <code>cache:version:listings</code>. Every reader after that builds a different key and misses. The old entries aren't deleted; they expire on their own.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why after the commit and not before?</summary>
+          <div class="qa__a">
+            <p>Because a reader could refill the new version from Postgres before the commit is visible, and serve the old rows under the new version until it expires. After the commit, the worst case is a reader that read the old version storing its page under it, where nobody will look again.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you make sure every write invalidates?</summary>
+          <div class="qa__a">
+            <p>I don't rely on the writes. SQLAlchemy session hooks see every insert, update and delete on the two tables, including bulk updates and the state machines' conditional ones, and mark the session. When it commits, the hook bumps. A new write path can't forget, because it goes through a session. The hand-run scripts are the exception: their sessions carry no cache, so what they change shows within a minute.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Can a user see stale data?</summary>
+          <div class="qa__a">
+            <p>On search, for a moment: a listing reserved half a second ago can still appear on a page that was loaded before. That's acceptable because nothing is decided from the page. Reserving runs a conditional update against the row, and gets a 409 if it's gone. A stale page costs a click, never a double booking.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What's a cache stampede, and what do you do about it?</summary>
+          <div class="qa__a">
+            <p>When a popular entry expires, every reader misses at once and all of them hit the database. I spread expiries over 30 to 60 seconds so entries filled together don't expire together. For one very hot key you'd add a lock or early refresh; I didn't need it at this scale.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Explain your rate limiter.</summary>
+          <div class="qa__a">
+            <p>A token bucket per route and caller, in Redis. The bucket holds, say, five tokens and refills at five a minute. Each request takes one; with none left it's refused with a 429 and <code>Retry-After</code>. The whole thing is a Lua script, so reading, refilling and taking happen atomically, and it uses Redis's clock so every API process agrees.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why a token bucket?</summary>
+          <div class="qa__a">
+            <p>It allows a short burst, which real people do, a double-click or a retry, and then limits the rate. A fixed window can let through twice the limit across a window boundary. A sliding log is exact but stores every request.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What if Redis goes down?</summary>
+          <div class="qa__a">
+            <p>Every call to Redis has a quarter-second timeout and no retries. The first failure opens a breaker, and from then on no request asks Redis: a background thread pings it every five seconds and closes the breaker when it answers. That matters more than it sounds. In Docker a stopped container's name takes about four seconds to fail to resolve, which no socket timeout covers, so letting a request try again every five seconds would stall a request every few seconds for the whole outage. Cached routes answer from Postgres with <code>X-Cache: BYPASS</code>; the limits allow everything. There's a test that points the app at a Redis that isn't there and checks every cached route gives the same answer as with the cache, all of them within three seconds.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Isn't failing open dangerous?</summary>
+          <div class="qa__a">
+            <p>For login, during the outage, yes, a bit. I weighed it against refusing every request while the cache is down, which is worse for every real user. Argon2id still makes each guess expensive, and the outage is logged and counted. For a bank's login I'd fail closed.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Does a 429 on login leak whether an account exists?</summary>
+          <div class="qa__a">
+            <p>No. The limit is checked before the password, keyed on whatever email was typed, so an unknown email and a real one are refused alike, with the same body. There's a test for that.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How would you know the cache is working?</summary>
+          <div class="qa__a">
+            <p>Every cached answer says <code>X-Cache: HIT</code>, <code>MISS</code> or <code>BYPASS</code>, so a load test can count the hit ratio from outside, and each process counts them too; M11 puts those counters on <code>/metrics</code>.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>A test that passed for the wrong reason.</strong> To prove the bump runs after the commit, my first test asked the session <code>in_transaction()</code> inside the bump. SQLAlchemy keeps the transaction object until the hook returns, so it said yes. The test now asks whether the session's savepoint has been released, and I checked it fails when the hook is moved to <code>before_commit</code>.</li>
+          <li><strong>A rate-limit test racing the refill.</strong> Draining a bucket of 600 a minute and expecting the 601st to be refused failed: ten tokens drip back every second while the test drains. It drains until the first refusal now, then checks a token comes back.</li>
+          <li><strong>The browser tests and the limit.</strong> They log in, search and reserve far more than five times a minute from one address. They run with the limits raised out of the way, and the countdown is tested with a 429 the test serves itself.</li>
+          <li><strong>A negative <code>Retry-After</code> read as a date.</strong> HTTP allows seconds or a date, and <code>Date.parse("-3")</code> is a valid year. A date has to have letters in it now.</li>
+          <li><strong>A savepoint that bumped too early.</strong> The review found it: SQLAlchemy calls <code>after_commit</code> when a savepoint is released, not only on the real commit. Reserving, a failed payment and the expiry job each release one before they commit, so the version went up while the transaction was still open, the very race the order was meant to prevent. The hook ignores savepoints now, and tests watch the reserve route and the expiry job bump once, after the commit.</li>
+          <li><strong>A bump lost to a blip.</strong> Also the review's: one timeout opens a process's breaker for a few seconds, and a commit in that window skipped its bump, so other processes kept serving the old page for up to a minute. That bump is owed now, and made by the first call once Redis answers.</li>
+          <li><strong>A stopped Redis cost four seconds, not a quarter.</strong> I stopped the container to check what the docs promised and timed it: its name took four seconds to fail to resolve, which the socket timeout doesn't cover, and the breaker let a request try again every five seconds. A background ping checks for Redis now; only the request that finds it gone waits.</li>
+          <li><strong>My listings, lit on someone else's listing.</strong> Found while taking these screenshots: every listing's address starts with <code>/listings</code>, so the nav marked My listings as the current page when a buyer looked at a ticket. It matches the exact path now, with a browser test.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>No lock against a stampede on one hot key.</strong> Jitter spreads expiries; a single very popular page still sends its readers to Postgres together, once a minute.</li>
+          <li><strong>One limit per address for search.</strong> A whole office behind one address shares sixty a minute. Signed-in search could count per user; it doesn't yet.</li>
+          <li><strong>The hand-run scripts don't bump.</strong> <code>scripts/expire_reservations.py</code> and the others build sessions with no cache, so what they change shows within a minute. In Docker, beat runs the same jobs with the worker's sessions, which do bump.</li>
+          <li><strong>Counters per process.</strong> Each API process counts its own hits and refusals; M11 exports them and Prometheus adds them up.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db mailpit minio fakepay rabbitmq redis worker beat relay
+uv run pytest tests/integration/test_cache.py tests/integration/test_cached_routes.py
+uv run pytest tests/integration/test_rate_limits.py tests/unit/test_redis.py
+curl -si localhost:8000/api/v1/listings | grep -i x-cache      <span class="c"># MISS, then HIT</span>
+docker compose stop redis                                      <span class="c"># BYPASS, same answers</span>
+docker compose start redis
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 REQUIRE_BROKER=1 REQUIRE_REDIS=1 uv run pytest   <span class="c"># 1174 tests, what CI runs</span>
+
+cd frontend &amp;&amp; npm run dev     <span class="c"># localhost:5173</span>
+npm test                       <span class="c"># 160 unit tests</span>
+npm run e2e                    <span class="c"># 21 browser tests, with the cache on</span>
+gh run list --workflow ci.yml --limit 3</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m09-outbox-worker-and-transfer.html">Previous<strong>M9 Outbox, worker and transfer</strong></a>
+    <span class="pager__next">Next<br><strong>M11 Observability and delivery</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

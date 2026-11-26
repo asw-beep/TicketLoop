@@ -1,8 +1,8 @@
 # Local stack. Two ways to use it:
 #   docker compose up --build          everything: Postgres, Mailpit, MinIO, fakepay, RabbitMQ,
-#                                      migrations, the API (localhost:8000), and the worker, beat
-#                                      and relay that move events and tickets
-#   docker compose up -d db mailpit minio fakepay rabbitmq worker beat relay
+#                                      Redis, migrations, the API (localhost:8000), and the
+#                                      worker, beat and relay that move events and tickets
+#   docker compose up -d db mailpit minio fakepay rabbitmq redis worker beat relay
 #                                      everything but the API; run that on Windows with
 #                                      uvicorn --reload, and the frontend with npm run dev
 # Values like ${POSTGRES_USER:-ticketloop} come from .env if it exists, else the default.
@@ -89,6 +89,19 @@ services:
       retries: 20
       start_period: 10s
 
+  # The cache and the rate limiter (M10). Nothing in it has to survive a restart: an empty
+  # cache refills from Postgres, and empty buckets are full ones.
+  redis:
+    image: redis:8.4.0-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   # Celery: the consumers (transfers, notifications) and the scheduled jobs beat sends it.
   # Celery does not support Windows, so on a laptop this runs here even when the API does not.
   worker:
@@ -100,6 +113,7 @@ services:
     environment: &worker_env
       DATABASE_URL: &database_url postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/${POSTGRES_DB:-ticketloop}
       BROKER_URL: amqp://ticketloop:ticketloop@rabbitmq:5672//
+      REDIS_URL: redis://redis:6379/0
       FAKEPAY_URL: http://fakepay:8090
       FAKEPAY_WEBHOOK_SECRET: *fakepay_secret
       LOG_JSON: "true"
@@ -107,6 +121,8 @@ services:
       db:
         condition: service_healthy
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -158,6 +174,7 @@ services:
       STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-ticketloop-local-secret}
       FAKEPAY_URL: http://fakepay:8090
       FAKEPAY_WEBHOOK_SECRET: *fakepay_secret
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
@@ -167,6 +184,8 @@ services:
         condition: service_completed_successfully # start only once the schema is current
       minio:
         condition: service_started # the image has no shell or curl for a healthcheck
+      redis:
+        condition: service_healthy
 
 volumes:
   pgdata:

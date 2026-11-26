@@ -34,7 +34,7 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 | 409 | Valid request that conflicts with current state: illegal transition, already reserved, duplicate |
 | 413, 415 | Upload too large, wrong file type |
 | 422 | Body or query failed validation, or an `Idempotency-Key` reused with a different body |
-| 429 | Rate limit hit (M10); `Retry-After` header says when to try again |
+| 429 | Rate limit hit; `Retry-After` says in how many seconds to try again (see [Caching and rate limits](#caching-and-rate-limits-m10-built)) |
 | 503 | A dependency is down (health check) |
 
 ## Health (M1, built)
@@ -56,7 +56,7 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 
 `AccessToken` = `{access_token, token_type: "bearer", expires_in: 900}`. The refresh token never appears in a body: it travels only in the `refresh_token` cookie (`HttpOnly`, `SameSite=Strict`, `Path=/api/v1/auth`, `Max-Age` 7 days, `Secure` in staging and production). It is opaque (43 random URL-safe characters), not a JWT. Page scripts cannot read the cookie, and other sites cannot make the browser send it.
 
-As built: logout ends the whole session, revoking every live token in the presented token's family. The reset request answers 202 `{"message": ...}` with the same body for every email; the email carries a link to the frontend's `/reset-password#token=...`; after `#`, so the token never reaches a server log or a `Referer` header. Locally it goes to Mailpit; in tests, to an in-memory list. Changing the password also clears the refresh cookie. Every 401 carries `WWW-Authenticate: Bearer`. Problem types: `email-taken`, `invalid-credentials`, `account-suspended`, `invalid-refresh-token`, `wrong-password`, `invalid-reset-token`, `not-authenticated`, `admin-required`. The 429s arrive with rate limits in M10.
+As built: logout ends the whole session, revoking every live token in the presented token's family. The reset request answers 202 `{"message": ...}` with the same body for every email; the email carries a link to the frontend's `/reset-password#token=...`; after `#`, so the token never reaches a server log or a `Referer` header. Locally it goes to Mailpit; in tests, to an in-memory list. Changing the password also clears the refresh cookie. Every 401 carries `WWW-Authenticate: Bearer`. Problem types: `email-taken`, `invalid-credentials`, `account-suspended`, `invalid-refresh-token`, `wrong-password`, `invalid-reset-token`, `not-authenticated`, `admin-required`, and `rate-limited` on login and the reset request (M10).
 `User` = `{id, email, full_name, role, account_status, created_at}`. Never `password_hash`.
 
 ## Users (M3, built)
@@ -73,7 +73,7 @@ As built: logout ends the whole session, revoking every live token in the presen
 | --- | --- | --- | --- | --- |
 | `GET /events` | Public | `q` (name), `category`, `city`, `starts_after`, `starts_before` (strictly after and before, with a time zone), `cursor`, `limit` | 200 page of `Event` (`PUBLISHED` only), soonest first | 400 bad cursor; 422 |
 | `GET /events/{event_id}` | Public | — | 200 `Event` | 404 (also for unpublished) |
-| `GET /events/{event_id}/listings` | Public | same filters and sort as `GET /listings`, except `event_id` | 200 page of `PublicListing` | 400 bad cursor; 404 (also for unpublished); 422 |
+| `GET /events/{event_id}/listings` | Public | same filters and sort as `GET /listings`, except `event_id` | 200 page of `PublicListing` | 400 bad cursor; 404 (also for unpublished); 422; 429 |
 | `GET /admin/events` | Admin | `cursor`, `limit` | 200 page of `Event`, every status | 403 |
 | `POST /admin/events` | Admin | `{name, description, category, venue, city, starts_at, organizer, provider_id}`; `starts_at` must carry a time zone | 201 `Event` (`DRAFT`) | 403; 404 provider; 422 `starts_at` in the past or without a zone |
 | `PATCH /admin/events/{event_id}` | Admin | any of the above, plus `status` (validated by the event state machine); an explicit `null` is 422 | 200 `Event` | 404; 409 illegal status change, event `CANCELLED` or `COMPLETED`, or provider changed after `DRAFT`; 422 a changed `starts_at` in the past |
@@ -107,7 +107,7 @@ As built: every route that takes a ticket ID goes through one check, so a ticket
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `POST /listings` | Ticket owner | `{ticket_id, asking_price_paise, expires_at}`; `expires_at` is optional and defaults to the event start | 201 `Listing` (`DRAFT`) | 404 ticket not yours; 403 `owner-only` for an admin listing someone else's ticket; 409 ticket not verified, not eligible or not active, event not `PUBLISHED`, or ticket already has an open listing; 422 price below ₹1 or above face value, expiry in the past or after the event start, event already started |
-| `GET /listings` | Public | `q` (event name), `category`, `city`, `ticket_category`, `min_price_paise`, `max_price_paise`, `event_id`, `sort` (`price`, `-price`, `created_at`, `-created_at`; default `price`), `cursor`, `limit` | 200 page of `PublicListing` (`ACTIVE` and not past its end) | 400 bad cursor; 422, including `bad-price-range` when the lowest price is above the highest |
+| `GET /listings` | Public | `q` (event name), `category`, `city`, `ticket_category`, `min_price_paise`, `max_price_paise`, `event_id`, `sort` (`price`, `-price`, `created_at`, `-created_at`; default `price`), `cursor`, `limit` | 200 page of `PublicListing` (`ACTIVE` and not past its end) | 400 bad cursor; 422, including `bad-price-range` when the lowest price is above the highest; 429 |
 | `GET /listings/me` | User | `status`, `ticket_id`, `cursor`, `limit` | 200 page of `Listing`, newest first | 400 bad cursor; 422 |
 | `GET /listings/{listing_id}` | Public for `ACTIVE`; seller and admins for any status. Signing in is optional. | — | 200 `PublicListing`, or `Listing` for the seller and admins | 404, also for a listing that exists but is not `ACTIVE` and not yours |
 | `PATCH /listings/{listing_id}` | Seller | `{asking_price_paise, expires_at}`, either or both; an empty body or an explicit `null` is 422 | 200 `Listing` | 404; 403 `seller-only` for an admin; 409 not `DRAFT`, `PENDING_VERIFICATION` or `ACTIVE`, a price increase while `ACTIVE`, or the listing changed while you were editing it; 422 |
@@ -129,7 +129,7 @@ As built: one function, `get_listing_for()`, decides who sees a listing, and eve
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
-| `POST /listings/{listing_id}/reservations` | User, not the seller | — | 201 `Reservation` (`CREATED`, `expires_at` in 10 min). If this buyer already holds the live reservation, 200 with it. | 403 `own-listing-reservation`; 404 unless the listing is or was on sale; 409 `listing-not-available`, with `reason`: `reserved`, `sold`, `expired`, or `hold-ended` when the caller's own hold just ran out |
+| `POST /listings/{listing_id}/reservations` | User, not the seller | — | 201 `Reservation` (`CREATED`, `expires_at` in 10 min). If this buyer already holds the live reservation, 200 with it. | 403 `own-listing-reservation`; 404 unless the listing is or was on sale; 409 `listing-not-available`, with `reason`: `reserved`, `sold`, `expired`, or `hold-ended` when the caller's own hold just ran out; 429 |
 | `GET /reservations/{reservation_id}` | Buyer, Seller, Admin | — | 200 `Reservation` | 404 |
 | `GET /reservations/me` | User | `cursor`, `limit` | 200 page of `Reservation`, live ones first | 400 bad cursor |
 | `POST /reservations/{reservation_id}/cancel` | Buyer | — | 200 `Reservation` (`CANCELLED`) | 404; 403 `buyer-only` for the seller or an admin, who can see it but not cancel it; 409 `reservation-not-cancellable`, not `CREATED` |
@@ -161,7 +161,7 @@ As built: the reservation is one conditional `UPDATE` on the listing, then the i
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
-| `POST /payments/intents` | Order's buyer | header `Idempotency-Key`; `{order_id}` | 201 `{payment_id, provider, provider_transaction_id, checkout_url, amount_paise, currency, status}`; 200 with the same shape when the order already has an open payment, whatever the key | 404 not your order; 403 `buyer-only` for the seller or an admin; 409 `order-not-payable` (`current_status`); 409 `reservation-not-payable`; 409 `idempotency-key-in-progress` with `Retry-After`; 422 `idempotency-key-reused`; 502 `payment-refused`; 503 `payment-gateway-unavailable` |
+| `POST /payments/intents` | Order's buyer | header `Idempotency-Key`; `{order_id}` | 201 `{payment_id, provider, provider_transaction_id, checkout_url, amount_paise, currency, status}`; 200 with the same shape when the order already has an open payment, whatever the key | 404 not your order; 403 `buyer-only` for the seller or an admin; 409 `order-not-payable` (`current_status`); 409 `reservation-not-payable`; 409 `idempotency-key-in-progress` with `Retry-After`; 422 `idempotency-key-reused`; 502 `payment-refused`; 503 `payment-gateway-unavailable`; 429 |
 | `POST /payments/webhooks/{provider}` | The gateway only, authenticated by signature | headers `X-Fakepay-Signature: <hex HMAC-SHA256>`, `X-Fakepay-Timestamp: <unix seconds>`; raw JSON body `{event_id, type, transaction_id, amount_paise, currency, occurred_at}` | 200 `{"received": true}` for new **and** duplicate events | 401 bad signature or timestamp more than 5 minutes off; 404 unknown provider; 400 unreadable body |
 | `GET /payments/{payment_id}` | Order's buyer, Admin | — | 200 `Payment` | 404, for the seller too: how someone paid is not their business |
 
@@ -199,6 +199,36 @@ The ticket provider is an adapter inside the worker, not a service, so there is 
 | `PATCH /notifications/{notification_id}/read` | Owner | — | 200 the notification with `read_at` set; repeating it is harmless | 404 `notification-not-found` |
 
 `notification_type`, by event: `payment.succeeded` tells the buyer `payment_succeeded` and the seller `ticket_sold`; `payment.failed` the buyer `payment_failed`; `reservation.expired` the buyer `hold_expired`; `transfer.completed` the buyer `ticket_received` and the seller `ticket_handed_over`; `transfer.failed` both `transfer_needs_review`. `payload` holds only ids to link to (`order_id`, `listing_id`, `reservation_id`) and a `reason`, never the other person. One per person per event (`uq_notifications_event_user`), however often the event is delivered. There are no screens for notifications in this project.
+
+## Caching and rate limits (M10, built)
+
+No route changed its request or its body. Some answers now come from Redis, and some requests are refused for coming too fast.
+
+**Cached:** the first page of `GET /listings` and of `GET /events/{event_id}/listings`, and `GET /events/{event_id}`, for 30 to 60 seconds. Each sends `X-Cache: HIT` (from Redis), `MISS` (computed and stored) or `BYPASS` (not cached: a page after the first, caching off, or Redis unreachable). A cached body is byte for byte the body the route computes. Any committed write to `listings` makes every cached search page unreachable; any committed write to `events` makes every cached event page and search page unreachable. Nothing that a signed-in caller sees differently is cached: `GET /listings/{listing_id}`, `/me` routes, orders, payments and tickets always go to Postgres. A 404 is never cached.
+
+**Limited:**
+
+| Route | Bucket | Default (a minute) |
+| --- | --- | --- |
+| `POST /auth/login` | email (trimmed, any case) and address | 5 |
+| `POST /auth/password-reset/request` | email and address, apart from login's | 5 |
+| `POST /listings/{listing_id}/reservations` | user | 10 |
+| `POST /payments/intents` | user | 10 |
+| `GET /listings`, `GET /events/{event_id}/listings` | address, one bucket for both | 60 |
+
+Each bucket holds its limit and refills at its limit a minute, so a burst up to the limit is allowed and then one request every `60 / limit` seconds. A refused request does no work and changes nothing, and answers 429:
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 12
+Content-Type: application/problem+json
+
+{"type": "urn:ticketloop:problem:rate-limited", "title": "Too many requests", "status": 429,
+ "detail": "Too many attempts. Wait a moment, then try again.", "instance": "/api/v1/auth/login",
+ "request_id": "5f0c..."}
+```
+
+`Retry-After` is whole seconds, rounded up, and at least 1. Login counts before the password is checked, so an unknown email and a wrong password are limited alike and the 429 says nothing about which accounts exist. The address is the connection's, not `X-Forwarded-For`, which any caller can write; behind a proxy, the proxy has to pass the real address on. When Redis is unreachable every route answers as if no limit were set, and every cached route answers `BYPASS`.
 
 ## Endpoints added to `plan.md` section 10
 

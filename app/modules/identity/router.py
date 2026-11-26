@@ -13,6 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Request, Response, status
 
+from app.api.rate_limits import limit_login
 from app.core.config import Settings
 from app.core.dependencies import AppSettings
 from app.infrastructure.database.session import DbSession
@@ -96,8 +97,9 @@ def register(body: RegisterIn, db: DbSession) -> User:
 
 @auth_router.post("/login")
 def login(
-    body: LoginIn, db: DbSession, settings: AppSettings, response: Response
+    body: LoginIn, db: DbSession, settings: AppSettings, response: Response, request: Request
 ) -> AccessTokenOut:
+    limit_login(request, body.email)
     tokens = service.login(
         db, settings, email=body.email, password=body.password.get_secret_value()
     )
@@ -125,8 +127,13 @@ def logout(db: DbSession, settings: AppSettings, refresh_token: RefreshCookie = 
 
 @auth_router.post("/password-reset/request", status_code=status.HTTP_202_ACCEPTED)
 def request_password_reset(
-    body: PasswordResetRequestIn, db: DbSession, settings: AppSettings, mailer: Mailer
+    body: PasswordResetRequestIn,
+    db: DbSession,
+    settings: AppSettings,
+    mailer: Mailer,
+    request: Request,
 ) -> dict[str, str]:
+    limit_login(request, body.email, name="password_reset")
     service.request_password_reset(db, settings, mailer, email=body.email)
     # The same words whether or not the account exists.
     return {"message": "If an account uses that email, a reset link is on its way."}

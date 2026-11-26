@@ -3,9 +3,10 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Query, Request, Response, status
 from pydantic import AwareDatetime
 
+from app.api.caching import cached_json
 from app.core.pagination import Cursor, Limit, Page
 from app.core.search import SearchText
 from app.infrastructure.database.session import DbSession
@@ -43,8 +44,15 @@ def list_events(
 
 
 @events_router.get("/{event_id}", response_model=EventOut)
-def get_event(event_id: uuid.UUID, db: DbSession) -> EventOut:
-    return EventOut.model_validate(service.get_published_event(db, event_id))
+def get_event(request: Request, event_id: uuid.UUID, db: DbSession) -> Response:
+    """A published event. Cached (M10) until any event changes; a 404 is never cached."""
+    return cached_json(
+        request,
+        name="event",
+        depends_on=("events",),
+        params={"event_id": event_id},
+        compute=lambda: EventOut.model_validate(service.get_published_event(db, event_id)),
+    )
 
 
 @admin_events_router.get("/events", response_model=Page[EventOut])

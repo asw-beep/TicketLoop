@@ -5,6 +5,7 @@
 import createClient from "openapi-fetch";
 import { getAccessToken, refreshAccessToken } from "../auth/session";
 import { noteServerDate } from "../lib/clock";
+import { retryAfterSeconds } from "../lib/rateLimit";
 import { ApiError, errorFor, type Problem } from "./problem";
 import type { paths } from "./schema";
 
@@ -50,7 +51,9 @@ export async function unwrap<T>(call: Promise<Result<T>>): Promise<T> {
   const { data, error, response } = await call;
   if (error === undefined && response.ok) return data as T;
   // openapi-fetch has already read and parsed the body into `error`; it cannot be read twice.
-  if (isProblem(error)) throw new ApiError(error);
+  if (isProblem(error)) {
+    throw new ApiError(error, retryAfterSeconds(response.headers.get("Retry-After")));
+  }
   throw errorFor(response.status);
 }
 

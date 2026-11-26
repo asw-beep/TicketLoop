@@ -37,8 +37,15 @@ TEST_BUCKET = "ticketloop-documents-test"
 @pytest.fixture(scope="session")
 def base_settings() -> Settings:
     # The webhook secret is the built-in one whatever the environment says: the tests and
-    # fakepay sign with it.
-    return Settings(_env_file=None, environment="test", fakepay_webhook_secret=LOCAL_FAKEPAY_SECRET)
+    # fakepay sign with it. Caching and rate limits are off, so no test sees another's cached
+    # pages or spent tokens; the M10 tests turn them on (tests/integration/redis_support.py).
+    return Settings(
+        _env_file=None,
+        environment="test",
+        fakepay_webhook_secret=LOCAL_FAKEPAY_SECRET,
+        cache_enabled=False,
+        rate_limit_enabled=False,
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)

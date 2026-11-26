@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
 
+from app.api.rate_limits import per_user
 from app.core.dependencies import AppSettings
 from app.core.exceptions import AppError
 from app.infrastructure.database.session import DbSession
@@ -48,6 +49,7 @@ def create_intent(
     settings: AppSettings,
     request: Request,
     response: Response,
+    _: Annotated[None, Depends(per_user("payment"))],
 ) -> IntentOut:
     """Start paying for an order, or continue: send the buyer to `checkout_url`."""
     asked = idempotency.Asked.of(user, key, request, body)

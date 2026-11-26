@@ -4,6 +4,7 @@ import { api, unwrap } from "../api/client";
 import type { PublicListing } from "../api/types";
 import { useAuth } from "../auth/AuthProvider";
 import { reserveProblem } from "../lib/reservations";
+import { FormError } from "./Form";
 import type { LoginState } from "./Guards";
 import { reservationKey } from "../pages/ReservationPage";
 
@@ -35,11 +36,7 @@ export function ReserveTicket({ listing }: { listing: PublicListing }) {
       <p className="lede">
         Reserving holds it for 10 minutes while you pay. Nobody else can buy it in that time.
       </p>
-      {reserve.error && (
-        <div className="message message--error" role="alert">
-          <p>{reserveProblem(reserve.error)}</p>
-        </div>
-      )}
+      <FormError error={reserve.error} describe={reserveProblem} />
       <div className="actions">
         {status === "signed-in" ? (
           <button

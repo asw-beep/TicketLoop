@@ -24,7 +24,9 @@ def cheap_password_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def settings() -> Settings:
     # _env_file=None: ignore any developer .env so tests behave the same on every machine.
-    return Settings(_env_file=None, environment="test")
+    return Settings(
+        _env_file=None, environment="test", cache_enabled=False, rate_limit_enabled=False
+    )
 
 
 @pytest.fixture

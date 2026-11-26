@@ -57,6 +57,33 @@ test("a wrong password gets one message, whatever was wrong", async ({ page }) =
   await expect(page.getByRole("alert")).toHaveText("Wrong email or password");
 });
 
+test("too many tries says how long to wait, and counts down to when you can try again", async ({
+  page,
+}) => {
+  // The API's own 429 is covered by the integration tests; here the browser is told to wait
+  // three seconds, so the countdown can be watched to the end.
+  await page.route("**/api/v1/auth/login", (route) =>
+    route.fulfill({
+      status: 429,
+      contentType: "application/problem+json",
+      headers: { "Retry-After": "3" },
+      body: JSON.stringify({
+        type: "urn:ticketloop:problem:rate-limited",
+        title: "Too many requests",
+        status: 429,
+        detail: "Too many attempts. Wait a moment, then try again.",
+      }),
+    }),
+  );
+  await page.goto("/login");
+  await logIn(page, newEmail(), PASSWORD);
+
+  const alert = page.getByRole("alert");
+  await expect(alert).toHaveText(/^Too many tries\. Try again in [23] seconds\.$/);
+  await expect(alert).toHaveText("Too many tries. Try again in 1 second.");
+  await expect(alert).toHaveText("You can try again now.", { timeout: 5_000 });
+});
+
 test("a forgotten password is reset from the emailed link, which then stops working", async ({
   page,
   request,

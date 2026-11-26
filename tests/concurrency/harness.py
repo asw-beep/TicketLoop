@@ -65,6 +65,10 @@ class ApiServer:
             "FAKEPAY_WEBHOOK_SECRET": LOCAL_FAKEPAY_SECRET,
             "ENVIRONMENT": "test",
             "LOG_LEVEL": "WARNING",
+            # These measure locking: 100 buyers from one address must not meet a rate limit,
+            # and a cache shared with a development API must not answer for this database.
+            "CACHE_ENABLED": "false",
+            "RATE_LIMIT_ENABLED": "false",
             **(env or {}),
         }
         self._ports = [free_port() for _ in range(workers)]

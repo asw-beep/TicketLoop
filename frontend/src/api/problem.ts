@@ -17,11 +17,17 @@ export interface Problem {
 /** An error response from the API, thrown so that forms and queries can show it. */
 export class ApiError extends Error {
   readonly problem: Problem;
+  /** Seconds to wait, from a 429's Retry-After; null when the answer did not say. */
+  readonly retryAfter: number | null;
+  /** When the answer arrived, so a countdown can start from it. */
+  readonly receivedAt: number;
 
-  constructor(problem: Problem) {
+  constructor(problem: Problem, retryAfter: number | null = null) {
     super(problem.detail ?? problem.title);
     this.name = "ApiError";
     this.problem = problem;
+    this.retryAfter = retryAfter;
+    this.receivedAt = Date.now();
   }
 
   get code(): string {

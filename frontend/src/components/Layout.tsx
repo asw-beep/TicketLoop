@@ -39,7 +39,10 @@ export function Layout({ children }: { children: ReactNode }) {
           {status === "signed-in" && user && (
             <>
               <NavLink to="/tickets">My tickets</NavLink>
-              <NavLink to="/listings">My listings</NavLink>
+              {/* `end`: a listing page is anyone's listing, not one of mine. */}
+              <NavLink to="/listings" end>
+                My listings
+              </NavLink>
               <NavLink to="/reservations">My holds</NavLink>
               <NavLink to="/orders">My orders</NavLink>
               {user.role === "ADMIN" && (

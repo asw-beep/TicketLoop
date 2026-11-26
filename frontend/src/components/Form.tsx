@@ -1,10 +1,13 @@
-import type {
-  InputHTMLAttributes,
-  ReactNode,
-  SelectHTMLAttributes,
-  TextareaHTMLAttributes,
+import {
+  useEffect,
+  useState,
+  type InputHTMLAttributes,
+  type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
 } from "react";
 import { ApiError, describeError, fieldErrors } from "../api/problem";
+import { secondsLeft, waitMessage } from "../lib/rateLimit";
 
 type FieldProps = InputHTMLAttributes<HTMLInputElement> & {
   label: string;
@@ -132,12 +135,42 @@ export function TextAreaField({
  * What went wrong with a submit. Field-level validation errors are shown on their fields,
  * so this banner then only says that some fields need fixing.
  */
-export function FormError({ error, children }: { error: unknown; children?: ReactNode }) {
+export function FormError({
+  error,
+  describe = describeError,
+  children,
+}: {
+  error: unknown;
+  /** The words for this form's errors; a 429 always gets the shared countdown instead. */
+  describe?: (error: unknown) => string;
+  children?: ReactNode;
+}) {
   if (!error) return null;
+  if (error instanceof ApiError && error.code === "rate-limited") {
+    return <RateLimited error={error} />;
+  }
   return (
     <div className="message message--error" role="alert">
-      <p>{describeError(error)}</p>
+      <p>{describe(error)}</p>
       {children}
+    </div>
+  );
+}
+
+/** "Too many tries. Try again in 12 seconds.", counting down to "You can try again now." */
+function RateLimited({ error }: { error: ApiError }) {
+  const wait = error.retryAfter ?? 60;
+  const [left, setLeft] = useState(() => secondsLeft(wait, error.receivedAt, Date.now()));
+  useEffect(() => {
+    const tick = () => setLeft(secondsLeft(wait, error.receivedAt, Date.now()));
+    tick();
+    const timer = window.setInterval(tick, 250);
+    return () => window.clearInterval(timer);
+  }, [error, wait]);
+  return (
+    <div className={`message ${left > 0 ? "message--error" : "message--ok"}`} role="alert">
+      {/* Read out once when it appears, not every second as it counts. */}
+      <p aria-live="off">{waitMessage(left)}</p>
     </div>
   );
 }
