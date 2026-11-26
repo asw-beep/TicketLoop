@@ -64,6 +64,7 @@ describe("historyLabel for a reserved listing", () => {
     ["listing.released", {}, "Back on sale"],
     ["listing.expired", { reason: "buyer_cancelled" }, "Hold given up past the listing's end"],
     ["listing.expired", {}, "Expired"],
+    ["listing.sold", {}, "Sold; the ticket went to the buyer"],
   ])("%s %j", (action, details, label) => {
     expect(historyLabel(entry(action, details))).toBe(label);
   });

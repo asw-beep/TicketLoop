@@ -19,8 +19,8 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M6 · Discovery: search, filters, pagination | Done: public search with filters and sorts; keyset pagination on every list; indexes proven with `EXPLAIN ANALYZE` on 100,000 listings ([results](docs/discovery-performance.md)): page 500 in 0.2 ms against 45 ms with `OFFSET`; the front page is the search |
 | M7 · Reservations and the race | Done: 10-minute holds by one conditional `UPDATE`; 100 buyers against four API processes end with exactly one winner, 20 rounds in a row; compared with `FOR UPDATE` and `SERIALIZABLE` ([design and numbers](docs/reservation-design.md)); holds expire with `SKIP LOCKED`; an event with a held ticket can't be cancelled; reserve, countdown and cancel on screen |
 | M8 · Orders and payments | Done: idempotent orders at the server's price; a pretend gateway, fakepay, that can be late, silent, repeat itself or forge; HMAC-signed webhooks applied exactly once; reconciliation that repairs what a webhook never told us; a paid ticket is never released, 50 races in a row; checkout, order page and My orders on screen |
-| M9 · Outbox, worker and transfer | Next |
-| M10 · Redis: caching and rate limits | Planned (Sat 28 Nov) |
+| M9 · Outbox, worker and transfer | Done: every event written in the transaction of its change and published by a relay that waits out a dead broker; RabbitMQ and Celery with late acknowledgement and dead-letter queues; consumers that do their work once however often a message arrives; the ticket moves to its buyer through an idempotent provider call, or to review; a broker outage, a killed worker and a poison message, all automated drills; the order page follows the ticket to My tickets |
+| M10 · Redis: caching and rate limits | Next |
 | M11 · Observability and delivery | Planned (Sun 29 Nov) |
 | M12 · Load testing and the numbers | Planned (Mon 30 Nov) |
 
@@ -30,7 +30,7 @@ The roadmap was slimmed to these seven modules on 23 Nov 2026; see [the design](
 
 You need Docker Desktop, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and Node 24 LTS for the frontend.
 
-**Everything in containers** (Postgres, Mailpit, MinIO, fakepay, then a one-off `migrate` job, then the API):
+**Everything in containers** (Postgres, Mailpit, MinIO, fakepay, RabbitMQ, then a one-off `migrate` job, then the API, the Celery worker, beat and the outbox relay):
 
 ```bash
 docker compose up --build
@@ -38,12 +38,14 @@ curl localhost:8000/api/v1/health
 # {"status":"ok","checks":{"database":"ok"}}
 ```
 
-**Day to day** (Postgres, Mailpit, MinIO and fakepay in Docker, the API and the frontend on Windows, both reloading as you edit):
+**Day to day** (everything but the API in Docker, the API and the frontend on Windows, both reloading as you edit):
 
 ```bash
-docker compose up -d db mailpit minio fakepay
+docker compose up -d db mailpit minio fakepay rabbitmq worker beat relay
                                       # Postgres, a fake inbox at http://localhost:8025, S3 storage,
-                                      # and the pretend payment gateway at http://localhost:8090
+                                      # the pretend payment gateway at http://localhost:8090,
+                                      # RabbitMQ (its console at http://localhost:15672, ticketloop /
+                                      # ticketloop), and the worker, beat and relay that move tickets
 cp .env.example .env                  # optional; the defaults already match compose
 uv sync                               # create .venv and install dependencies
 uv run alembic upgrade head           # create or update the tables
@@ -60,12 +62,15 @@ npm run dev                           # http://localhost:5173
 
 The dev server forwards `/api` to the API on port 8000, so the browser sees one origin.
 
+Celery does not run on Windows, so the worker, beat and relay run in Docker even when the API does not. After changing code they use, rebuild them: `docker compose up -d --build worker beat relay`.
+
 MinIO stores the uploaded proof of purchase. Its web console is at http://localhost:9001 (user `ticketloop`, password `ticketloop-local-secret`); the files sit in the bucket `ticketloop-documents`, which the API creates on startup when `ENVIRONMENT=local`. Anywhere else, create the bucket yourself and set `STORAGE_ENDPOINT_URL`, `STORAGE_PUBLIC_URL` (the host browsers reach, used to sign download links), `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` and `STORAGE_REGION`; see `.env.example`. Staging and production refuse to start with the built-in storage secret.
 
 Set `LOG_JSON=false` in `.env` for coloured, readable log lines while developing. Stop the `api` container first (`docker compose stop api`) if it is running, since both use port 8000.
 
 ```bash
-docker compose down      # stop everything; data survives in the pgdata, miniodata and fakepaydata volumes
+docker compose down      # stop everything; data survives in the pgdata, miniodata, fakepaydata
+                         # and rabbitmqdata volumes
 docker compose down -v   # stop and delete the databases and the stored files too
 ```
 
@@ -145,7 +150,7 @@ curl -s $B/listings/$LISTING                                                    
 curl -s $B/listings/$LISTING/history -H "Authorization: Bearer $HOLDER" | jq '.items[].action'
 ```
 
-`ACTIVE` listings whose end has passed become `EXPIRED` when the expiry job runs. Until M9's Celery beat schedules it, run it by hand:
+`ACTIVE` listings whose end has passed become `EXPIRED` when the expiry job runs, every 5 minutes in Docker. To run it by hand:
 
 ```bash
 uv run python -m scripts.expire_listings   # Expired 0 listing(s).
@@ -178,7 +183,7 @@ curl -s -X POST $B/listings/$LISTING/reservations -H "Authorization: Bearer $BUY
 curl -s $B/reservations/me -H "Authorization: Bearer $BUYER" | jq '.items[0]'
 ```
 
-Holds that run out are closed by a loop that Celery beat replaces in M9:
+Holds that run out are closed every 30 seconds by Celery beat in Docker, or by hand:
 
 ```bash
 uv run python -m scripts.expire_reservations          # every 30 seconds; --once for a single pass
@@ -188,7 +193,7 @@ uv run python -m scripts.expire_reservations          # every 30 seconds; --once
 
 Carry on from a hold. **Checkout** takes the buyer to fakepay's own page, where you choose what the payment does:
 
-- **Pay**: back on the order's page, it turns to **Paid** as soon as the webhook lands.
+- **Pay**: back on the order's page, it turns to **Paid** as soon as the webhook lands, then to **Completed** once the worker has handed the ticket over. It is under the buyer's **My tickets** now, and the seller's listing says **Sold**.
 - **Pay, webhook late**: the order's page says it is waiting, and turns to Paid by itself.
 - **Pay, webhook twice** and **Pay, forged webhook**: the first still pays once; the second is refused with a 401, and reconciliation finds the payment instead.
 - **Pay, no webhook**: the money moved and nobody told us. Run reconciliation (below) five minutes later.
@@ -206,7 +211,7 @@ curl -s $B/payments/intents -H "Authorization: Bearer $BUYER" -H 'Idempotency-Ke
 curl -s $B/orders/$ORDER -H "Authorization: Bearer $BUYER" | jq -r .status                       # PAID
 ```
 
-Payments nobody told us about are found by asking the gateway:
+Payments nobody told us about are found by asking the gateway, every 2 minutes in Docker, or by hand:
 
 ```bash
 uv run python -m scripts.reconcile_payments           # SUCCEEDED: checked 1, fixed 1.
@@ -221,7 +226,24 @@ uv run pytest tests/concurrency                                              # e
 RACE_ROUNDS=20 uv run pytest tests/concurrency/test_reservation_race.py      # the recorded proof
 uv run pytest tests/concurrency/test_payment_race.py                         # orders, webhooks, the clock
 uv run python -m tests.concurrency.report                                    # three locking strategies, compared
+uv run pytest tests/concurrency/test_messaging.py                            # the M9 drills; needs RabbitMQ
 ```
+
+## Watch the ticket change hands
+
+With the worker, beat and relay running, every paid order goes on by itself: the relay publishes `payment.succeeded`, a worker creates the transfer, another asks the pretend ticket provider, and the ticket becomes the buyer's. If a message is lost on the way (it ended in a dead-letter queue), beat's `resume_transfers` job picks the order up again after 10 minutes. The worker, beat and relay restart by themselves if they exit. RabbitMQ's console (http://localhost:15672) shows the queues `transfers`, `notifications` and `maintenance`, and their dead-letter queues.
+
+```bash
+curl -s $B/orders/$ORDER -H "Authorization: Bearer $BUYER" | jq '{status, transfer: .transfer.status}'
+curl -s $B/notifications -H "Authorization: Bearer $BUYER" | jq '.items[].notification_type'
+docker compose logs -f worker relay                                      # what they did, as JSON
+```
+
+The drills, by hand:
+
+- **The broker is down:** `docker compose stop rabbitmq`, pay for a few orders, and `outbox_events` fills up with unpublished rows. `docker compose start rabbitmq`: the relay publishes them all, and each ticket moves once.
+- **A worker dies mid-transfer:** set `TICKET_PROVIDER_DELAY_SECONDS: "30"` on the worker in `docker-compose.yml`, pay, `docker compose kill worker` while it waits, then `docker compose up -d worker`. The message comes back, the provider is asked again with the same key, and the ticket moves once.
+- **The provider fails:** `TICKET_PROVIDER_MODE` set to `retryable` (with `TICKET_PROVIDER_FAILURES`), `permanent` or `unknown`. Busy is retried 5 times, then the transfer and the order go to review; the other two go there at once.
 
 (In PowerShell: `$env:RACE_ROUNDS = '20'` first, and `Remove-Item Env:RACE_ROUNDS` after.)
 
@@ -245,6 +267,7 @@ uv run pytest             # integration tests are skipped unless Postgres is run
 uv run pytest -m integration
 REQUIRE_POSTGRES=1 uv run pytest   # fail instead of skip without Postgres, as CI does
 REQUIRE_STORAGE=1 uv run pytest    # the same for the MinIO tests (docker compose up -d minio)
+REQUIRE_BROKER=1 uv run pytest     # and for the RabbitMQ drills (docker compose up -d rabbitmq)
 uv run ruff check .
 uv run ruff format .
 ```
@@ -253,9 +276,10 @@ The frontend, from `frontend/`:
 
 ```bash
 npm test                  # unit tests (Vitest)
-npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit minio`.
-                          # They start their own API (8001), fakepay (8091) and dev server (5174)
-                          # on their own database, ticketloop_e2e
+npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit minio rabbitmq`.
+                          # They start their own API (8001) with a worker and relay beside it,
+                          # fakepay (8091) and dev server (5174), on their own database,
+                          # ticketloop_e2e, and their own queues (prefix e2e-)
 npm run typecheck && npm run lint && npm run format:check
 npm run api:types         # after changing the API: regenerate openapi.json and the TypeScript types
 ```
@@ -277,15 +301,19 @@ app/
     reservations/          10-minute holds: the race, cancelling, expiry
     orders/                orders: one per held ticket, at the listing's price
     payments/              payment intents, signed webhooks, settling, reconciliation
+    outbox/                events written with their change, processed_events, and the relay
+    transfers/             the transfer state machine and its two consumers: start, then perform
+    notifications/         in-app notifications, written by a consumer, read through two routes
     idempotency/           Idempotency-Key: a request sent twice does its work once
     audit/                 the append-only audit log, record() to write to it, and the state machine class
-  infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory), the payment gateway's client; later Redis, RabbitMQ
-  workers/                 background jobs (M9 onward)
+  infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory), the payment gateway's client, the pretend ticket provider; later Redis
+  workers/                 Celery: the app and its queues, the tasks around the consumers, the scheduled jobs, the relay's loop
 fakepay/                   the pretend payment gateway: its own app, database and checkout page
 tests/
   unit/                    fast, no external services
   integration/             need Postgres
-  concurrency/             real races: four API processes, a real fakepay, 100 buyers; report.py compares strategies
+  concurrency/             real races: four API processes, a real fakepay, 100 buyers; report.py compares strategies;
+                           the messaging drills against RabbitMQ and real Celery workers
 migrations/                Alembic env.py and one file per schema change
 scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi,
                            expire_listings, expire_reservations, reconcile_payments, seed_discovery, explain_discovery, databases (throwaway ones), e2e_api
@@ -297,8 +325,8 @@ frontend/                  React + TypeScript app (Vite); each module adds its s
 .github/workflows/ci.yml   backend tests, frontend checks and browser tests on every push
 docs/                      design documents (below)
 documentation/             one HTML page per finished module for revision and interview prep; open index.html
-docker-compose.yml         Postgres, Mailpit, MinIO, fakepay, the migrate job, the API
-Dockerfile                 the API image, which also runs fakepay
+docker-compose.yml         Postgres, Mailpit, MinIO, fakepay, RabbitMQ, the migrate job, the API, the worker, beat, the relay
+Dockerfile                 the API image, which also runs fakepay, the worker, beat and the relay
 ```
 
 ## Design docs

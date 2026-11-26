@@ -15,9 +15,8 @@ from app.core.config import get_settings
 from app.infrastructure.database.engine import create_db_engine
 from app.infrastructure.database.session import create_session_factory
 from app.infrastructure.payments import FakepayGateway
-from app.modules.idempotency.service import delete_expired
 from app.modules.payments.models import RunStatus
-from app.modules.payments.reconcile import reconcile
+from app.workers.jobs import reconcile_payments
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -27,10 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     engine = create_db_engine(settings)
     gateway = FakepayGateway.at(settings.fakepay_url)
     try:
-        sessions = create_session_factory(engine)
-        run = reconcile(sessions, gateway)
-        with sessions() as session, session.begin():
-            forgotten = delete_expired(session)
+        run, forgotten = reconcile_payments(create_session_factory(engine), gateway)
     finally:
         gateway.close()
         engine.dispose()
@@ -42,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{finding['gateway']} there; {finding['action']}"
         )
     if run.error:
-        print(f"  stopped early: {run.error}", file=sys.stderr)
+        print(f"  the gateway did not always answer: {run.error}", file=sys.stderr)
     if forgotten:
         print(f"Deleted {forgotten} idempotency key(s) past their 24 hours.")
     return 0 if run.status == RunStatus.SUCCEEDED else 1

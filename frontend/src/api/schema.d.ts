@@ -493,6 +493,46 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/notifications": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * My Notifications
+     * @description Your notifications, newest first.
+     */
+    get: operations["my_notifications_api_v1_notifications_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/notifications/{notification_id}/read": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    /**
+     * Read Notification
+     * @description Mark one of yours as read. Asking again is harmless.
+     */
+    patch: operations["read_notification_api_v1_notifications__notification_id__read_patch"];
+    trace?: never;
+  };
   "/api/v1/orders": {
     parameters: {
       query?: never;
@@ -769,6 +809,26 @@ export interface paths {
      * @description A link that opens the file for 5 minutes.
      */
     get: operations["document_link_api_v1_tickets__ticket_id__documents__document_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/transfers/{transfer_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Transfer
+     * @description One transfer, for its buyer, its seller and admins. Why a try failed is for admins.
+     */
+    get: operations["get_transfer_api_v1_transfers__transfer_id__get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1192,6 +1252,27 @@ export interface components {
       /** Password */
       password: string;
     };
+    /** NotificationOut */
+    NotificationOut: {
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Notification Type */
+      notification_type: string;
+      /** Payload */
+      payload: {
+        [key: string]: unknown;
+      };
+      /** Read At */
+      read_at: string | null;
+    };
     /**
      * OrderIn
      * @description There is no amount: the server copies it from the listing.
@@ -1234,6 +1315,7 @@ export interface components {
        */
       reservation_id: string;
       status: components["schemas"]["OrderStatus"];
+      transfer: components["schemas"]["TransferSummaryOut"] | null;
       /**
        * Updated At
        * Format: date-time
@@ -1271,6 +1353,13 @@ export interface components {
     Page_ListingOut_: {
       /** Items */
       items: components["schemas"]["ListingOut"][];
+      /** Next Cursor */
+      next_cursor: string | null;
+    };
+    /** Page[NotificationOut] */
+    Page_NotificationOut_: {
+      /** Items */
+      items: components["schemas"]["NotificationOut"][];
       /** Next Cursor */
       next_cursor: string | null;
     };
@@ -1535,7 +1624,7 @@ export interface components {
       /** Provider Reference */
       provider_reference: string;
       /** Purchase Reference */
-      purchase_reference: string;
+      purchase_reference: string | null;
       /** Seat Details */
       seat_details: string | null;
       status: components["schemas"]["TicketStatus"];
@@ -1552,6 +1641,66 @@ export interface components {
      * @enum {string}
      */
     TicketStatus: "ACTIVE" | "VOID";
+    /**
+     * TransferOut
+     * @description `Transfer` in the API contract. `last_error` is null for anyone but an admin.
+     */
+    TransferOut: {
+      /** Attempt Count */
+      attempt_count: number;
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Initiated At
+       * Format: date-time
+       */
+      initiated_at: string;
+      /** Last Error */
+      last_error?: string | null;
+      /**
+       * Order Id
+       * Format: uuid
+       */
+      order_id: string;
+      status: components["schemas"]["TransferStatus"];
+    };
+    /**
+     * TransferStatus
+     * @enum {string}
+     */
+    TransferStatus: "INITIATED" | "PROCESSING" | "COMPLETED" | "REQUIRES_MANUAL_REVIEW";
+    /**
+     * TransferSummaryOut
+     * @description A transfer as its buyer and seller see it, inside their order: how far the ticket has
+     *     got. Never why a try failed; that is for admins.
+     */
+    TransferSummaryOut: {
+      /** Attempt Count */
+      attempt_count: number;
+      /** Completed At */
+      completed_at: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Initiated At
+       * Format: date-time
+       */
+      initiated_at: string;
+      /**
+       * Order Id
+       * Format: uuid
+       */
+      order_id: string;
+      status: components["schemas"]["TransferStatus"];
+    };
     /** UpdateMeIn */
     UpdateMeIn: {
       /** Full Name */
@@ -2645,6 +2794,72 @@ export interface operations {
       };
     };
   };
+  my_notifications_api_v1_notifications_get: {
+    parameters: {
+      query?: {
+        unread_only?: boolean;
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_NotificationOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  read_notification_api_v1_notifications__notification_id__read_patch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        notification_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["NotificationOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   create_order_api_v1_orders_post: {
     parameters: {
       query?: never;
@@ -3134,6 +3349,37 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["DocumentLinkOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_transfer_api_v1_transfers__transfer_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        transfer_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["TransferOut"];
         };
       };
       /** @description Validation Error */

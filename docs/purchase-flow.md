@@ -41,11 +41,12 @@ sequenceDiagram
     Relay->>MQ: publish payment.succeeded, wait for confirm
     Relay->>DB: set published_at
 
-    MQ->>W: deliver payment.succeeded
-    W->>DB: processed_events, INSERT transfer, order TRANSFER_PENDING (one tx)
-    W->>Prov: request transfer (Idempotency-Key = transfer id)
-    Prov->>API: POST /transfers/callbacks/{provider} (signed)
-    API->>DB: transfer COMPLETED, order COMPLETED, listing SOLD, ticket owner = buyer, outbox row (one tx)
+    MQ->>W: deliver payment.succeeded (transfers.start)
+    W->>DB: processed_events, INSERT transfer, order TRANSFER_PENDING, outbox transfer.initiated (one tx)
+    MQ->>W: deliver transfer.initiated (transfers.perform)
+    W->>DB: transfer PROCESSING, attempt_count + 1 (commit)
+    W->>Prov: transfer (idempotency key = transfer id), no transaction open
+    W->>DB: transfer COMPLETED, order COMPLETED, listing SOLD, ticket owner = buyer, outbox row (one tx)
 
     MQ->>W: deliver transfer.completed
     W->>DB: INSERT notifications for buyer and seller

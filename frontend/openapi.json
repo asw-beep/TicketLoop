@@ -753,6 +753,44 @@
         "title": "LoginIn",
         "type": "object"
       },
+      "NotificationOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "notification_type": {
+            "title": "Notification Type",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          }
+        },
+        "required": ["id", "notification_type", "payload", "read_at", "created_at"],
+        "title": "NotificationOut",
+        "type": "object"
+      },
       "OrderIn": {
         "additionalProperties": false,
         "description": "There is no amount: the server copies it from the listing.",
@@ -804,6 +842,16 @@
           "status": {
             "$ref": "#/components/schemas/OrderStatus"
           },
+          "transfer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TransferSummaryOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -819,7 +867,8 @@
           "status",
           "created_at",
           "updated_at",
-          "listing"
+          "listing",
+          "transfer"
         ],
         "title": "OrderOut",
         "type": "object"
@@ -911,6 +960,31 @@
         },
         "required": ["items", "next_cursor"],
         "title": "Page[ListingOut]",
+        "type": "object"
+      },
+      "Page_NotificationOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": ["items", "next_cursor"],
+        "title": "Page[NotificationOut]",
         "type": "object"
       },
       "Page_OrderOut_": {
@@ -1446,8 +1520,15 @@
             "type": "string"
           },
           "purchase_reference": {
-            "title": "Purchase Reference",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Purchase Reference"
           },
           "seat_details": {
             "anyOf": [
@@ -1509,6 +1590,106 @@
         "enum": ["ACTIVE", "VOID"],
         "title": "TicketStatus",
         "type": "string"
+      },
+      "TransferOut": {
+        "description": "`Transfer` in the API contract. `last_error` is null for anyone but an admin.",
+        "properties": {
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "initiated_at": {
+            "format": "date-time",
+            "title": "Initiated At",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransferStatus"
+          }
+        },
+        "required": ["id", "order_id", "status", "attempt_count", "initiated_at", "completed_at"],
+        "title": "TransferOut",
+        "type": "object"
+      },
+      "TransferStatus": {
+        "enum": ["INITIATED", "PROCESSING", "COMPLETED", "REQUIRES_MANUAL_REVIEW"],
+        "title": "TransferStatus",
+        "type": "string"
+      },
+      "TransferSummaryOut": {
+        "description": "A transfer as its buyer and seller see it, inside their order: how far the ticket has\ngot. Never why a try failed; that is for admins.",
+        "properties": {
+          "attempt_count": {
+            "title": "Attempt Count",
+            "type": "integer"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "initiated_at": {
+            "format": "date-time",
+            "title": "Initiated At",
+            "type": "string"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TransferStatus"
+          }
+        },
+        "required": ["id", "order_id", "status", "attempt_count", "initiated_at", "completed_at"],
+        "title": "TransferSummaryOut",
+        "type": "object"
       },
       "UpdateMeIn": {
         "additionalProperties": false,
@@ -3596,6 +3777,132 @@
         "tags": ["listings"]
       }
     },
+    "/api/v1/notifications": {
+      "get": {
+        "description": "Your notifications, newest first.",
+        "operationId": "my_notifications_api_v1_notifications_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "unread_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unread Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_NotificationOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Notifications",
+        "tags": ["notifications"]
+      }
+    },
+    "/api/v1/notifications/{notification_id}/read": {
+      "patch": {
+        "description": "Mark one of yours as read. Asking again is harmless.",
+        "operationId": "read_notification_api_v1_notifications__notification_id__read_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Notification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Notification",
+        "tags": ["notifications"]
+      }
+    },
     "/api/v1/orders": {
       "post": {
         "description": "Order the ticket you are holding, at the listing's price. Sending the same request again\nwith the same Idempotency-Key returns the same response and makes nothing new.",
@@ -4451,6 +4758,53 @@
         ],
         "summary": "Document Link",
         "tags": ["tickets"]
+      }
+    },
+    "/api/v1/transfers/{transfer_id}": {
+      "get": {
+        "description": "One transfer, for its buyer, its seller and admins. Why a try failed is for admins.",
+        "operationId": "get_transfer_api_v1_transfers__transfer_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "transfer_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Transfer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Transfer",
+        "tags": ["transfers"]
       }
     },
     "/api/v1/users/me": {

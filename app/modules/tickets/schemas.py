@@ -48,7 +48,8 @@ class TicketOut(ResponseModel):
     ticket_category: str
     seat_details: str | None
     original_price_paise: int
-    purchase_reference: str
+    # Null for an owner who bought the ticket here (M9): it is the seller's purchase.
+    purchase_reference: str | None
     provider_reference: str
     verification_status: VerificationStatus
     verification_note: str | None

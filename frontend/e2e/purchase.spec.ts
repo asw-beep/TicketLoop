@@ -107,14 +107,27 @@ test("a buyer finds a ticket, reserves it, gives it up, and another buyer buys i
   await expect(rival.getByText("₹2,000")).toBeVisible();
   await rival.getByRole("button", { name: "Pay", exact: false }).first().click();
   await expect(rival.getByRole("heading", { name: "Your order" })).toBeVisible();
-  await expect(rival.getByRole("heading", { name: "Status" })).toContainText("Paid");
+  // The worker hands the ticket over (M9), and the page follows without a reload.
+  await expect(rival.getByRole("heading", { name: "Status" })).toContainText("Completed", {
+    timeout: 20_000,
+  });
   await expect(rival.getByText("You've paid ₹2,000. The ticket is yours.")).toBeVisible();
   const orderUrl = rival.url();
 
   // It is on their lists, and nobody else's business.
   await rival.getByRole("link", { name: "My orders" }).click();
   const order = rival.getByRole("list", { name: "Your orders" }).getByRole("listitem");
-  await expect(order).toContainText("Paid");
+  await expect(order).toContainText("Completed");
+  await rival.getByRole("link", { name: "My tickets" }).click();
+  await rival.getByRole("link", { name: eventName }).click();
+  await expect(rival.getByRole("heading", { name: "Ticket", exact: true })).toBeVisible();
+  // The seller's order number and proof of purchase are not the buyer's to see.
+  await expect(rival.getByText("Order number")).toHaveCount(0);
+  await expect(rival.getByRole("heading", { name: "Proof of purchase" })).toHaveCount(0);
+  // ₹2,500 is the ticket's face value; this buyer paid ₹2,000 for it.
+  await expect(rival.getByText("Price paid")).toHaveCount(0);
+  await expect(rival.getByText("Face value", { exact: true })).toBeVisible();
+  await expect(rival.getByText("At most ₹2,500, its face value.")).toBeVisible();
   await rival.getByRole("link", { name: "My holds" }).click();
   await expect(rival.getByRole("list", { name: "Your holds" }).getByRole("listitem")).toContainText(
     "Bought",
@@ -124,7 +137,7 @@ test("a buyer finds a ticket, reserves it, gives it up, and another buyer buys i
 
   // 6. The seller sees what happened, and not who.
   await seller.reload();
-  await expect(seller.getByRole("heading", { name: "Status" })).toContainText("Reserved");
+  await expect(seller.getByRole("heading", { name: "Status" })).toContainText("Sold");
   await expect(seller.getByRole("list", { name: "History" }).getByRole("listitem")).toHaveText([
     /^Listed as a draft by you/,
     /^Submitted for review by you/,
@@ -132,6 +145,7 @@ test("a buyer finds a ticket, reserves it, gives it up, and another buyer buys i
     /^Reserved by a buyer/,
     /^Hold given up by a buyer/,
     /^Reserved by a buyer/,
+    /^Sold; the ticket went to the buyer automatically/,
   ]);
   await expect(seller.getByText("Sam Varghese")).toHaveCount(0);
 });

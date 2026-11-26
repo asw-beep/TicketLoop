@@ -39,6 +39,19 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      # The message broker (M9): the outbox relay publishes here and the workers consume.
+      rabbitmq:
+        image: rabbitmq:4.2.3-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: ticketloop
+          RABBITMQ_DEFAULT_PASS: ticketloop
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
 
     env:
       # The job runs on the runner itself, so Postgres is at localhost, as on a laptop.
@@ -48,6 +61,8 @@ jobs:
       REQUIRE_POSTGRES: "1"
       # And fail, don't skip, if the storage tests cannot reach MinIO.
       REQUIRE_STORAGE: "1"
+      # And fail, don't skip, if the messaging drills cannot reach RabbitMQ.
+      REQUIRE_BROKER: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -155,6 +170,19 @@ jobs:
         ports:
           - 1025:1025
           - 8025:8025
+      # The message broker (M9): the outbox relay publishes here and the workers consume.
+      rabbitmq:
+        image: rabbitmq:4.2.3-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: ticketloop
+          RABBITMQ_DEFAULT_PASS: ticketloop
+        ports:
+          - 5672:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
 
     env:
       DATABASE_URL: postgresql+psycopg://ticketloop:ticketloop@localhost:5432/ticketloop
@@ -190,7 +218,7 @@ jobs:
           exit 1
 
       # Playwright starts the API and the dev server itself (playwright.config.ts); the API
-      # creates and migrates its own database first.
+      # creates and migrates its own database first, then starts a worker and the relay.
       - name: Browser tests
         working-directory: frontend
         run: npx playwright test

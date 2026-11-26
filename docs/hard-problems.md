@@ -7,7 +7,7 @@ For each problem: the exact statements in order, why they are correct, and what 
 | 1 | Double booking | Conditional `UPDATE ... WHERE status = 'ACTIVE'` | `uq_reservations_one_live_per_listing` | M7 (built) |
 | 2 | Duplicate orders | `idempotency_keys` row in the same transaction | `uq_orders_reservation` | M8 |
 | 3 | Duplicate or forged webhooks | HMAC check, then dedupe insert in the same transaction as the effect | `uq_payment_events_provider_event` | M8 |
-| 4 | Lost events | Transactional outbox plus idempotent consumers | `pk_processed_events` | M9 |
+| 4 | Lost events | Transactional outbox plus idempotent consumers | `pk_processed_events` | M9 (built) |
 | 5 | Expiry racing payment | Both sides use conditional updates on `status = 'CREATED'`; `PAYMENT_PENDING` is resolved by asking the gateway | row lock on the reservation | M7 (expiry), M8 |
 | 6 | Drift | Reconciliation through the same transition functions, recorded per run | conditional updates make re-runs no-ops | M8 |
 
@@ -275,7 +275,14 @@ COMMIT;  -- then ack the message
 
 **At-least-once delivery plus idempotent consumers gives an exactly-once effect.** Exactly-once delivery itself is impossible when either side can crash between doing and acknowledging.
 
-**Test (M9):** stop RabbitMQ, make payments, watch outbox rows pile up, start RabbitMQ, see all published. `docker kill` a worker mid-task: the message is redelivered and skipped.
+**Built in M9.** Three differences from the sketch:
+
+- **The relay publishes one Celery task per consumer**, not one message per event. `CONSUMERS` in `app/modules/outbox/service.py` says who hears what; the task id is `"{event_id}:{consumer}"`. A row is marked published only when every one of its tasks was confirmed by the broker, so a half-published event is sent again whole and the consumers' `processed_events` rows absorb the repeat. When the broker does not confirm, the row gets `retry_count + 1`, `next_attempt_at = now() + min(2^n, 300) s` jittered to 50 to 100 %, and `last_error`, and the rest of the batch is left for the next pass.
+- **The transfer is two consumers with an event between them.** `transfers.start` hears `payment.succeeded`: it creates the transfer, moves the order to `TRANSFER_PENDING` and emits `transfer.initiated`, in one transaction. `transfers.perform` hears that, commits `PROCESSING`, calls the provider with no transaction open and the transfer id as its idempotency key, then settles the answer in a transaction of its own. With one task doing both, a worker that died after the first commit would leave a transfer `INITIATED` for ever, because the redelivered message would find its `processed_events` row and stop.
+- **Giving up is explicit.** A task retries a database outage 16 times, backing off to a minute between tries, 5 to 10 minutes in all, then rejects the message; anything else it cannot handle is rejected at once. Rejected messages go to the queue's dead-letter queue (`transfers.dead`, ...), where a person reads them. A busy provider is asked 5 times in all, then the transfer goes to `REQUIRES_MANUAL_REVIEW`; a refusal or an unknown outcome goes there at once, since the provider may have done it. (If the worker dies before that is recorded, the message comes back and the provider is asked again, with the same key.) A transfer that has used its 5 tries without an answer, because each one killed its worker, goes to review instead of being asked a sixth time.
+- **A lost message is picked up.** Every 2 minutes beat runs `resume_transfers`: a `PAID` order with no transfer, or a transfer still `INITIATED` or `PROCESSING`, untouched for 10 minutes and with no event about it still waiting in the outbox, has lost its message to a dead-letter queue. The job starts the transfer, or emits `transfer.initiated` again. Both steps are safe to repeat.
+
+The drills are tests, against a real RabbitMQ and real Celery worker processes (`tests/concurrency/test_messaging.py`): a purchase through the API and fakepay ends with the ticket in the buyer's name; 10 orders paid while the broker is unreachable wait in the outbox and are all published and transferred once it is back; a worker killed in the middle of a transfer is replaced, and the ticket moves once (the provider is asked twice, with the same key); a poison message ends in the dead-letter queue instead of being retried for ever.
 
 ---
 
@@ -426,4 +433,4 @@ UPDATE reconciliation_runs
 | G1 | A run stuck `RUNNING` | The next run marks stale `RUNNING` rows (older than 30 minutes) `FAILED`, then starts fresh. |
 | Some fixes committed | Those payments are final | The next run skips them and fixes the rest. |
 
-**Built in M8.** `scripts/reconcile_payments.py`, every 2 minutes by Celery beat from M9. The gateway is made to "forget" the webhooks of 20 payments: one run fixes all 20, a second fixes 0. Runs at once, and a run racing the late webhook, settle each payment once.
+**Built in M8.** `scripts/reconcile_payments.py` by hand, and in Docker every 2 minutes by Celery beat (M9). The gateway is made to "forget" the webhooks of 20 payments: one run fixes all 20, a second fixes 0. Runs at once, and a run racing the late webhook, settle each payment once.

@@ -1,1 +1,1 @@
-"""Notifications (M12): in-app notifications built from outbox events."""
+"""Notifications (M9): in-app messages, written by a consumer of the outbox's events."""

@@ -1,7 +1,8 @@
 # Local stack. Two ways to use it:
-#   docker compose up --build          everything: Postgres, Mailpit, MinIO, fakepay, migrations,
-#                                      then the API (localhost:8000)
-#   docker compose up -d db mailpit minio fakepay
+#   docker compose up --build          everything: Postgres, Mailpit, MinIO, fakepay, RabbitMQ,
+#                                      migrations, the API (localhost:8000), and the worker, beat
+#                                      and relay that move events and tickets
+#   docker compose up -d db mailpit minio fakepay rabbitmq worker beat relay
 #                                      everything but the API; run that on Windows with
 #                                      uvicorn --reload, and the frontend with npm run dev
 # Values like ${POSTGRES_USER:-ticketloop} come from .env if it exists, else the default.
@@ -70,13 +71,72 @@ services:
     volumes:
       - fakepaydata:/data
 
+  # The message broker (M9). Management UI at http://localhost:15672 (ticketloop / ticketloop).
+  rabbitmq:
+    image: rabbitmq:4.2.3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ticketloop
+      RABBITMQ_DEFAULT_PASS: ticketloop
+    ports:
+      - "5672:5672" # AMQP, where the relay publishes and the worker consumes
+      - "15672:15672" # the management UI
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # Celery: the consumers (transfers, notifications) and the scheduled jobs beat sends it.
+  # Celery does not support Windows, so on a laptop this runs here even when the API does not.
+  worker:
+    build: .
+    # A worker exits once it has given up reaching the broker; this brings it back.
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.celery_app", "worker",
+              "-Q", "transfers,notifications,maintenance", "--concurrency", "2", "--loglevel", "INFO"]
+    environment: &worker_env
+      DATABASE_URL: &database_url postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/${POSTGRES_DB:-ticketloop}
+      BROKER_URL: amqp://ticketloop:ticketloop@rabbitmq:5672//
+      FAKEPAY_URL: http://fakepay:8090
+      FAKEPAY_WEBHOOK_SECRET: *fakepay_secret
+      LOG_JSON: "true"
+    depends_on: &after_migrations
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Sends the scheduled jobs: hold expiry every 30 s, listing expiry every 5 min,
+  # reconciliation and stalled transfers every 2 min. Exactly one beat may run, or every job
+  # runs twice as often.
+  beat:
+    build: .
+    restart: unless-stopped
+    command: ["celery", "-A", "app.workers.celery_app", "beat", "--loglevel", "INFO",
+              "--schedule", "/tmp/celerybeat-schedule"]
+    environment: *worker_env
+    depends_on: *after_migrations
+
+  # The outbox relay: publishes committed events to RabbitMQ. Any number may run.
+  relay:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "app.workers.relay"]
+    environment: *worker_env
+    depends_on: *after_migrations
+
   # A one-off job: bring the schema up to date, then exit. Kept out of the API's own startup
   # so several API containers (load tests) never race to migrate at once.
   migrate:
     build: .
     command: ["alembic", "upgrade", "head"]
     environment:
-      DATABASE_URL: &database_url postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/${POSTGRES_DB:-ticketloop}
+      DATABASE_URL: *database_url
     depends_on:
       db:
         condition: service_healthy
@@ -112,3 +172,4 @@ volumes:
   pgdata:
   miniodata:
   fakepaydata:
+  rabbitmqdata:

@@ -81,6 +81,19 @@ class Settings(BaseSettings):
     fakepay_url: str = "http://localhost:8090"
     fakepay_webhook_secret: SecretStr = SecretStr(LOCAL_FAKEPAY_SECRET)
 
+    # Messaging (M9): RabbitMQ, where the outbox relay publishes and the workers consume.
+    # queue_prefix keeps one set of queues apart from another on the same broker; the
+    # messaging tests use one of their own so a development worker never takes their messages.
+    broker_url: str = "amqp://ticketloop:ticketloop@localhost:5672//"
+    queue_prefix: str = ""
+    broker_connection_timeout_seconds: float = 5.0
+    # The pretend ticket provider that moves a ticket to its buyer. Drills switch it to fail:
+    # "retryable" fails `failures` times per transfer (0: always), "permanent" and "unknown"
+    # fail every time; delay_seconds makes each call slow.
+    ticket_provider_mode: Literal["succeed", "retryable", "permanent", "unknown"] = "succeed"
+    ticket_provider_failures: int = 0
+    ticket_provider_delay_seconds: float = 0.0
+
     @property
     def storage_public_endpoint(self) -> str:
         """The storage host the browser reaches, used to sign download links."""

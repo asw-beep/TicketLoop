@@ -106,10 +106,21 @@ function OrderStatusText({ order }: { order: Order }) {
       );
     case "PAID":
     case "TRANSFER_PENDING":
+      return (
+        <div className="message message--ok" role="status">
+          <p>
+            You've paid {formatPaise(order.amount_paise)}. We're handing the ticket over to you.
+            This page updates by itself.
+          </p>
+        </div>
+      );
     case "COMPLETED":
       return (
         <div className="message message--ok" role="status">
           <p>You've paid {formatPaise(order.amount_paise)}. The ticket is yours.</p>
+          <p>
+            <Link to="/tickets">See it with your tickets</Link>.
+          </p>
         </div>
       );
     case "TRANSFER_FAILED":

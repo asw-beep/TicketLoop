@@ -76,13 +76,17 @@ function TicketDetails({ ticket }: { ticket: Ticket }) {
             <dd>{ticket.seat_details ?? "Not given"}</dd>
           </div>
           <div>
-            <dt>Price paid</dt>
+            {/* What it cost new. A buyer here paid the seller's price, which may be less. */}
+            <dt>Face value</dt>
             <dd>{formatPaise(ticket.original_price_paise)}</dd>
           </div>
-          <div>
-            <dt>Order number</dt>
-            <dd className="code">{ticket.purchase_reference}</dd>
-          </div>
+          {/* Null when you bought it here: the order number is the seller's purchase. */}
+          {ticket.purchase_reference !== null && (
+            <div>
+              <dt>Order number</dt>
+              <dd className="code">{ticket.purchase_reference}</dd>
+            </div>
+          )}
           <div>
             <dt>Ticket number</dt>
             <dd className="code">{ticket.provider_reference}</dd>
@@ -103,7 +107,8 @@ function TicketDetails({ ticket }: { ticket: Ticket }) {
 
       <TicketListing ticket={ticket} />
 
-      <Evidence ticket={ticket} />
+      {/* Bought here: the proof of purchase is the seller's, and stays with them. */}
+      {ticket.purchase_reference !== null && <Evidence ticket={ticket} />}
     </>
   );
 }

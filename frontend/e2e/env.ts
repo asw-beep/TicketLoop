@@ -35,6 +35,9 @@ export const PYTHON_ENV = {
   FRONTEND_URL: WEB_URL, // reset emails link here, and fakepay sends buyers back here
   FAKEPAY_URL,
   FAKEPAY_WEBHOOK_SECRET: WEBHOOK_SECRET,
+  // The worker and relay the API starts use queues of their own, so a development worker on
+  // the same RabbitMQ never takes the browser tests' messages.
+  QUEUE_PREFIX: "e2e-",
   LOG_JSON: "false",
   LOG_LEVEL: "WARNING",
 };

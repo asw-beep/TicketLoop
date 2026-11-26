@@ -225,10 +225,10 @@ erDiagram
 | `payments` | One attempt to collect money for one order | M8 (built) |
 | `payment_events` | Every verified webhook, kept forever. Its unique key is the webhook dedupe. | M8 (built) |
 | `reconciliation_runs` | One row per reconciliation job: what it checked and what it fixed | M8 (built) |
-| `outbox_events` | Events written in the same transaction as the change, waiting to be published to RabbitMQ. `headers` carries trace context from M11. | M9 |
-| `processed_events` | Which consumer has already handled which event, so redelivery is harmless | M9 |
-| `transfers` | Handing the ticket to the buyer through the provider adapter | M9 |
-| `notifications` | In-app messages, read through the API | M9 |
+| `outbox_events` | Events written in the same transaction as the change, waiting to be published to RabbitMQ. `headers` carries trace context from M11. | M9 (built) |
+| `processed_events` | Which consumer has already handled which event, so redelivery is harmless | M9 (built) |
+| `transfers` | Handing the ticket to the buyer through the provider adapter | M9 (built) |
+| `notifications` | In-app messages, read through the API | M9 (built) |
 | `audit_logs` | Append-only record of every important state change and admin action. Written only through `app/modules/audit/service.record()`, which stamps `created_at` with `clock_timestamp()` so rows from one transaction keep their order. | M5 (built) |
 
 ## Business rules enforced by the database

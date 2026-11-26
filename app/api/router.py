@@ -7,10 +7,12 @@ from app.modules.discovery.router import discovery_router
 from app.modules.events.router import admin_events_router, events_router
 from app.modules.identity.router import auth_router, users_router
 from app.modules.listings.router import admin_listings_router, listings_router
+from app.modules.notifications.router import notifications_router
 from app.modules.orders.router import orders_router
 from app.modules.payments.router import payments_router
 from app.modules.reservations.router import reservations_router
 from app.modules.tickets.router import admin_tickets_router, tickets_router
+from app.modules.transfers.router import transfers_router
 
 
 def build_api_router(prefix: str) -> APIRouter:
@@ -30,4 +32,6 @@ def build_api_router(prefix: str) -> APIRouter:
     router.include_router(reservations_router)
     router.include_router(orders_router)
     router.include_router(payments_router)
+    router.include_router(transfers_router)
+    router.include_router(notifications_router)
     return router

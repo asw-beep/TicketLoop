@@ -63,7 +63,9 @@ def test_an_order_copies_the_listings_price(api: TestClient, db_session: Session
         "created_at",
         "updated_at",
         "listing",
+        "transfer",
     }
+    assert body["transfer"] is None  # until it is paid
     assert (body["status"], body["currency"]) == ("CREATED", "INR")
     assert body["amount_paise"] == reservation["listing"]["asking_price_paise"]
     assert body["listing"] == reservation["listing"]

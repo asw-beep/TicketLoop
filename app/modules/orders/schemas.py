@@ -8,6 +8,7 @@ from pydantic import AwareDatetime
 from app.core.schemas import RequestModel, ResponseModel
 from app.modules.orders.models import OrderStatus
 from app.modules.reservations.schemas import ReservedListingOut
+from app.modules.transfers.schemas import TransferSummaryOut
 
 OrderRole = Literal["buyer", "seller"]
 
@@ -30,3 +31,5 @@ class OrderOut(ResponseModel):
     created_at: AwareDatetime
     updated_at: AwareDatetime
     listing: ReservedListingOut
+    # From M9: how far the ticket has got, once the order is paid. Null before.
+    transfer: TransferSummaryOut | None

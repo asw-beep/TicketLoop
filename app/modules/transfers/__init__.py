@@ -1,1 +1,1 @@
-"""Transfers (M12): handing the ticket to the buyer through the ticket provider."""
+"""Transfers (M9): handing a paid-for ticket to its buyer through the ticket provider."""

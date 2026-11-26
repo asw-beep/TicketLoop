@@ -8,8 +8,9 @@ from app.core.pagination import Cursor, Limit, Page
 from app.infrastructure.database.session import DbSession
 from app.infrastructure.storage import Storage
 from app.modules.identity.dependencies import AdminUser, CurrentUser
+from app.modules.identity.models import User
 from app.modules.tickets import documents, service
-from app.modules.tickets.models import MAX_DOCUMENT_BYTES
+from app.modules.tickets.models import MAX_DOCUMENT_BYTES, Ticket
 from app.modules.tickets.schemas import (
     DocumentLinkOut,
     DocumentOut,
@@ -20,6 +21,14 @@ from app.modules.tickets.schemas import (
 
 tickets_router = APIRouter(prefix="/tickets", tags=["tickets"])
 admin_tickets_router = APIRouter(prefix="/admin/tickets", tags=["admin: tickets"])
+
+
+def shown(ticket: Ticket, user: User) -> TicketOut:
+    """The ticket as this person may see it: without the purchase reference, for a buyer."""
+    out = TicketOut.model_validate(ticket)
+    if service.sees_evidence(ticket, user):
+        return out
+    return out.model_copy(update={"purchase_reference": None})
 
 
 @tickets_router.post("", response_model=TicketOut, status_code=status.HTTP_201_CREATED)
@@ -35,13 +44,13 @@ def my_tickets(
 ) -> Page[TicketOut]:
     """Your tickets, newest first."""
     items, next_cursor = service.list_my_tickets(db, user, cursor, limit)
-    return Page[TicketOut](items=items, next_cursor=next_cursor)
+    return Page[TicketOut](items=[shown(t, user) for t in items], next_cursor=next_cursor)
 
 
 @tickets_router.get("/{ticket_id}", response_model=TicketOut)
 def get_ticket(ticket_id: uuid.UUID, user: CurrentUser, db: DbSession) -> TicketOut:
     """Your ticket, or any ticket for an admin. Anyone else gets 404."""
-    return TicketOut.model_validate(service.get_visible_ticket(db, ticket_id, user))
+    return shown(service.get_visible_ticket(db, ticket_id, user), user)
 
 
 @tickets_router.post(

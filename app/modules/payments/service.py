@@ -24,6 +24,7 @@ from app.modules.listings.service import release_listing
 from app.modules.orders.models import Order, OrderStatus
 from app.modules.orders.service import check_payable, get_order_for, lock_reservation
 from app.modules.orders.state import transition as move_order
+from app.modules.outbox.service import EventType, emit
 from app.modules.payments.errors import OrderNotPayableError, PaymentNotFoundError
 from app.modules.payments.models import OPEN_PAYMENT_STATUSES, Payment, PaymentStatus
 from app.modules.payments.state import transition
@@ -198,6 +199,22 @@ def succeed(
     )
     move_order(db, order, OrderStatus.PAID, actor_id=None, details=details)
     move_reservation(db, reservation, ReservationStatus.CONFIRMED, actor_id=None, details=details)
+    # In this transaction: the ticket is handed over if, and only if, this commits.
+    emit(
+        db,
+        aggregate_type="order",
+        aggregate_id=order.id,
+        event_type=EventType.PAYMENT_SUCCEEDED,
+        payload={
+            "order_id": order.id,
+            "payment_id": payment.id,
+            "reservation_id": reservation.id,
+            "listing_id": order.listing_id,
+            "buyer_id": order.buyer_id,
+            "seller_id": order.seller_id,
+            "amount_paise": order.amount_paise,
+        },
+    )
     return True
 
 
@@ -255,6 +272,20 @@ def fail(
         reservation.listing_id,
         actor_id=None,
         reason="payment_timeout" if timed_out else "payment_failed",
+    )
+    emit(
+        db,
+        aggregate_type="order",
+        aggregate_id=order.id,
+        event_type=EventType.PAYMENT_FAILED,
+        payload={
+            "order_id": order.id,
+            "payment_id": payment.id,
+            "listing_id": order.listing_id,
+            "buyer_id": order.buyer_id,
+            "seller_id": order.seller_id,
+            "reason": reason,
+        },
     )
     return True
 

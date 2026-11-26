@@ -39,7 +39,7 @@ from app.modules.tickets.models import (
     TicketDocument,
     VerificationStatus,
 )
-from app.modules.tickets.service import get_visible_ticket
+from app.modules.tickets.service import get_visible_ticket, sees_evidence
 
 KEY_PREFIX = "ticket-documents/"
 
@@ -88,7 +88,8 @@ def upload_document(
 
 
 def list_documents(db: Session, ticket_id: uuid.UUID, user: User) -> list[TicketDocument]:
-    get_visible_ticket(db, ticket_id, user)
+    if not sees_evidence(get_visible_ticket(db, ticket_id, user), user):
+        return []  # the seller's evidence, not the buyer's
     stmt = (
         select(TicketDocument)
         .where(TicketDocument.ticket_id == ticket_id)
@@ -105,14 +106,14 @@ def document_link(
     user: User,
 ) -> tuple[str, datetime]:
     """A presigned link to the file and when it stops working."""
-    get_visible_ticket(db, ticket_id, user)
+    ticket = get_visible_ticket(db, ticket_id, user)
     # Matched on both IDs: a document of one ticket is not reachable through another.
     document = db.scalar(
         select(TicketDocument).where(
             TicketDocument.id == document_id, TicketDocument.ticket_id == ticket_id
         )
     )
-    if document is None:
+    if document is None or not sees_evidence(ticket, user):
         raise DocumentNotFoundError()
     expires_at = datetime.now(UTC) + timedelta(seconds=PRESIGN_SECONDS)
     url = storage.presigned_get_url(document.storage_key, document.content_type, PRESIGN_SECONDS)

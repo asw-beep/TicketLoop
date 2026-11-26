@@ -325,7 +325,7 @@ function ChangePriceForm({
         hint={
           listing.status === "ACTIVE"
             ? "While the listing is on sale its price can only go down."
-            : `At most ${formatPaise(listing.original_price_paise)}, the price you paid.`
+            : `At most ${formatPaise(listing.original_price_paise)}, its face value.`
         }
         onChange={() => setPriceError(undefined)}
         error={priceError ?? errors.asking_price_paise}

@@ -8,7 +8,15 @@ describe("pollEvery", () => {
     expect(pollEvery("PAYMENT_PENDING", 30)).toBe(10_000);
   });
 
-  it.each(["CREATED", "PAID", "PAYMENT_FAILED", "CANCELLED", "COMPLETED"] as const)(
+  it.each(["PAID", "TRANSFER_PENDING"] as const)(
+    "keeps asking about a %s order until the ticket has been handed over",
+    (status) => {
+      expect(pollEvery(status, 0)).toBe(2_000);
+      expect(pollEvery(status, 30)).toBe(10_000);
+    },
+  );
+
+  it.each(["CREATED", "PAYMENT_FAILED", "CANCELLED", "COMPLETED", "TRANSFER_FAILED"] as const)(
     "does not ask again about a %s order",
     (status) => {
       expect(pollEvery(status, 0)).toBe(false);

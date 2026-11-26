@@ -1,8 +1,10 @@
 """Ticket logic (FR-03). Functions take the request's Session and never commit.
 
 Who may see a ticket is decided in exactly one place, get_visible_ticket(). Every route that
-takes a ticket ID goes through it, so there is one place to get IDOR right: the owner and
-admins see the ticket, everyone else gets the same 404 as for an ID that does not exist.
+takes a ticket ID goes through it, so there is one place to get IDOR right: the owner, the
+person who registered it and admins see the ticket, everyone else gets the same 404 as for an
+ID that does not exist. What the registering owner showed to get it verified (the evidence
+files and the purchase reference) stays theirs after a sale: sees_evidence() decides that.
 """
 
 import uuid
@@ -34,12 +36,21 @@ OLDEST_FIRST = Sort("tickets.oldest", (Ticket.created_at, Ticket.id))
 
 
 def get_visible_ticket(db: Session, ticket_id: uuid.UUID, user: User) -> Ticket:
+    """Its owner, whoever registered it (a seller after the sale, M9), and admins."""
     ticket = db.get(Ticket, ticket_id)
     if ticket is None:
         raise TicketNotFoundError()
-    if ticket.current_owner_id != user.id and user.role != UserRole.ADMIN:
+    if user.id not in (ticket.current_owner_id, ticket.original_owner_id) and (
+        user.role != UserRole.ADMIN
+    ):
         raise TicketNotFoundError()  # not yours: indistinguishable from not there
     return ticket
+
+
+def sees_evidence(ticket: Ticket, user: User) -> bool:
+    """The purchase reference and the evidence files are the registering owner's and the
+    admins'. A buyer who now owns the ticket sees neither: they are someone else's purchase."""
+    return user.id == ticket.original_owner_id or user.role == UserRole.ADMIN
 
 
 def register_ticket(db: Session, owner: User, data: TicketIn) -> Ticket:

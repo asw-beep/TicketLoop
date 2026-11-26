@@ -175,9 +175,9 @@ As built: the reservation is one conditional `UPDATE` on the listing, then the i
 
 `fakepay` itself is a separate small service (`fakepay/`, port 8090) with its own API and its own database: `POST /v1/intents` (idempotent by key, 15 minutes to pay), `GET /v1/intents/{transaction_id}`, `GET /v1/intents?idempotency_key=`, `POST /v1/intents/{transaction_id}/outcome`, and the page a buyer pays on, `/checkout/{transaction_id}`. Its outcomes are succeed, fail, pay with a late webhook, pay with the webhook twice, pay with a forged webhook, and pay with no webhook at all. It has no refunds.
 
-Reconciliation has no routes: it is a script, run by hand or every 2 minutes by Celery beat from M9, and each run writes a `reconciliation_runs` row.
+Reconciliation has no routes: it is a job, run every 2 minutes by Celery beat in Docker or by hand with `scripts/reconcile_payments.py`, and each run writes a `reconciliation_runs` row.
 
-## Transfers (M9)
+## Transfers (M9, built)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
@@ -185,14 +185,20 @@ Reconciliation has no routes: it is a script, run by hand or every 2 minutes by 
 
 The ticket provider is an adapter inside the worker, not a service, so there is no callback route. `plan.md`'s `POST /transfers/{id}/retry` is not built: a transfer that fails for good stays in `REQUIRES_MANUAL_REVIEW`, with the order `TRANSFER_FAILED`.
 
-`Transfer` = `{id, order_id, status, attempt_count, last_error (admin only), initiated_at, completed_at}`.
+`Transfer` = `{id, order_id, status, attempt_count, last_error (admin only), initiated_at, completed_at}`. `last_error` is null for the buyer and the seller. Anyone else gets 404 `transfer-not-found`, the same as for a transfer that does not exist.
 
-## Notifications (M9)
+`Order` gains `transfer`: the `Transfer` without `last_error`, or null until the order is paid. It is how the order page follows the ticket to the buyer.
+
+**After the sale (M9).** The buyer is the ticket's `current_owner_id` and sees it in `GET /tickets/me`. The seller's `purchase_reference` is null for them, their `GET /tickets/{id}/documents` is empty, and a link to one of the seller's files is 404 `document-not-found`: that evidence is about the seller's purchase, and stays with the seller and admins. The seller can still `GET /tickets/{id}` for the ticket they registered, with its reference and files, but it leaves their `/tickets/me`.
+
+## Notifications (M9, built)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
 | `GET /notifications` | User | `unread_only`, `cursor`, `limit` | 200 page of `{id, notification_type, payload, read_at, created_at}` | — |
-| `PATCH /notifications/{notification_id}/read` | Owner | — | 200 the notification with `read_at` set; repeating it is harmless | 404 |
+| `PATCH /notifications/{notification_id}/read` | Owner | — | 200 the notification with `read_at` set; repeating it is harmless | 404 `notification-not-found` |
+
+`notification_type`, by event: `payment.succeeded` tells the buyer `payment_succeeded` and the seller `ticket_sold`; `payment.failed` the buyer `payment_failed`; `reservation.expired` the buyer `hold_expired`; `transfer.completed` the buyer `ticket_received` and the seller `ticket_handed_over`; `transfer.failed` both `transfer_needs_review`. `payload` holds only ids to link to (`order_id`, `listing_id`, `reservation_id`) and a `reason`, never the other person. One per person per event (`uq_notifications_event_user`), however often the event is delivered. There are no screens for notifications in this project.
 
 ## Endpoints added to `plan.md` section 10
 

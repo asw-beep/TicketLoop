@@ -18,11 +18,15 @@ export const MY_ORDERS_KEY = ["orders", "me"] as const;
 /** One order's cache entry. The list is under "orders". */
 export const orderKey = (orderId: string) => ["order", orderId] as const;
 
+/** The statuses with something still to happen: the gateway deciding, or the ticket moving. */
+const WAITING: ReadonlySet<OrderStatus> = new Set(["PAYMENT_PENDING", "PAID", "TRANSFER_PENDING"]);
+
 /**
- * How long until asking again, while the gateway decides: every 2 seconds for the first minute,
- * every 10 after that, and not at all once there is nothing to wait for.
+ * How long until asking again, while the gateway decides or the ticket is handed over: every
+ * 2 seconds for the first minute, every 10 after that, and not at all once there is nothing to
+ * wait for.
  */
 export function pollEvery(status: OrderStatus | undefined, asked: number): number | false {
-  if (status !== "PAYMENT_PENDING") return false;
+  if (!status || !WAITING.has(status)) return false;
   return asked < 30 ? 2_000 : 10_000;
 }

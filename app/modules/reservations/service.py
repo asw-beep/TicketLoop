@@ -30,6 +30,7 @@ from app.modules.listings.models import Listing, ListingStatus
 from app.modules.listings.service import release_listing
 from app.modules.listings.state import transition as move_listing
 from app.modules.orders.state import cancel_unpaid_order
+from app.modules.outbox.service import EventType, emit
 from app.modules.reservations.errors import (
     BuyerOnlyError,
     ListingNotAvailableError,
@@ -227,6 +228,18 @@ def expire_reservations(
                 cancel_unpaid_order(db, reservation.id, actor_id=None, reason="hold_expired")
                 release_listing(
                     db, reservation.listing_id, actor_id=None, reason="hold_expired", now=now
+                )
+                emit(
+                    db,
+                    aggregate_type="reservation",
+                    aggregate_id=reservation.id,
+                    event_type=EventType.RESERVATION_EXPIRED,
+                    payload={
+                        "reservation_id": reservation.id,
+                        "listing_id": reservation.listing_id,
+                        "buyer_id": reservation.buyer_id,
+                        "seller_id": reservation.listing.seller_id,
+                    },
                 )
             expired += 1
         except AppError as error:

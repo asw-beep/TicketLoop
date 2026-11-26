@@ -117,7 +117,8 @@ function ListTicketForm({ ticket }: { ticket: Ticket }) {
     <section className="panel" aria-labelledby="sell-heading">
       <h2 id="sell-heading">Sell this ticket</h2>
       <p className="lede">
-        List it for no more than you paid. An admin checks the listing before buyers can see it.
+        List it for no more than its face value. An admin checks the listing before buyers can see
+        it.
       </p>
       <form onSubmit={handleSubmit} aria-label="List this ticket">
         <FormError error={list.error} />
@@ -127,7 +128,7 @@ function ListTicketForm({ ticket }: { ticket: Ticket }) {
           inputMode="decimal"
           required
           defaultValue={paiseToRupeesInput(ticket.original_price_paise)}
-          hint={`At most ${formatPaise(ticket.original_price_paise)}, the price you paid.`}
+          hint={`At most ${formatPaise(ticket.original_price_paise)}, its face value.`}
           onChange={() => setPriceError(undefined)}
           error={priceError ?? errors.asking_price_paise}
         />

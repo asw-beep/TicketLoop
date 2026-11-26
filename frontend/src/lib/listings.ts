@@ -87,6 +87,8 @@ export function historyLabel(entry: HistoryEntry): string {
         : "Expired";
     case "listing.reserved":
       return "Reserved";
+    case "listing.sold":
+      return "Sold; the ticket went to the buyer";
     case "listing.released":
       return RELEASED[String(details.reason)] ?? "Back on sale";
     default:

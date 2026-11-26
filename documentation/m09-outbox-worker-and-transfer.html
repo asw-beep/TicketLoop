@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M9 Outbox</title>
+  <meta name="description" content="TicketLoop M9: a transactional outbox, a relay that waits out a dead broker, RabbitMQ and Celery with late acknowledgement and dead-letter queues, consumers that do their work once, and a ticket handed to its buyer through an idempotent provider call. How it works and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Outbox, worker and transfer</h1>
+      <p class="ticket__summary">Paid isn't done: the ticket still has to change hands. That work happens after the request has answered, in a worker, so the question becomes how a fact gets from one transaction to another process without being lost on the way or acted on twice. I wrote every event into the same transaction as the change it announces, published it with a relay that waits out a dead broker, and made every consumer remember what it has already done.</p>
+      <p class="ticket__fineprint">Done when: a paid order ends with the ticket in the buyer's name; with the broker down, paid orders wait in the outbox and are all transferred once it's back; a worker killed in the middle of a transfer is replaced and the ticket moves once; a poison message ends in a dead-letter queue. All four are automated drills against a real RabbitMQ and real Celery workers.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M9</span>
+      <span class="ticket__days">26 Nov</span>
+      <span class="stamp">Done<br>26 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">The order is marked paid and an <code>outbox_events</code> row is inserted in the same transaction. Either both happen or neither, so there is no moment when the money is taken and the event is lost. A relay picks unpublished rows with <code>FOR UPDATE SKIP LOCKED</code>, publishes each to RabbitMQ with publisher confirms, and only then marks it published. If the broker is down, the rows wait, with a growing backoff.</p>
+        <p class="pitch">The relay can send a message twice, and RabbitMQ can deliver it twice, so every consumer writes a <code>processed_events</code> row in the same transaction as its effect. The second delivery finds the row and does nothing. Messages are acknowledged only after the task finishes, so a worker that dies mid-task gets its message handed to another.</p>
+        <p class="pitch">The transfer itself is two steps with an event between them. The first creates it; the second commits <code>PROCESSING</code>, calls the ticket provider with no transaction open and the transfer's id as the idempotency key, then settles the answer. Busy is retried five times; a refusal or an unknown outcome goes to a person, because asking again could move the ticket twice.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">The outbox</span><span class="built__note"><code>emit()</code> adds an event to the caller's transaction. Settling a payment and expiring a hold call it; nothing else can make an event exist.</span><code>app/modules/outbox/service.py</code></li>
+          <li><span class="built__what">The relay</span><span class="built__note">One pass: claim up to 100 due rows, publish one task per consumer, mark them published. A refusal raises the row's <code>retry_count</code>, sets its next attempt up to five minutes away, keeps the error, and ends the pass. It runs once a second in its own container.</span><code>app/modules/outbox/relay.py</code> <code>app/workers/relay.py</code></li>
+          <li><span class="built__what">Idempotent consumers</span><span class="built__note"><code>first_time()</code> inserts <code>(consumer, event_id)</code> with <code>ON CONFLICT DO NOTHING</code>. A second copy arriving while the first is mid-transaction waits on that row, then gets False.</span><code>app/modules/outbox/service.py</code></li>
+          <li><span class="built__what">RabbitMQ and Celery</span><span class="built__note">Three queues, <code>transfers</code>, <code>notifications</code> and <code>maintenance</code>, each with a dead-letter queue. Late acknowledgement, requeue when a worker is lost, prefetch of one, publisher confirms.</span><code>app/workers/celery_app.py</code></li>
+          <li><span class="built__what">The tasks</span><span class="built__note">Thin wrappers. A consumer's answer becomes an acknowledgement, a delayed retry, or a rejection to the dead-letter queue. The work lives in plain functions the tests call directly.</span><code>app/workers/tasks.py</code></li>
+          <li><span class="built__what">Transfers</span><span class="built__note">A state machine, <code>INITIATED → PROCESSING → COMPLETED</code> or <code>REQUIRES_MANUAL_REVIEW</code>, started by <code>payment.succeeded</code> and carried out by <code>transfer.initiated</code>. Completing it moves the ticket, sells the listing and completes the order in one transaction.</span><code>app/modules/transfers/service.py</code> <code>app/modules/transfers/state.py</code></li>
+          <li><span class="built__what">The ticket provider</span><span class="built__note">A pretend one, in-process, that can succeed, be busy for a number of tries, refuse, or fail with an unknown outcome, and can be told to be slow. It remembers the keys it has seen and answers a repeat with the same reference.</span><code>app/infrastructure/external_providers/tickets.py</code></li>
+          <li><span class="built__what">Notifications</span><span class="built__note">A second consumer of the same events: paid, failed, hold expired, ticket received, ticket handed over, needs review. One per person per event, read through <code>GET /notifications</code>.</span><code>app/modules/notifications/service.py</code> <code>app/modules/notifications/router.py</code></li>
+          <li><span class="built__what">Beat</span><span class="built__note">The jobs that were scripts are scheduled now: holds every 30 seconds, listings every 5 minutes, reconciliation every 2. The scripts still run them by hand.</span><code>app/workers/jobs.py</code></li>
+          <li><span class="built__what">The sweep for lost messages</span><span class="built__note">Every 2 minutes: a paid order with no transfer, or a transfer stuck half-way, untouched for 10 minutes and with nothing about it still in the outbox, has lost its message. It starts the transfer, or announces it again.</span><code>app/modules/transfers/service.py</code></li>
+          <li><span class="built__what">Screens</span><span class="built__note">The order page follows the ticket to <strong>Completed</strong> and links to <strong>My tickets</strong>. The buyer's ticket page leaves out the seller's order number and proof. The seller's listing says <strong>Sold</strong>.</span><code>frontend/src/pages/OrderPage.tsx</code> <code>frontend/src/pages/TicketPage.tsx</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">From Paid to the buyer's ticket</h2>
+      <div class="section__body">
+        <p>One webhook, five processes, and where each could die.</p>
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>Paid, and said so</strong><p>The webhook's transaction moves payment, order and reservation, and inserts an outbox row <code>payment.succeeded</code>. One commit. If the API dies a moment later, the row is there.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>The relay publishes</strong><p>It locks the row with <code>SKIP LOCKED</code>, so a second relay takes different rows, sends a task to <code>transfers</code> and one to <code>notifications</code>, waits for the broker to confirm both, and sets <code>published_at</code>. Dies before the commit: the row is still unpublished and is sent again, whole.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The transfer is created</strong><p><code>transfers.start</code> claims the event in <code>processed_events</code>, inserts the transfer, moves the order to <code>TRANSFER_PENDING</code>, and emits <code>transfer.initiated</code>. One transaction. The message is acknowledged after the commit; dies between the two and the redelivered copy finds its row and stops.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>The provider is asked</strong><p><code>transfers.perform</code> commits <code>PROCESSING</code> with one more attempt, then calls the provider with no transaction open. Dies during the call: the transfer stays <code>PROCESSING</code>, the message comes back, and the provider is asked again with the same key.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>The ticket moves</strong><p><code>UPDATE tickets SET current_owner_id = buyer WHERE id = … AND current_owner_id = seller</code>, the listing to <code>SOLD</code>, the order to <code>COMPLETED</code>, the transfer to <code>COMPLETED</code>, and <code>transfer.completed</code> into the outbox, together. If the update matches no row, it all rolls back and the transfer goes to review.</p></div></li>
+          <li><span class="flow__n">6</span><div class="flow__text"><strong>Everyone hears</strong><p>The notifications consumer writes one row per person per event. The order page, which polls while the order is <code>PAID</code> or <code>TRANSFER_PENDING</code>, turns to <strong>Completed</strong>.</p></div></li>
+        </ol>
+<pre><code><span class="c"># app/modules/outbox/relay.py: nothing is published without a confirm</span>
+for consumer in CONSUMERS.get(event.event_type, ()):
+    publisher.publish(consumer, message(event))      <span class="c"># waits for the broker's ack</span>
+event.published_at = func.now()
+<span class="c"># on PublishError: retry_count + 1, next_attempt_at = now() + backoff, stop the batch</span></code></pre>
+        <h3>What each failure costs</h3>
+        <ul class="tight">
+          <li><strong>The broker is down.</strong> Payments still succeed. Their events wait in the outbox, retried 1, 2, 4 … up to 300 seconds apart, and go out when it's back.</li>
+          <li><strong>A message arrives twice.</strong> The second finds its <code>processed_events</code> row and is acknowledged with no effect.</li>
+          <li><strong>A worker dies mid-task.</strong> The message was never acknowledged; RabbitMQ gives it to another worker.</li>
+          <li><strong>The database is down.</strong> The task retries for 5 to 10 minutes, then rejects its message to the dead-letter queue. Ten minutes after the order last changed, the sweep picks it up again.</li>
+          <li><strong>A message makes no sense.</strong> Rejected at once, to the dead-letter queue, instead of being retried for ever.</li>
+          <li><strong>The provider is busy.</strong> Five attempts, then review. <strong>Refuses, or nobody knows what happened:</strong> review at once.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>Run <code>docker compose up -d db mailpit minio fakepay rabbitmq worker beat relay</code>, the API, and <code>npm run dev</code> in <code>frontend/</code>. Buy a ticket and watch the order page.</p>
+        <ul class="built">
+          <li><span class="built__what">Your order</span><span class="built__note">Polls while the ticket is being handed over and turns to <strong>Completed</strong> by itself, with a link to your tickets.</span><code>/orders/:orderId</code></li>
+          <li><span class="built__what">My tickets</span><span class="built__note">The ticket you bought, under your name now.</span><code>/tickets</code></li>
+          <li><span class="built__what">The ticket</span><span class="built__note">Without the seller's order number or proof of purchase: those were about the seller's purchase, and stay with them. It shows the face value, which is also the most it can be resold for.</span><code>/tickets/:ticketId</code></li>
+          <li><span class="built__what">The seller's listing</span><span class="built__note"><strong>Sold</strong>, and the history says the ticket went to the buyer.</span><code>/listings/:listingId</code></li>
+        </ul>
+        <figure class="shot">
+          <img src="assets/m09-completed.png" alt="The order page with the status Completed and a green message: You&#x27;ve paid ₹2,000. The ticket is yours. See it with your tickets." loading="lazy" width="1100" height="900">
+          <figcaption>The worker has handed it over. Nobody pressed reload.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m09-tickets.png" alt="My tickets, listing the Monsoon Beats 2027 ticket the buyer just bought." loading="lazy" width="1100" height="900">
+          <figcaption>Under the buyer's name now.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m09-ticket.png" alt="The buyer&#x27;s ticket page: event, category, seat and a face value of ₹2,500, with no order number and no proof of purchase, and a form to sell it on at most ₹2,500." loading="lazy" width="1100" height="900">
+          <figcaption>The seller's evidence isn't the buyer's to see. They can sell it on, up to face value.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m09-sold.png" alt="The seller&#x27;s listing in dark mode with the status Sold and a history ending: Sold; the ticket went to the buyer automatically." loading="lazy" width="1100" height="1300">
+          <figcaption>The seller's side, in dark mode.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+        <h3>Getting the event out</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>An outbox table</h4>
+            <p class="decision__over">Instead of publishing from the request</p>
+            <p>Commit then publish loses the event if the process dies in between. Publish then commit announces a payment that may roll back. Writing it in the same transaction is the only order with no gap.</p>
+          </div>
+          <div class="decision">
+            <h4>Polling with <code>SKIP LOCKED</code></h4>
+            <p class="decision__over">Instead of change data capture</p>
+            <p>Debezium and a Kafka Connect cluster to read one table is a lot of moving parts. A one-second poll is plenty, and two relays never take the same row.</p>
+          </div>
+          <div class="decision">
+            <h4>Publisher confirms</h4>
+            <p class="decision__over">Instead of fire and forget</p>
+            <p>Without them, "sent" means "handed to a socket". The row is marked published only once RabbitMQ says it has the message.</p>
+          </div>
+          <div class="decision">
+            <h4>Stop the batch at the first failure</h4>
+            <p class="decision__over">Instead of trying every row</p>
+            <p>If the broker refused one, it'll refuse the next 99. Each would wait out its own timeout and get a backoff it didn't need.</p>
+          </div>
+        </div>
+
+        <h3>Doing it once</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Dedupe in the consumer</h4>
+            <p class="decision__over">Instead of exactly-once delivery</p>
+            <p>No broker can promise it across a crash. At-least-once plus a <code>processed_events</code> row in the effect's transaction is the same result, and it's checkable.</p>
+          </div>
+          <div class="decision">
+            <h4>Acknowledge after the task</h4>
+            <p class="decision__over">Instead of on receipt</p>
+            <p>Acknowledged on receipt, a message whose worker dies is gone. Acknowledged after, the worst case is a repeat, which the consumer already handles.</p>
+          </div>
+          <div class="decision">
+            <h4>One task per consumer</h4>
+            <p class="decision__over">Instead of one message everyone reads</p>
+            <p>Notifications failing must not make the transfer run again. Separate tasks retry separately and dedupe separately.</p>
+          </div>
+          <div class="decision">
+            <h4>A sweep behind the queue</h4>
+            <p class="decision__over">Instead of trusting the dead-letter queue</p>
+            <p>A message that gives up waits there for a person, and meanwhile the buyer's page says the ticket is on its way. The database knows what hasn't moved; asking it every two minutes costs one indexed query.</p>
+          </div>
+        </div>
+
+        <h3>The transfer</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Two steps with an event between</h4>
+            <p class="decision__over">Instead of one task</p>
+            <p>With one task, a worker that died after creating the transfer would leave it <code>INITIATED</code> for ever: the redelivered message finds its <code>processed_events</code> row and stops. The second event makes the call its own unit of redelivery.</p>
+          </div>
+          <div class="decision">
+            <h4>Commit <code>PROCESSING</code> before the call</h4>
+            <p class="decision__over">Instead of a transaction around it</p>
+            <p>Someone else's slow call would hold my row locks and a pooled connection. And the commit is the record that an attempt was made.</p>
+          </div>
+          <div class="decision">
+            <h4>The transfer's id as the idempotency key</h4>
+            <p class="decision__over">Instead of a fresh key per attempt</p>
+            <p>The same key asked twice gets the same answer. A fresh key could move the ticket twice.</p>
+          </div>
+          <div class="decision">
+            <h4>An unknown outcome goes to a person</h4>
+            <p class="decision__over">Instead of retrying it</p>
+            <p>Retrying is safe only if the provider dedupes perfectly. I'd rather a person spend a minute than have code assume it.</p>
+          </div>
+          <div class="decision">
+            <h4>Move the ticket only from the seller</h4>
+            <p class="decision__over">Instead of an unconditional update</p>
+            <p>If the ticket's owner isn't the seller the transfer names, something outside this flow changed it. Rolling back and asking a person beats overwriting it.</p>
+          </div>
+        </div>
+
+        <h3>Who sees what</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>The seller's proof stays with the seller</h4>
+            <p class="decision__over">Instead of handing it to the buyer</p>
+            <p>The order number and the screenshots are about the seller's purchase from the venue. The buyer gets the ticket; an admin can still see the evidence.</p>
+          </div>
+          <div class="decision">
+            <h4><code>last_error</code> is for admins</h4>
+            <p class="decision__over">Instead of showing it to the buyer</p>
+            <p>It's a provider's error string. The buyer is told it needs review, in words.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>What is the transactional outbox pattern?</summary>
+          <div class="qa__a">
+            <p>Instead of publishing a message from the request, I insert a row into an <code>outbox_events</code> table in the same transaction as the change. A separate relay reads unpublished rows, publishes them, and marks them published. The change and the intent to announce it commit together, so neither can exist without the other.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What does that guarantee, and what doesn't it?</summary>
+          <div class="qa__a">
+            <p>At-least-once: every committed event is published eventually. Not exactly-once. The relay can publish and die before marking the row, so the same event may go out twice. That's why every consumer dedupes.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do your consumers dedupe?</summary>
+          <div class="qa__a">
+            <p>A <code>processed_events</code> table keyed on (consumer, event id). The consumer inserts its row with <code>ON CONFLICT DO NOTHING</code> in the same transaction as its effect. If the insert returns nothing, it's a repeat, and the consumer stops. A copy that arrives while the first is still running blocks on the uncommitted row, then sees it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why late acknowledgement?</summary>
+          <div class="qa__a">
+            <p>So a crash means redelivery, not loss. A message is acknowledged after its task finishes. If the worker is killed, RabbitMQ never got the ack and gives the message to another worker. Combined with dedupe, the worst case of a crash is doing nothing twice.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What happens when RabbitMQ is down?</summary>
+          <div class="qa__a">
+            <p>Payments carry on. Each one leaves an outbox row. The relay's publish fails, the row's <code>retry_count</code> goes up and its next attempt moves out, doubling up to five minutes, with jitter so a thousand rows don't all retry at once. When the broker is back they all go out. I tested it with 10 orders paid while it was unreachable: all 10 published and transferred once.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you call the external provider safely?</summary>
+          <div class="qa__a">
+            <p>Commit that I'm about to try, with the attempt count. Call with no transaction open. Save the answer in a new transaction. The transfer's id is the idempotency key, so if I die during the call and the message comes back, asking again returns the same reference instead of moving the ticket again.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why not retry an unknown outcome?</summary>
+          <div class="qa__a">
+            <p>Because it may have worked. A timeout after the request was sent is exactly that. With a perfectly idempotent provider retrying would be fine; I don't want correctness to rest on that, so it goes to manual review.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What's a dead-letter queue for?</summary>
+          <div class="qa__a">
+            <p>A message that will never succeed: a malformed payload, or a fault that outlasts its retries. Rejected without requeue, RabbitMQ moves it to <code>transfers.dead</code> instead of looping. A person reads it, fixes the cause, and moves it back.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>You have two relays. What stops them sending the same row?</summary>
+          <div class="qa__a">
+            <p><code>SELECT … FOR UPDATE SKIP LOCKED</code>. Each takes rows the other hasn't locked. And if they somehow both sent one, the consumers would dedupe it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you know any of this works?</summary>
+          <div class="qa__a">
+            <p>Drills, as tests, against real RabbitMQ and real worker processes: stop the broker and pay; kill a worker while the provider is slow; send a poison message. And unit tests for every way a task can end: done, retry, give up, reject.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why is the transfer two consumers?</summary>
+          <div class="qa__a">
+            <p>If one task created the transfer and called the provider, and the worker died after the first commit, the redelivered message would find its dedupe row and stop, and the transfer would sit there for ever. The second event makes the provider call redeliverable by itself.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>And if a message is lost anyway?</summary>
+          <div class="qa__a">
+            <p>It can be: a database restart longer than a task's retries sends it to the dead-letter queue. So the queue isn't the only record. Every two minutes a job asks Postgres for paid orders with no transfer, and transfers still half-way, that nothing has touched for ten minutes and that have no event still waiting in the outbox. It starts or re-announces each one. Both steps are idempotent, so being wrong about "lost" costs a repeat, not a second transfer.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What does the buyer see when it goes to review?</summary>
+          <div class="qa__a">
+            <p>The order page says they've paid, that the ticket couldn't be transferred, and that we're looking into it. The listing stays <code>RESERVED</code>, so nobody else can buy it; and both people get a notification. Refunds are out of scope here, so that's where it ends.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>Notifications in the wrong order.</strong> Several written in one transaction all had the same <code>now()</code>, so their order was chance. They default to <code>clock_timestamp()</code> now, which moves within a transaction.</li>
+          <li><strong>An insert that said it inserted −1 rows.</strong> SQLAlchemy reports <code>rowcount</code> as −1 for an ORM insert with <code>ON CONFLICT</code>, so "did I write it?" was always yes. It asks with <code>RETURNING</code> now.</li>
+          <li><strong>Tests that ate the development worker's messages.</strong> A test and a running worker shared the broker and the queue names. Every queue and exchange now takes a <code>QUEUE_PREFIX</code>; the drills delete theirs afterwards.</li>
+          <li><strong>Every log line twice, and some not as JSON.</strong> Celery redirected stdout to its own logger, which our logging also wrote to. Our setup now replaces Celery's, through its <code>setup_logging</code> signal, in the worker and in beat.</li>
+          <li><strong>The buyer could see the seller's proof of purchase.</strong> After the sale, the buyer owned the ticket, and owning it was what the evidence routes checked. Now they check who registered it.</li>
+          <li><strong>A secret in my shell broke the tests.</strong> A <code>FAKEPAY_WEBHOOK_SECRET</code> in the environment overrode the one the tests sign with. The tests pin their own.</li>
+          <li><strong>A paid order stuck for good.</strong> The review found it: a database restart of more than half a minute used up a task's retries, its message went to the dead-letter queue, and the order stayed <em>being handed over</em> for ever. The retries now last 5 to 10 minutes, and the sweep picks up whatever is left.</li>
+          <li><strong>A transfer that could ask the provider for ever.</strong> A call that kills its worker is delivered again, and again; each delivery asked once more. After five tries it goes to review now.</li>
+          <li><strong>A worker that gave up stayed down.</strong> Celery exits after its last attempt to reach the broker. The worker, beat and relay restart by themselves now.</li>
+          <li><strong>The buyer's ticket said they'd paid ₹2,500.</strong> They'd paid ₹2,000; ₹2,500 was the face value the seller registered. It's labelled <strong>Face value</strong> now, which is also the resale cap.</li>
+          <li><strong>A test that passed by being quick.</strong> <code>getByRole("heading", {name: "Ticket"})</code> matches by substring, so once <em>Sell this ticket</em> loaded it matched two headings. It passed only when it looked first. It's exact now.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>Manual review is where it ends.</strong> There's no admin screen to retry or refund a transfer; refunds were cut from the roadmap.</li>
+          <li><strong>No screen for notifications.</strong> They're in the API, and the order page already says what happened.</li>
+          <li><strong>The provider is pretend.</strong> In-process, with switches for its failures. A real one would be a client like fakepay's, with its own callbacks.</li>
+          <li><strong>No trace across the hop yet.</strong> The outbox has a <code>headers</code> column for it; M11 fills it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db mailpit minio fakepay rabbitmq worker beat relay
+uv run alembic upgrade head
+uv run pytest tests/integration/test_outbox.py tests/integration/test_transfers.py
+uv run pytest tests/integration/test_notifications.py tests/unit/test_workers.py
+REQUIRE_BROKER=1 uv run pytest tests/concurrency/test_messaging.py          <span class="c"># the four drills</span>
+docker compose logs -f worker relay                                         <span class="c"># JSON, one line each</span>
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 REQUIRE_BROKER=1 uv run pytest         <span class="c"># 1109 tests, what CI runs</span>
+
+cd frontend &amp;&amp; npm run dev     <span class="c"># localhost:5173</span>
+npm test                       <span class="c"># 149 unit tests</span>
+npm run e2e                    <span class="c"># 20 browser tests; the purchase now ends Completed</span>
+gh run list --workflow ci.yml --limit 3</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m08-orders-and-payments.html">Previous<strong>M8 Orders and payments</strong></a>
+    <span class="pager__next">Next<br><strong>M10 Redis: caching and rate limits</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

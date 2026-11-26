@@ -1,4 +1,5 @@
-"""Close the holds whose time is up, every 30 seconds, until stopped. Celery beat does it from M9.
+"""Close the holds whose time is up, every 30 seconds, until stopped. In Docker, Celery beat
+runs the same job (app/workers/jobs.py) on the same schedule; this is for doing it by hand.
 
     uv run python -m scripts.expire_reservations            # loop; Ctrl+C to stop
     uv run python -m scripts.expire_reservations --once     # one pass
@@ -14,28 +15,15 @@ import sys
 import time
 
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
 from app.infrastructure.database.engine import create_db_engine
 from app.infrastructure.database.session import create_session_factory
 from app.infrastructure.payments import FakepayGateway
 from app.modules.payments.reconcile import resolve_overdue
-from app.modules.reservations.service import EXPIRY_BATCH, expire_reservations
+from app.workers.jobs import expire_due_reservations as run_once
 
 INTERVAL_SECONDS = 30
-
-
-def run_once(session_factory: sessionmaker[Session], batch: int = EXPIRY_BATCH) -> int:
-    """Expire everything due now. Returns how many."""
-    total = 0
-    while True:
-        with session_factory() as session, session.begin():
-            found, expired = expire_reservations(session, limit=batch)
-        total += expired
-        # Stop when nothing is left, or when nothing left can be expired.
-        if found < batch or expired == 0:
-            return total
 
 
 def main(argv: list[str] | None = None) -> int:

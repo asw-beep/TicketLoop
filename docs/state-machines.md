@@ -135,7 +135,7 @@ As built in M7 and M8:
 
 The rule from FR-07: the expiry worker's normal scan touches **only** `CREATED`. A `PAYMENT_PENDING` reservation means money may be moving; it is resolved by asking the gateway, never by the clock alone. See hard problem 5 in [`hard-problems.md`](hard-problems.md).
 
-## Order (M8 built, M9)
+## Order (M8 and M9, built)
 
 ```mermaid
 stateDiagram-v2
@@ -170,6 +170,8 @@ stateDiagram-v2
 
 Refunds are cut from the slimmed roadmap: a `TRANSFER_FAILED` order ends there. Paying sellers out is outside this project's scope.
 
+As built in M9: `PAID → TRANSFER_PENDING` happens in the `transfers.start` consumer's transaction, with the transfer's insert and the `transfer.initiated` event; `TRANSFER_PENDING → COMPLETED` in the transaction that moves the ticket. The order page polls while it is `PAID` or `TRANSFER_PENDING`.
+
 ## Payment (M8, built)
 
 ```mermaid
@@ -203,7 +205,7 @@ As built in M8:
 
 Every webhook, applied or not, stays in `payment_events`. `provider_response` holds only the latest snapshot. This is how FR-09's "never silently overwritten" holds.
 
-## Transfer (M9)
+## Transfer (M9, built)
 
 ```mermaid
 stateDiagram-v2
@@ -223,6 +225,15 @@ stateDiagram-v2
 | PROCESSING | PROCESSING | retryable error and `attempt_count < 5` | system | Celery retry with exponential backoff and jitter. |
 | PROCESSING | COMPLETED | provider success callback | system | One transaction: transfer `COMPLETED`, order `COMPLETED`, listing `SOLD`, ticket `current_owner_id = to_user_id`, outbox `transfer.completed`. |
 | PROCESSING | REQUIRES_MANUAL_REVIEW | attempts exhausted, a permanent error, or a timeout with unknown outcome | system | Order `→ TRANSFER_FAILED`. An unknown outcome is never retried blindly: the provider may have done it. |
+
+As built in M9:
+
+- **`INITIATED → PROCESSING` is committed before the provider is called**, with `attempt_count + 1`. The call happens with no transaction open; its answer is settled in a transaction of its own. A worker that dies during the call leaves the transfer `PROCESSING`; the redelivered message moves it `PROCESSING → PROCESSING` and asks again with the same key, and the provider answers with the same reference.
+- **The ticket moves only from the seller the transfer names:** `UPDATE tickets SET current_owner_id = :buyer WHERE id = :ticket AND current_owner_id = :seller`. If that matches nothing, the whole completion rolls back and the transfer goes to review: nothing in the app moves a ticket otherwise, so it is a fault for a person.
+- **Five tries at most.** A busy provider is asked again until the fifth try. A transfer already at five tries, whose last call never answered (it killed its worker), goes to review without a sixth.
+- **Nothing stays in between.** A transfer `INITIATED` or `PROCESSING`, or a `PAID` order without one, untouched for 10 minutes, has lost its message; the `resume_transfers` job (beat, every 2 minutes) announces it again.
+- **A ticket in review keeps its listing `RESERVED`.** Nobody can buy it, and its event cannot be cancelled while it waits.
+- **Who sees what afterwards.** The buyer owns the ticket and finds it under My tickets, without the seller's purchase reference or proof of purchase, which stay with the seller and admins. The seller can still open the ticket they registered.
 
 In this project `REQUIRES_MANUAL_REVIEW` is where a failed transfer ends: the admin actions are cut. A real system would let an admin retry it, or abandon it and refund the buyer. That refund would be a **compensation**, not a rollback: the payment really happened and stays in the history; a second, opposite operation undoes its effect.
 
