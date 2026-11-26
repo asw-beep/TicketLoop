@@ -29,6 +29,7 @@ from app.modules.listings.errors import (
 from app.modules.listings.models import Listing, ListingStatus
 from app.modules.listings.service import release_listing
 from app.modules.listings.state import transition as move_listing
+from app.modules.orders.state import cancel_unpaid_order
 from app.modules.reservations.errors import (
     BuyerOnlyError,
     ListingNotAvailableError,
@@ -189,6 +190,7 @@ def cancel_reservation(db: Session, reservation_id: uuid.UUID, user: User) -> Re
     if reservation.status != S.CREATED:
         raise ReservationNotCancellableError(f"The reservation is {reservation.status}.")
     transition(db, reservation, S.CANCELLED, actor_id=user.id)
+    cancel_unpaid_order(db, reservation.id, actor_id=user.id, reason="hold_cancelled")
     release_listing(db, reservation.listing_id, actor_id=user.id, reason="buyer_cancelled")
     return reservation
 
@@ -222,6 +224,7 @@ def expire_reservations(
             # from expiring, now and on every later run.
             with db.begin_nested():
                 transition(db, reservation, S.EXPIRED, actor_id=None)
+                cancel_unpaid_order(db, reservation.id, actor_id=None, reason="hold_expired")
                 release_listing(
                     db, reservation.listing_id, actor_id=None, reason="hold_expired", now=now
                 )

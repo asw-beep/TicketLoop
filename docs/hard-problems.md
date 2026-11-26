@@ -129,7 +129,7 @@ COMMIT;
 
 `POST /payments/intents` cannot hold one transaction open across an HTTP call to the gateway, so it uses the key in two phases: commit the key row with `locked_at = now()`, call the gateway, then store the response and clear `locked_at`. A request that finds the key locked gets 409 and retries later; a lock older than 2 minutes is treated as abandoned.
 
-**Test (M8):** 50 threads, same key, same body: one order, 50 identical bodies. Same key, different body: 422.
+**Built in M8.** `app/modules/idempotency/service.py` is the key table; `tests/concurrency/test_payment_race.py` sends one request 50 times at once to four API processes: one order, 50 identical bodies, 49 of them marked as replays. Fifty different keys for one reservation: one 201 and 49 `order-exists`. The order's own insert sits behind the reservation's lock, so `uq_orders_reservation` is a safety net nothing reaches. A request that fails stores nothing under its key.
 
 ---
 
@@ -200,7 +200,7 @@ COMMIT;  -- then return 200
 | S1 to S5 (before COMMIT) | Rolled back, dedupe row included | The gateway retries; processed fresh. |
 | COMMIT, before the 200 | Effect and dedupe row committed | The gateway retries; S1 conflicts; 200; nothing changes twice. |
 
-**Test (M8):** one webhook delivered 10 times: one state change, one outbox row. A forged signature: 401, no rows. A late webhook after reconciliation: `IGNORED`.
+**Built in M8.** The one difference from the sketch: the effect is not three loose updates but `succeed()` or `fail()`, which lock the reservation first and go through the state machines, inside a savepoint, so an event that cannot be applied is kept as `FAILED` with its reason instead of becoming a 500 the gateway retries for ever. The outbox row arrives with M9. Tests: one webhook delivered 10 times at once, one state change, one event row, ten 200s; a forged signature, an old timestamp, a changed byte: 401 and no rows; a late webhook after reconciliation: `IGNORED`.
 
 ---
 
@@ -361,7 +361,7 @@ The gateway is called only after P1 commits, so money can move only for a reserv
 | Failed, or intent expired unpaid | Payment `FAILED` (`timeout`), reservation `EXPIRED`, order `CANCELLED`, listing released. Safe, because the 15-minute intent expiry means the gateway itself will refuse a late payment. |
 | No answer | Do nothing. Try again next pass. Never release on silence. |
 
-**Last line of defence.** If money still arrives for a payment we already marked `FAILED`, the webhook's conditional update matches 0 rows. Money without a ticket triggers an automatic refund (`reason = 'LATE_PAYMENT'`) and an alert.
+**Last line of defence.** If money still arrives for a payment we already marked `FAILED`, it changes nothing: the event is kept as `IGNORED` and an error is logged for a person to look at. Refunds are out of this project's scope, and fakepay refuses to take money for an intent that was declined or has expired, so this should never happen.
 
 | Process dies after | Database state | Outcome |
 | --- | --- | --- |
@@ -369,13 +369,13 @@ The gateway is called only after P1 commits, so money can move only for a reserv
 | P4, before P5 | Gateway intent exists, we never saved its id | Reconciliation repeats P4 with the same key; the gateway returns the **same** intent rather than a second one. |
 | E2, before COMMIT | Rolled back | The next pass expires it again. |
 
-**Tests.** M7: two expiry workers at once expire each reservation exactly once (count audit rows), and a cancel against an expiry releases the listing once. M8: expiry racing payment success, run 50 times, never releases a paid listing.
+**Tests.** M7: two expiry workers at once expire each reservation exactly once (count audit rows), and a cancel against an expiry releases the listing once. M8: expiry racing a payment's success, 50 rounds, never releases a paid listing, and both outcomes happen; checkout racing the clock and racing **Cancel hold** has one winner; the buyer coming back while the overdue check is running keeps the hold.
 
 ---
 
 ## 6 · Drift: the gateway and the database disagree
 
-**Goal:** find every payment where our records and the gateway's differ, and repair it, safely enough to run every five minutes.
+**Goal:** find every payment where our records and the gateway's differ, and repair it, safely enough to run every two minutes.
 
 **Causes:** a webhook never arrives, arrives after a crash, or a crash lands between two steps of problems 3 or 5.
 
@@ -387,23 +387,27 @@ INSERT INTO reconciliation_runs (id, status) VALUES (:run_id, 'RUNNING');
 SELECT id, provider_transaction_id, status, order_id
   FROM payments
  WHERE status IN ('CREATED', 'PENDING')
-   AND created_at < now() - interval '15 minutes'
- ORDER BY created_at
+   AND updated_at <= now() - interval '5 minutes'  -- long past any request still running
+ ORDER BY updated_at
  LIMIT 500;
--- also: SUCCEEDED payments whose order is still PAYMENT_PENDING,
---       and refunds PENDING for more than 15 minutes.
 ```
 
-For each candidate, ask the gateway (`GET /payments/{transaction_id}`, or look up by our idempotency key when the transaction id was never saved). Then, **each fix in its own transaction**, call the same transition functions the webhook uses:
+For each candidate, ask the gateway (by transaction id, or by our idempotency key when the transaction id was never saved). Then, **each fix in its own transaction**, call the same transition functions the webhook uses:
 
 | Local | Gateway | Fix |
 | --- | --- | --- |
-| `PENDING` | succeeded | `apply_payment_succeeded(payment_id, source='reconciliation')`: problem 3, S2 to S4 |
-| `PENDING` | failed or expired | `apply_payment_failed(...)` |
-| `CREATED` | intent exists | Save the transaction id; payment becomes `PENDING` |
-| `CREATED` | no such intent | Payment `FAILED`, reason `intent_never_created`; reservation and order follow |
-| `SUCCEEDED`, order not `PAID` | succeeded | Re-apply the order and reservation transitions; they are conditional, so only the missing ones change |
-| Refund `PENDING` | refunded | Refund `SUCCEEDED`, order `REFUNDED` |
+| `PENDING` | succeeded | `succeed(payment_id, source='reconciliation')`, the function the webhook calls |
+| `PENDING` | failed | `fail(..., reason='declined')` |
+| `PENDING` | expired unpaid | `fail(..., reason='timeout')`: order `CANCELLED`, reservation `EXPIRED` |
+| `PENDING` | never heard of it | Nothing, reported every run: it gave us that id, so this is a fault and not "unpaid" |
+| `CREATED` | intent exists | Save the transaction id, then whichever of the above applies |
+| `CREATED` | no such intent | `fail(..., reason='intent_never_created')`, but only once the hold has ended (until then the buyer may try again, and that try makes the intent), and not if the buyer has touched the payment since we looked |
+| either | another amount | Nothing; reported and logged as an error |
+| either | no answer | Nothing; reported for that payment and the run is `FAILED`, but the run goes on. Three unanswered lookups in a row stop it: the gateway is down, and asking about the rest would only time out again |
+
+A run can take a while. Each candidate is looked at again just before its turn, and one its buyer has touched since the run began is left for the next run.
+
+A payment that succeeded with an order still unpaid cannot exist: `succeed()` moves both in one transaction.
 
 ```sql
 -- G3. Close the run.
@@ -422,4 +426,4 @@ UPDATE reconciliation_runs
 | G1 | A run stuck `RUNNING` | The next run marks stale `RUNNING` rows (older than 30 minutes) `FAILED`, then starts fresh. |
 | Some fixes committed | Those payments are final | The next run skips them and fixes the rest. |
 
-**Test (M8):** make the gateway "forget" to send webhooks for 20 payments; one run fixes all 20; a second run fixes 0.
+**Built in M8.** `scripts/reconcile_payments.py`, every 2 minutes by Celery beat from M9. The gateway is made to "forget" the webhooks of 20 payments: one run fixes all 20, a second fixes 0. Runs at once, and a run racing the late webhook, settle each payment once.

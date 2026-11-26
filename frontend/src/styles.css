@@ -408,6 +408,10 @@ a:hover {
   margin-top: 1.25rem;
 }
 
+.panel > .actions {
+  margin-top: 0.8rem;
+}
+
 /* ---------- Forms ---------- */
 
 form {

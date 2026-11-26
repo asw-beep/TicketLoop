@@ -220,11 +220,11 @@ erDiagram
 | `ticket_documents` | Pointers to private evidence files in object storage: a random `storage_key` (`ticket-documents/<32 hex>`), the type read from the file's first bytes, and its size. The file name is never stored. At most 5 per ticket, enforced by the service. | M4 (built) |
 | `listings` | One ticket offered at one fixed price. Its row is the lock that decides who gets the ticket. | M5 (built) |
 | `reservations` | A 10-minute hold on a listing for one buyer | M7 (built) |
-| `orders` | One purchase attempt, created from a reservation | M8 |
-| `idempotency_keys` | The stored response for each `Idempotency-Key`, so a retried request is answered from here instead of done twice | M8 |
-| `payments` | One attempt to collect money for one order | M8 |
-| `payment_events` | Every verified webhook, kept forever. Its unique key is the webhook dedupe. | M8 |
-| `reconciliation_runs` | One row per reconciliation job: what it checked and what it fixed | M8 |
+| `orders` | One purchase attempt, created from a reservation | M8 (built) |
+| `idempotency_keys` | The stored response for each `Idempotency-Key`, so a retried request is answered from here instead of done twice | M8 (built) |
+| `payments` | One attempt to collect money for one order | M8 (built) |
+| `payment_events` | Every verified webhook, kept forever. Its unique key is the webhook dedupe. | M8 (built) |
+| `reconciliation_runs` | One row per reconciliation job: what it checked and what it fixed | M8 (built) |
 | `outbox_events` | Events written in the same transaction as the change, waiting to be published to RabbitMQ. `headers` carries trace context from M11. | M9 |
 | `processed_events` | Which consumer has already handled which event, so redelivery is harmless | M9 |
 | `transfers` | Handing the ticket to the buyer through the provider adapter | M9 |

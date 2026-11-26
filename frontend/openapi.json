@@ -455,6 +455,63 @@
         "title": "HistoryEntryOut",
         "type": "object"
       },
+      "IntentIn": {
+        "additionalProperties": false,
+        "properties": {
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          }
+        },
+        "required": ["order_id"],
+        "title": "IntentIn",
+        "type": "object"
+      },
+      "IntentOut": {
+        "description": "Where to send the buyer to pay.",
+        "properties": {
+          "amount_paise": {
+            "title": "Amount Paise",
+            "type": "integer"
+          },
+          "checkout_url": {
+            "title": "Checkout Url",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "payment_id": {
+            "format": "uuid",
+            "title": "Payment Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_transaction_id": {
+            "title": "Provider Transaction Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PaymentStatus"
+          }
+        },
+        "required": [
+          "payment_id",
+          "provider",
+          "provider_transaction_id",
+          "checkout_url",
+          "amount_paise",
+          "currency",
+          "status"
+        ],
+        "title": "IntentOut",
+        "type": "object"
+      },
       "ListingEventSummary": {
         "properties": {
           "category": {
@@ -696,6 +753,91 @@
         "title": "LoginIn",
         "type": "object"
       },
+      "OrderIn": {
+        "additionalProperties": false,
+        "description": "There is no amount: the server copies it from the listing.",
+        "properties": {
+          "reservation_id": {
+            "format": "uuid",
+            "title": "Reservation Id",
+            "type": "string"
+          }
+        },
+        "required": ["reservation_id"],
+        "title": "OrderIn",
+        "type": "object"
+      },
+      "OrderOut": {
+        "description": "`Order` in the API contract. Says neither who the buyer is nor who the seller is.",
+        "properties": {
+          "amount_paise": {
+            "title": "Amount Paise",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "listing": {
+            "$ref": "#/components/schemas/ReservedListingOut"
+          },
+          "listing_id": {
+            "format": "uuid",
+            "title": "Listing Id",
+            "type": "string"
+          },
+          "reservation_id": {
+            "format": "uuid",
+            "title": "Reservation Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/OrderStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "listing_id",
+          "reservation_id",
+          "amount_paise",
+          "currency",
+          "status",
+          "created_at",
+          "updated_at",
+          "listing"
+        ],
+        "title": "OrderOut",
+        "type": "object"
+      },
+      "OrderStatus": {
+        "enum": [
+          "CREATED",
+          "PAYMENT_PENDING",
+          "PAID",
+          "PAYMENT_FAILED",
+          "CANCELLED",
+          "TRANSFER_PENDING",
+          "COMPLETED",
+          "TRANSFER_FAILED"
+        ],
+        "title": "OrderStatus",
+        "type": "string"
+      },
       "Page_EventOut_": {
         "properties": {
           "items": {
@@ -769,6 +911,31 @@
         },
         "required": ["items", "next_cursor"],
         "title": "Page[ListingOut]",
+        "type": "object"
+      },
+      "Page_OrderOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OrderOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": ["items", "next_cursor"],
+        "title": "Page[OrderOut]",
         "type": "object"
       },
       "Page_PublicListingOut_": {
@@ -878,6 +1045,75 @@
         "required": ["email"],
         "title": "PasswordResetRequestIn",
         "type": "object"
+      },
+      "PaymentOut": {
+        "description": "`Payment` in the API contract. Nothing about cards: none ever reach us.",
+        "properties": {
+          "amount_paise": {
+            "title": "Amount Paise",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "order_id": {
+            "format": "uuid",
+            "title": "Order Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PaymentStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "order_id",
+          "provider",
+          "status",
+          "amount_paise",
+          "currency",
+          "failure_reason",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "PaymentOut",
+        "type": "object"
+      },
+      "PaymentStatus": {
+        "enum": ["CREATED", "PENDING", "SUCCEEDED", "FAILED"],
+        "title": "PaymentStatus",
+        "type": "string"
       },
       "ProviderIn": {
         "additionalProperties": false,
@@ -1040,11 +1276,31 @@
             "title": "Listing Id",
             "type": "string"
           },
+          "order_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Order Id"
+          },
           "status": {
             "$ref": "#/components/schemas/ReservationStatus"
           }
         },
-        "required": ["id", "listing_id", "status", "expires_at", "created_at", "listing"],
+        "required": [
+          "id",
+          "listing_id",
+          "status",
+          "expires_at",
+          "created_at",
+          "order_id",
+          "listing"
+        ],
         "title": "ReservationOut",
         "type": "object"
       },
@@ -1373,6 +1629,17 @@
         },
         "required": ["decision"],
         "title": "VerifyIn",
+        "type": "object"
+      },
+      "WebhookAck": {
+        "properties": {
+          "received": {
+            "default": true,
+            "title": "Received",
+            "type": "boolean"
+          }
+        },
+        "title": "WebhookAck",
         "type": "object"
       }
     },
@@ -3327,6 +3594,377 @@
         ],
         "summary": "Submit Listing",
         "tags": ["listings"]
+      }
+    },
+    "/api/v1/orders": {
+      "post": {
+        "description": "Order the ticket you are holding, at the listing's price. Sending the same request again\nwith the same Idempotency-Key returns the same response and makes nothing new.",
+        "operationId": "create_order_api_v1_orders_post",
+        "parameters": [
+          {
+            "description": "Required. A new random value per click, the same one on a retry.",
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required. A new random value per click, the same one on a retry.",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Order",
+        "tags": ["orders"]
+      }
+    },
+    "/api/v1/orders/me": {
+      "get": {
+        "description": "What you bought, or with `role=seller` what you sold, newest first.",
+        "operationId": "my_orders_api_v1_orders_me_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "default": "buyer",
+              "enum": ["buyer", "seller"],
+              "title": "Role",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/OrderStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "description": "next_cursor from the previous page",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "next_cursor from the previous page",
+              "title": "Cursor"
+            }
+          },
+          {
+            "description": "Items per page, 1 to 100",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page, 1 to 100",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_OrderOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Orders",
+        "tags": ["orders"]
+      }
+    },
+    "/api/v1/orders/{order_id}": {
+      "get": {
+        "description": "One order, for its buyer, its seller and admins.",
+        "operationId": "get_order_api_v1_orders__order_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "order_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Order Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Order",
+        "tags": ["orders"]
+      }
+    },
+    "/api/v1/payments/intents": {
+      "post": {
+        "description": "Start paying for an order, or continue: send the buyer to `checkout_url`.",
+        "operationId": "create_intent_api_v1_payments_intents_post",
+        "parameters": [
+          {
+            "description": "Required. A new random value per click, the same one on a retry.",
+            "in": "header",
+            "name": "idempotency-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Required. A new random value per click, the same one on a retry.",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntentIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntentOut"
+                }
+              }
+            },
+            "description": "Your payment is already open"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Intent",
+        "tags": ["payments"]
+      }
+    },
+    "/api/v1/payments/webhooks/{provider}": {
+      "post": {
+        "description": "For the gateway only, which signs what it sends. 200 means \"we have it\", for a repeat\ntoo; anything else and it sends the event again.",
+        "operationId": "receive_webhook_api_v1_payments_webhooks__provider__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookAck"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive Webhook",
+        "tags": ["payments"]
+      }
+    },
+    "/api/v1/payments/{payment_id}": {
+      "get": {
+        "description": "One payment, for its order's buyer and admins.",
+        "operationId": "get_payment_api_v1_payments__payment_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "payment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Payment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Payment",
+        "tags": ["payments"]
       }
     },
     "/api/v1/reservations/me": {

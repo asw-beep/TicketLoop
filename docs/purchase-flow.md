@@ -85,4 +85,4 @@ Three things to notice:
 | Buyer abandons checkout | 3 to 4 | After `expires_at + 15 min`, the gateway confirms unpaid: payment `FAILED`, order `CANCELLED`, reservation `EXPIRED`, listing `ACTIVE` |
 | RabbitMQ down | 5 | Outbox rows wait; published when it returns |
 | Worker crashes | 6 or 8 | Message redelivered; `processed_events` stops double work |
-| Provider fails repeatedly | 6 to 7 | Transfer `REQUIRES_MANUAL_REVIEW`, order `TRANSFER_FAILED`; admin retries, or abandons, which gives order `REFUND_PENDING` then `REFUNDED`, and listing `CANCELLED` |
+| Provider fails repeatedly | 6 to 7 | Transfer `REQUIRES_MANUAL_REVIEW`, order `TRANSFER_FAILED`; both end there, since admin retry and refunds are cut |

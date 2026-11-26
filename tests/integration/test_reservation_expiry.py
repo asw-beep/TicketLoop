@@ -125,4 +125,6 @@ def test_the_script_runs(
     monkeypatch.setattr(scripts.expire_reservations, "get_settings", lambda: test_settings)
 
     assert scripts.expire_reservations.main(["--once"]) == 0
-    assert re.fullmatch(r"Expired \d+ reservation\(s\)\.\n", capsys.readouterr().out)
+    out = capsys.readouterr().out
+    expected = r"Expired \d+ reservation\(s\)\.\nSettled \d+ overdue payment\(s\)\.\n"
+    assert re.fullmatch(expected, out)

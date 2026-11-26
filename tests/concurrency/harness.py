@@ -25,7 +25,7 @@ import httpx2 as httpx
 from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import LOCAL_FAKEPAY_SECRET, Settings
 from app.core.security import create_access_token
 from app.modules.audit.models import AuditLog
 from app.modules.listings.models import Listing
@@ -61,11 +61,13 @@ class ApiServer:
         self._env = os.environ | {
             "DATABASE_URL": settings.database_url,
             "JWT_SECRET_KEY": settings.jwt_secret_key.get_secret_value(),
+            # Never a developer's own, from .env or the environment: the tests sign with this.
+            "FAKEPAY_WEBHOOK_SECRET": LOCAL_FAKEPAY_SECRET,
             "ENVIRONMENT": "test",
             "LOG_LEVEL": "WARNING",
             **(env or {}),
         }
-        self._ports = [_free_port() for _ in range(workers)]
+        self._ports = [free_port() for _ in range(workers)]
         self.urls = [f"http://127.0.0.1:{port}" for port in self._ports]
         self._processes: list[subprocess.Popen[bytes]] = []
 
@@ -76,7 +78,7 @@ class ApiServer:
                 command += ["--host", "127.0.0.1", "--log-level", "warning", "--no-access-log"]
                 self._processes.append(subprocess.Popen(command, cwd=REPO_ROOT, env=self._env))
             for url, process in zip(self.urls, self._processes, strict=True):
-                _wait_until_up(url, process)
+                _wait_until_up(f"{url}/api/v1/health", process)
         except BaseException:
             self.__exit__()
             raise
@@ -89,7 +91,7 @@ class ApiServer:
             process.wait(timeout=10)
 
 
-def _free_port() -> int:
+def free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
@@ -101,12 +103,39 @@ def _wait_until_up(url: str, process: "subprocess.Popen[bytes]") -> None:
         if process.poll() is not None:
             raise RuntimeError(f"uvicorn exited with {process.returncode}")
         try:
-            if httpx.get(f"{url}/api/v1/health", timeout=2).status_code == 200:
+            if httpx.get(url, timeout=2).status_code == 200:
                 return
         except httpx.TransportError:
             pass
         time.sleep(0.2)
     raise RuntimeError("uvicorn did not come up in 60 seconds")
+
+
+class FakepayServer:
+    """`with FakepayServer(url, webhook_url):` fakepay in a process of its own."""
+
+    def __init__(self, url: str, webhook_url: str) -> None:
+        self.url = url
+        self._env = os.environ | {
+            "FAKEPAY_PUBLIC_URL": url,
+            "FAKEPAY_WEBHOOK_URL": webhook_url,
+            "FAKEPAY_WEBHOOK_SECRET": LOCAL_FAKEPAY_SECRET,  # the one the test API checks
+        }
+
+    def __enter__(self) -> Self:
+        command = [sys.executable, "-m", "uvicorn", "fakepay.main:app", "--host", "127.0.0.1"]
+        command += ["--port", self.url.rsplit(":", 1)[1], "--log-level", "warning"]
+        self._process = subprocess.Popen(command, cwd=REPO_ROOT, env=self._env)
+        try:
+            _wait_until_up(f"{self.url}/health", self._process)
+        except BaseException:
+            self.__exit__()
+            raise
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self._process.kill()
+        self._process.wait(timeout=10)
 
 
 @dataclass(frozen=True)
@@ -115,6 +144,17 @@ class Reply:
     body: dict[str, object]
     milliseconds: float
     attempts: int  # how many times the server ran the transaction (strategy_app.py)
+    replayed: bool  # a stored answer, not a new one (idempotency keys)
+
+
+def after(seconds: float, call: Call) -> Call:
+    """The same call, starting this much later than everyone else's."""
+
+    def delayed(client: httpx.Client) -> httpx.Response:
+        time.sleep(seconds)
+        return call(client)
+
+    return delayed
 
 
 def fire_together(urls: Sequence[str], calls: Sequence[Call]) -> list[Reply]:
@@ -138,7 +178,8 @@ def fire_together(urls: Sequence[str], calls: Sequence[Call]) -> list[Reply]:
         response = call(client)
         took = (time.perf_counter() - began) * 1000
         attempts = int(response.headers.get("x-attempts", "1"))
-        return Reply(response.status_code, response.json(), took, attempts)
+        replayed = response.headers.get("idempotent-replayed") == "true"
+        return Reply(response.status_code, response.json(), took, attempts, replayed)
 
     try:
         with ThreadPoolExecutor(max_workers=len(calls)) as pool:

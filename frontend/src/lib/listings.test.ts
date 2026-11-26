@@ -59,6 +59,9 @@ describe("historyLabel for a reserved listing", () => {
     ["listing.reserved", {}, "Reserved"],
     ["listing.released", { reason: "hold_expired" }, "Hold ran out; back on sale"],
     ["listing.released", { reason: "buyer_cancelled" }, "Hold given up"],
+    ["listing.released", { reason: "payment_failed" }, "Payment failed; back on sale"],
+    ["listing.released", { reason: "payment_timeout" }, "Payment never made; back on sale"],
+    ["listing.released", {}, "Back on sale"],
     ["listing.expired", { reason: "buyer_cancelled" }, "Hold given up past the listing's end"],
     ["listing.expired", {}, "Expired"],
   ])("%s %j", (action, details, label) => {

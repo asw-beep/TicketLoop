@@ -1114,6 +1114,7 @@ dependencies = [
     { name = "boto3" },
     { name = "email-validator" },
     { name = "fastapi" },
+    { name = "httpx2" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
@@ -1127,7 +1128,6 @@ dependencies = [
 dev = [
     { name = "aiosmtpd" },
     { name = "faker" },
-    { name = "httpx2" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -1139,6 +1139,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.44.9" },
     { name = "email-validator", specifier = ">=2.4.0" },
     { name = "fastapi", specifier = ">=0.163.1" },
+    { name = "httpx2", specifier = ">=2.16.2" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.9" },
     { name = "pydantic-settings", specifier = ">=2.16.3" },
     { name = "pyjwt", specifier = ">=2.15.1" },
@@ -1152,7 +1153,6 @@ requires-dist = [
 dev = [
     { name = "aiosmtpd", specifier = ">=1.4.6" },
     { name = "faker", specifier = ">=40.63.0" },
-    { name = "httpx2", specifier = ">=2.16.2" },
     { name = "pytest", specifier = ">=9.2.0" },
     { name = "ruff", specifier = ">=0.17.5" },
 ]

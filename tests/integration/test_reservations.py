@@ -57,7 +57,16 @@ def test_reserving_holds_the_listing_for_ten_minutes(api: TestClient, db_session
 
     assert response.status_code == 201
     body = response.json()
-    assert set(body) == {"id", "listing_id", "status", "expires_at", "created_at", "listing"}
+    assert set(body) == {
+        "id",
+        "listing_id",
+        "status",
+        "expires_at",
+        "created_at",
+        "order_id",
+        "listing",
+    }
+    assert body["order_id"] is None
     assert body["listing_id"] == str(listing.id)
     assert body["status"] == "CREATED"
     held_for = datetime.fromisoformat(body["expires_at"]) - before

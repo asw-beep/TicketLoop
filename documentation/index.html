@@ -93,13 +93,19 @@
             </a>
           </li>
           <li>
-            <div class="mod mod--next">
+            <a class="mod mod--done" href="m08-orders-and-payments.html">
               <span class="mod__num">M8</span>
-              <span class="mod__body"><span class="mod__title">Orders and payments</span><span class="mod__goal">Idempotency-Key orders, a fake gateway with HMAC-signed webhooks, dedupe and reconciliation</span></span>
+              <span class="mod__body"><span class="mod__title">Orders and payments</span><span class="mod__goal">Pay once, whatever happens: 50 identical requests make one order, ten deliveries of a webhook change one row, and 20 forgotten webhooks are found and fixed by one reconciliation run</span></span>
+              <span class="mod__status">Done 26 Nov</span>
+            </a>
+          </li>
+          <li>
+            <div class="mod mod--next">
+              <span class="mod__num">M9</span>
+              <span class="mod__body"><span class="mod__title">Outbox, worker and transfer</span><span class="mod__goal">Transactional outbox, RabbitMQ and Celery, idempotent consumers, dead-letter queue, the ticket changes hands</span></span>
               <span class="mod__status">Up next</span>
             </div>
           </li>
-          <li><div class="mod mod--later"><span class="mod__num">M9</span><span class="mod__body"><span class="mod__title">Outbox, worker and transfer</span><span class="mod__goal">Transactional outbox, RabbitMQ and Celery, idempotent consumers, dead-letter queue, the ticket changes hands</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M10</span><span class="mod__body"><span class="mod__title">Redis: caching and rate limits</span><span class="mod__goal">Cache-aside reads with versioned invalidation, a Lua token bucket on hot endpoints</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M11</span><span class="mod__body"><span class="mod__title">Observability and delivery</span><span class="mod__goal">Prometheus, Grafana and Jaeger traces across the outbox; image build and security scans in CI</span></span></div></li>
           <li><div class="mod mod--later"><span class="mod__num">M12</span><span class="mod__body"><span class="mod__title">Load testing and the numbers</span><span class="mod__goal">k6 at 100 to 1,000 users, races at scale, a broker drill, and the numbers for the resume</span></span></div></li>

@@ -52,6 +52,13 @@ function money(value: unknown): string {
   return typeof value === "number" ? formatPaise(value) : "?";
 }
 
+const RELEASED: Record<string, string> = {
+  buyer_cancelled: "Hold given up",
+  hold_expired: "Hold ran out; back on sale",
+  payment_failed: "Payment failed; back on sale",
+  payment_timeout: "Payment never made; back on sale",
+};
+
 /** One line of a listing's history, in words. */
 export function historyLabel(entry: HistoryEntry): string {
   const { details } = entry;
@@ -81,7 +88,7 @@ export function historyLabel(entry: HistoryEntry): string {
     case "listing.reserved":
       return "Reserved";
     case "listing.released":
-      return details.reason === "hold_expired" ? "Hold ran out; back on sale" : "Hold given up";
+      return RELEASED[String(details.reason)] ?? "Back on sale";
     default:
       return entry.action;
   }

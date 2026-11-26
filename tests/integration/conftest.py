@@ -18,7 +18,7 @@ from sqlalchemy import Connection, Engine, create_engine, make_url, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import LOCAL_FAKEPAY_SECRET, Settings
 from app.infrastructure.database.engine import create_db_engine
 from app.infrastructure.database.session import create_session_factory
 from app.infrastructure.storage import InMemoryStorage, S3Storage, StorageError
@@ -36,7 +36,9 @@ TEST_BUCKET = "ticketloop-documents-test"
 
 @pytest.fixture(scope="session")
 def base_settings() -> Settings:
-    return Settings(_env_file=None, environment="test")
+    # The webhook secret is the built-in one whatever the environment says: the tests and
+    # fakepay sign with it.
+    return Settings(_env_file=None, environment="test", fakepay_webhook_secret=LOCAL_FAKEPAY_SECRET)
 
 
 @pytest.fixture(scope="session", autouse=True)

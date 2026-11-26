@@ -493,6 +493,128 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/v1/orders": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Create Order
+     * @description Order the ticket you are holding, at the listing's price. Sending the same request again
+     *     with the same Idempotency-Key returns the same response and makes nothing new.
+     */
+    post: operations["create_order_api_v1_orders_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/orders/me": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * My Orders
+     * @description What you bought, or with `role=seller` what you sold, newest first.
+     */
+    get: operations["my_orders_api_v1_orders_me_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/orders/{order_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Order
+     * @description One order, for its buyer, its seller and admins.
+     */
+    get: operations["get_order_api_v1_orders__order_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/payments/intents": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Create Intent
+     * @description Start paying for an order, or continue: send the buyer to `checkout_url`.
+     */
+    post: operations["create_intent_api_v1_payments_intents_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/payments/webhooks/{provider}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Receive Webhook
+     * @description For the gateway only, which signs what it sends. 200 means "we have it", for a repeat
+     *     too; anything else and it sends the event again.
+     */
+    post: operations["receive_webhook_api_v1_payments_webhooks__provider__post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/v1/payments/{payment_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Payment
+     * @description One payment, for its order's buyer and admins.
+     */
+    get: operations["get_payment_api_v1_payments__payment_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/v1/reservations/me": {
     parameters: {
       query?: never;
@@ -915,6 +1037,36 @@ export interface components {
       from_status: components["schemas"]["ListingStatus"] | null;
       to_status: components["schemas"]["ListingStatus"] | null;
     };
+    /** IntentIn */
+    IntentIn: {
+      /**
+       * Order Id
+       * Format: uuid
+       */
+      order_id: string;
+    };
+    /**
+     * IntentOut
+     * @description Where to send the buyer to pay.
+     */
+    IntentOut: {
+      /** Amount Paise */
+      amount_paise: number;
+      /** Checkout Url */
+      checkout_url: string;
+      /** Currency */
+      currency: string;
+      /**
+       * Payment Id
+       * Format: uuid
+       */
+      payment_id: string;
+      /** Provider */
+      provider: string;
+      /** Provider Transaction Id */
+      provider_transaction_id: string;
+      status: components["schemas"]["PaymentStatus"];
+    };
     /** ListingEventSummary */
     ListingEventSummary: {
       /** Category */
@@ -1040,6 +1192,67 @@ export interface components {
       /** Password */
       password: string;
     };
+    /**
+     * OrderIn
+     * @description There is no amount: the server copies it from the listing.
+     */
+    OrderIn: {
+      /**
+       * Reservation Id
+       * Format: uuid
+       */
+      reservation_id: string;
+    };
+    /**
+     * OrderOut
+     * @description `Order` in the API contract. Says neither who the buyer is nor who the seller is.
+     */
+    OrderOut: {
+      /** Amount Paise */
+      amount_paise: number;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Currency */
+      currency: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      listing: components["schemas"]["ReservedListingOut"];
+      /**
+       * Listing Id
+       * Format: uuid
+       */
+      listing_id: string;
+      /**
+       * Reservation Id
+       * Format: uuid
+       */
+      reservation_id: string;
+      status: components["schemas"]["OrderStatus"];
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
+     * OrderStatus
+     * @enum {string}
+     */
+    OrderStatus:
+      | "CREATED"
+      | "PAYMENT_PENDING"
+      | "PAID"
+      | "PAYMENT_FAILED"
+      | "CANCELLED"
+      | "TRANSFER_PENDING"
+      | "COMPLETED"
+      | "TRANSFER_FAILED";
     /** Page[EventOut] */
     Page_EventOut_: {
       /** Items */
@@ -1058,6 +1271,13 @@ export interface components {
     Page_ListingOut_: {
       /** Items */
       items: components["schemas"]["ListingOut"][];
+      /** Next Cursor */
+      next_cursor: string | null;
+    };
+    /** Page[OrderOut] */
+    Page_OrderOut_: {
+      /** Items */
+      items: components["schemas"]["OrderOut"][];
       /** Next Cursor */
       next_cursor: string | null;
     };
@@ -1097,6 +1317,46 @@ export interface components {
        */
       email: string;
     };
+    /**
+     * PaymentOut
+     * @description `Payment` in the API contract. Nothing about cards: none ever reach us.
+     */
+    PaymentOut: {
+      /** Amount Paise */
+      amount_paise: number;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Currency */
+      currency: string;
+      /** Failure Reason */
+      failure_reason: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Order Id
+       * Format: uuid
+       */
+      order_id: string;
+      /** Provider */
+      provider: string;
+      status: components["schemas"]["PaymentStatus"];
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /**
+     * PaymentStatus
+     * @enum {string}
+     */
+    PaymentStatus: "CREATED" | "PENDING" | "SUCCEEDED" | "FAILED";
     /** ProviderIn */
     ProviderIn: {
       /** Code */
@@ -1188,6 +1448,8 @@ export interface components {
        * Format: uuid
        */
       listing_id: string;
+      /** Order Id */
+      order_id: string | null;
       status: components["schemas"]["ReservationStatus"];
     };
     /**
@@ -1354,6 +1616,14 @@ export interface components {
        * @default false
        */
       transfer_eligible: boolean;
+    };
+    /** WebhookAck */
+    WebhookAck: {
+      /**
+       * Received
+       * @default true
+       */
+      received: boolean;
     };
   };
   responses: never;
@@ -2362,6 +2632,216 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ListingOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_order_api_v1_orders_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Required. A new random value per click, the same one on a retry. */
+        "idempotency-key"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["OrderIn"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OrderOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  my_orders_api_v1_orders_me_get: {
+    parameters: {
+      query?: {
+        role?: "buyer" | "seller";
+        status?: components["schemas"]["OrderStatus"] | null;
+        /** @description next_cursor from the previous page */
+        cursor?: string | null;
+        /** @description Items per page, 1 to 100 */
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Page_OrderOut_"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_order_api_v1_orders__order_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        order_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["OrderOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_intent_api_v1_payments_intents_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Required. A new random value per click, the same one on a retry. */
+        "idempotency-key"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["IntentIn"];
+      };
+    };
+    responses: {
+      /** @description Your payment is already open */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IntentOut"];
+        };
+      };
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["IntentOut"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  receive_webhook_api_v1_payments_webhooks__provider__post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        provider: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WebhookAck"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_payment_api_v1_payments__payment_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        payment_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PaymentOut"];
         };
       };
       /** @description Validation Error */

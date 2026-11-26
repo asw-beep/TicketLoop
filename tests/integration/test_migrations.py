@@ -23,7 +23,14 @@ M2_TABLES = {"users", "ticket_providers", "events", "tickets", "listings", "audi
 M3_TABLES = {"refresh_tokens", "password_reset_tokens"}
 M4_TABLES = {"ticket_documents"}
 M7_TABLES = {"reservations"}
-ALL_TABLES = M2_TABLES | M3_TABLES | M4_TABLES | M7_TABLES
+M8_TABLES = {
+    "orders",
+    "idempotency_keys",
+    "payments",
+    "payment_events",
+    "reconciliation_runs",
+}
+ALL_TABLES = M2_TABLES | M3_TABLES | M4_TABLES | M7_TABLES | M8_TABLES
 
 
 def tables(engine: Engine) -> set[str]:

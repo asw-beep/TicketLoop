@@ -1,4 +1,5 @@
-import type { ListingStatus, Reservation, VerificationStatus } from "../api/types";
+import type { ListingStatus, OrderStatus, Reservation, VerificationStatus } from "../api/types";
+import { ORDER_NAMES } from "../lib/orders";
 import { holdState, type HoldState } from "../lib/reservations";
 
 export const VERIFICATION_NAMES: Record<VerificationStatus, string> = {
@@ -60,6 +61,21 @@ const HOLD_CLASS: Record<HoldState["kind"], string> = {
 export function ReservationBadge({ reservation, now }: { reservation: Reservation; now: number }) {
   const { kind } = holdState(reservation, now);
   return <span className={HOLD_CLASS[kind]}>{HOLD_NAMES[kind]}</span>;
+}
+
+const ORDER_CLASS: Record<OrderStatus, string> = {
+  CREATED: "badge badge--live",
+  PAYMENT_PENDING: "badge badge--live",
+  PAID: "badge badge--ok",
+  PAYMENT_FAILED: "badge badge--bad",
+  CANCELLED: "badge",
+  TRANSFER_PENDING: "badge badge--live",
+  COMPLETED: "badge badge--ok",
+  TRANSFER_FAILED: "badge badge--bad",
+};
+
+export function OrderBadge({ status }: { status: OrderStatus }) {
+  return <span className={ORDER_CLASS[status]}>{ORDER_NAMES[status]}</span>;
 }
 
 export function ListingBadge({ status }: { status: ListingStatus }) {

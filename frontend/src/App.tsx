@@ -12,7 +12,9 @@ import { ListingPage } from "./pages/ListingPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MyHoldsPage } from "./pages/MyHoldsPage";
 import { MyListingsPage } from "./pages/MyListingsPage";
+import { MyOrdersPage } from "./pages/MyOrdersPage";
 import { MyTicketsPage } from "./pages/MyTicketsPage";
+import { OrderPage } from "./pages/OrderPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { ReservationPage } from "./pages/ReservationPage";
 import { ResetPasswordPage } from "./pages/ResetPasswordPage";
@@ -96,6 +98,22 @@ export function App() {
             element={
               <RequireSession>
                 <ReservationPage />
+              </RequireSession>
+            }
+          />
+          <Route
+            path="/orders"
+            element={
+              <RequireSession>
+                <MyOrdersPage />
+              </RequireSession>
+            }
+          />
+          <Route
+            path="/orders/:orderId"
+            element={
+              <RequireSession>
+                <OrderPage />
               </RequireSession>
             }
           />

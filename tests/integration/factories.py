@@ -14,6 +14,8 @@ from app.core.security import hash_opaque_token, new_opaque_token
 from app.modules.events.models import Event, TicketProvider
 from app.modules.identity.models import PasswordResetToken, RefreshToken, User
 from app.modules.listings.models import Listing
+from app.modules.orders.models import Order
+from app.modules.payments.models import Payment, PaymentEvent
 from app.modules.reservations.models import Reservation
 from app.modules.tickets.models import Ticket, TicketDocument
 
@@ -144,3 +146,50 @@ def make_reservation(session: Session, **fields: Any) -> Reservation:
     if "buyer_id" not in fields:
         defaults["buyer_id"] = make_user(session).id
     return _save(session, Reservation(**(defaults | fields)))
+
+
+def make_order(session: Session, **fields: Any) -> Order:
+    """An order row. With no `reservation`, one is made: unpaid for a CREATED order, being paid
+    for or over for the others, so that the listing has no second live hold."""
+    reservation = fields.pop("reservation", None)
+    if reservation is None:
+        status = fields.get("status", "CREATED")
+        over = {"CANCELLED": "CANCELLED", "PAYMENT_FAILED": "FAILED"}
+        live = {"CREATED": "CREATED", "PAYMENT_PENDING": "PAYMENT_PENDING"}
+        buyer = {"buyer_id": fields["buyer_id"]} if "buyer_id" in fields else {}
+        reservation = make_reservation(
+            session, status=over.get(status) or live.get(status, "CONFIRMED"), **buyer
+        )
+    listing = reservation.listing
+    defaults: dict[str, Any] = {
+        "reservation_id": reservation.id,
+        "listing_id": listing.id,
+        "buyer_id": reservation.buyer_id,
+        "seller_id": listing.seller_id,
+        "amount_paise": listing.asking_price_paise,
+        "idempotency_key": _unique(),
+    }
+    return _save(session, Order(**(defaults | fields)))
+
+
+def make_payment(session: Session, **fields: Any) -> Payment:
+    """A payment row. With no `order`, one that is being paid for is made."""
+    order = fields.pop("order", None) or make_order(session, status="PAYMENT_PENDING")
+    defaults: dict[str, Any] = {
+        "order_id": order.id,
+        "amount_paise": order.amount_paise,
+        "idempotency_key": _unique(),
+    }
+    if fields.get("status", "CREATED") != "CREATED":
+        defaults["provider_transaction_id"] = f"txn_{_unique()}"
+    return _save(session, Payment(**(defaults | fields)))
+
+
+def make_payment_event(session: Session, **fields: Any) -> PaymentEvent:
+    defaults: dict[str, Any] = {
+        "provider": "fakepay",
+        "provider_event_id": f"evt_{_unique()}",
+        "event_type": "payment.succeeded",
+        "payload": {},
+    }
+    return _save(session, PaymentEvent(**(defaults | fields)))

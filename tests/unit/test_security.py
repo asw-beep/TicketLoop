@@ -165,9 +165,12 @@ def test_an_opaque_token_is_stored_as_its_sha256() -> None:
 
 # ---------------------------------------------------------------- settings
 
-# Staging and production also refuse the built-in storage secret (M4), so settings built for
-# them here carry their own.
-DEPLOYED_STORAGE_SECRET = "a-storage-secret-from-the-environment"
+# Staging and production also refuse the built-in storage (M4) and fakepay (M8) secrets, so
+# settings built for them here carry their own.
+DEPLOYED = {
+    "storage_secret_key": "a-storage-secret-from-the-environment",
+    "fakepay_webhook_secret": "a-fakepay-secret-from-the-environment",
+}
 
 
 def test_staging_and_production_refuse_the_built_in_jwt_secret() -> None:
@@ -192,7 +195,7 @@ def test_the_refresh_cookie_is_secure_everywhere_but_a_laptop(
         _env_file=None,
         environment=environment,
         jwt_secret_key="s" * 48,
-        storage_secret_key=DEPLOYED_STORAGE_SECRET,
+        **DEPLOYED,
     )
 
     assert settings.cookie_secure is secure
@@ -203,7 +206,7 @@ def test_production_accepts_its_own_secret() -> None:
         _env_file=None,
         environment="production",
         jwt_secret_key="s" * 48,
-        storage_secret_key=DEPLOYED_STORAGE_SECRET,
+        **DEPLOYED,
     )
 
     assert settings.jwt_secret_key.get_secret_value() == "s" * 48

@@ -31,4 +31,5 @@ class ReservationOut(ResponseModel):
     status: ReservationStatus
     expires_at: AwareDatetime
     created_at: AwareDatetime
+    order_id: uuid.UUID | None
     listing: ReservedListingOut

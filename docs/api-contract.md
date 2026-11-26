@@ -138,37 +138,42 @@ As built: one function, `get_listing_for()`, decides who sees a listing, and eve
 
 As built: the reservation is one conditional `UPDATE` on the listing, then the insert, then two audit rows, in one transaction; [`reservation-design.md`](reservation-design.md) has the reasoning and the measurements. Draft, pending, rejected and cancelled listings are 404 to reserve, like any listing that was never public or has gone; reserved, sold, expired and past-their-end ones are 409. `/reservations/me` lists `CREATED` and `PAYMENT_PENDING` first, then newest first. Unpaid holds past their end are closed by `scripts/expire_reservations.py` (Celery beat from M9): the reservation becomes `EXPIRED` and the listing `ACTIVE`, or `EXPIRED` if its own end has passed. The listing's history shows `listing.reserved` and `listing.released` with `actor_role: buyer` or `system`, never who. Cancelling an event is refused with 409 `event-has-reservations` (carrying `reserved_listings`, a count) while any of its listings is `RESERVED`. `tests/integration/test_reservation_access.py` checks every route that takes a reservation ID. Problem types: `reservation-not-found`, `own-listing-reservation`, `buyer-only`, `listing-not-available`, `reservation-not-cancellable`, `reservation-changed`, `illegal-reservation-transition`, `event-has-reservations`.
 
-## Orders (M8)
+## Orders (M8, built)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
-| `POST /orders` | User | header `Idempotency-Key`; `{reservation_id}` | 201 `Order` (`CREATED`); a replay returns the stored status and body with header `Idempotent-Replayed: true` | 400 header missing; 404 reservation not yours; 409 reservation not `CREATED` or expired, or an order already exists for it; 422 key reused with a different body |
+| `POST /orders` | User | header `Idempotency-Key`; `{reservation_id}` | 201 `Order` (`CREATED`); a replay returns the stored status and body with header `Idempotent-Replayed: true` | 400 `idempotency-key-required` or `idempotency-key-invalid`; 404 reservation not yours; 409 `reservation-not-payable` (`reservation_status`, and `reason: hold-ended` when its time ran out); 409 `order-exists` (`order_id`) under another key; 422 `idempotency-key-reused` with a different body |
 | `GET /orders/{order_id}` | Buyer, Seller, Admin | — | 200 `Order` | 404 |
-| `GET /orders/me` | User | `role` (`buyer` or `seller`), `status`, `cursor`, `limit` | 200 page of `Order` | — |
+| `GET /orders/me` | User | `role` (`buyer`, the default, or `seller`), `status`, `cursor`, `limit` | 200 page of `Order`, newest first | 400 bad cursor; 422 unknown role or status |
 
-`Order` = `{id, listing_id, reservation_id, amount_paise, currency, status, created_at, updated_at}`. There is no `amount` in the request: the server copies it from the listing.
+`Order` = `{id, listing_id, reservation_id, amount_paise, currency, status, created_at, updated_at, listing: {id, event, ticket_category, seat_details, asking_price_paise, original_price_paise}}`. There is no `amount` in the request: the server copies it from the listing, whose price cannot change while it is `RESERVED`. The order says neither who the buyer is nor who the seller is, because both read it.
 
-**Idempotency-Key, step by step.** The server stores one row per `(user, key)` with a hash of the request.
+**Idempotency-Key, step by step.** The server stores one row per `(user, key)` with a hash of the method, path and validated body.
 
-1. First request with key K: do the work, store status and body under K, return 201.
+1. First request with key K: do the work, store status and body under K, return 201, all in one transaction.
 2. Same K, same body again (a client retry): return the stored response. No second order.
-3. Same K, different body: 422. The client has a bug.
+3. Same K, different body or path: 422. The client has a bug.
 4. Same K while the first is still running: the second request waits for the first transaction, then gets the stored response.
-5. Keys expire after 24 hours.
+5. A request that was refused stores nothing, so the same K may try again once the reason is gone.
+6. Keys expire after 24 hours. A key is 1 to 255 printable ASCII characters with no spaces.
 
-## Payments (M8)
+## Payments (M8, built)
 
 | Method and path | Who | Request | Success | Errors |
 | --- | --- | --- | --- | --- |
-| `POST /payments/intents` | Order's buyer | header `Idempotency-Key`; `{order_id}` | 201 `{payment_id, provider, provider_transaction_id, checkout_url, amount_paise, currency, status}` | 404; 409 order not `CREATED`, reservation expired, or a key still in progress; 422 key reused with a different body; 502 gateway refused |
-| `POST /payments/webhooks/{provider}` | The gateway only, authenticated by signature | headers `X-Fakepay-Signature: <hex HMAC-SHA256>`, `X-Fakepay-Timestamp: <unix seconds>`; raw JSON body `{event_id, type, transaction_id, amount_paise, currency, occurred_at}` | 200 `{"received": true}` for new **and** duplicate events | 401 bad signature or timestamp older than 5 minutes; 404 unknown provider; 400 unreadable body |
-| `GET /payments/{payment_id}` | Order's buyer, Admin | — | 200 `Payment` | 404 |
+| `POST /payments/intents` | Order's buyer | header `Idempotency-Key`; `{order_id}` | 201 `{payment_id, provider, provider_transaction_id, checkout_url, amount_paise, currency, status}`; 200 with the same shape when the order already has an open payment, whatever the key | 404 not your order; 403 `buyer-only` for the seller or an admin; 409 `order-not-payable` (`current_status`); 409 `reservation-not-payable`; 409 `idempotency-key-in-progress` with `Retry-After`; 422 `idempotency-key-reused`; 502 `payment-refused`; 503 `payment-gateway-unavailable` |
+| `POST /payments/webhooks/{provider}` | The gateway only, authenticated by signature | headers `X-Fakepay-Signature: <hex HMAC-SHA256>`, `X-Fakepay-Timestamp: <unix seconds>`; raw JSON body `{event_id, type, transaction_id, amount_paise, currency, occurred_at}` | 200 `{"received": true}` for new **and** duplicate events | 401 bad signature or timestamp more than 5 minutes off; 404 unknown provider; 400 unreadable body |
+| `GET /payments/{payment_id}` | Order's buyer, Admin | — | 200 `Payment` | 404, for the seller too: how someone paid is not their business |
 
-`Payment` = `{id, order_id, provider, status, amount_paise, currency, failure_reason, created_at, updated_at}`.
+`Payment` = `{id, order_id, provider, status, amount_paise, currency, failure_reason, created_at, updated_at}`. `failure_reason` is `declined`, `refused`, `timeout` or `intent_never_created`.
 
-**Webhook signature.** `signature = hex(HMAC_SHA256(secret, timestamp + "." + raw_body_bytes))`. The server computes it over the exact bytes received, before parsing JSON, and compares with `hmac.compare_digest`. A duplicate gets 200 because a non-2xx tells the gateway to keep retrying something we already have.
+**Webhook signature.** `signature = hex(HMAC_SHA256(secret, timestamp + "." + raw_body_bytes))`. The server computes it over the exact bytes received, before parsing JSON, and compares with `hmac.compare_digest`. A duplicate gets 200 because a non-2xx tells the gateway to keep retrying something we already have. An event we cannot apply (an unknown transaction, an amount that differs from the order) also gets 200: it is kept in `payment_events` as `FAILED` with the reason, and logged as an error.
 
-`fakepay` itself is a separate small service with its own API (create intent, test checkout with a chosen outcome, lookup), specified in M8. It has no refunds.
+**When the gateway fails.** Silence (503) leaves everything held: the same key, a new key or a new tab continues the one payment. A refusal (502) fails the payment and puts the ticket back on sale, but only for a payment this request created: one an earlier try started may have an intent whose page can still take the money, so a refusal for it is a 503 and reconciliation finds out. A 401, 403, 404 or 405 from the gateway is about how we asked, not about the payment, so it counts as silence. If the payment is settled while the gateway is still answering, the caller gets 409 `order-not-payable` rather than a page to pay on.
+
+**Coming back to an old intent.** The gateway answers a repeat with the intent it already has. If that intent was paid or has expired, the payment is settled there and then, as reconciliation would, and the caller gets 409 `order-not-payable` with the new `current_status` (`PAID` or `CANCELLED`). An intent with another transaction id, amount or currency than ours is never handed out: 503, and an error is logged.
+
+`fakepay` itself is a separate small service (`fakepay/`, port 8090) with its own API and its own database: `POST /v1/intents` (idempotent by key, 15 minutes to pay), `GET /v1/intents/{transaction_id}`, `GET /v1/intents?idempotency_key=`, `POST /v1/intents/{transaction_id}/outcome`, and the page a buyer pays on, `/checkout/{transaction_id}`. Its outcomes are succeed, fail, pay with a late webhook, pay with the webhook twice, pay with a forged webhook, and pay with no webhook at all. It has no refunds.
 
 Reconciliation has no routes: it is a script, run by hand or every 2 minutes by Celery beat from M9, and each run writes a `reconciliation_runs` row.
 

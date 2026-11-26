@@ -5,6 +5,7 @@ import { api, unwrap } from "../api/client";
 import { ApiError } from "../api/problem";
 import type { Reservation } from "../api/types";
 import { ReservationBadge } from "../components/Badges";
+import { PayButton } from "../components/Checkout";
 import { FormError } from "../components/Form";
 import { Ticket as TicketCard } from "../components/Ticket";
 import { formatPaise, formatWhen } from "../lib/format";
@@ -16,7 +17,7 @@ import { NotFoundPage } from "./StatusPages";
 /** One reservation's cache entry. The list is under "reservations". */
 export const reservationKey = (reservationId: string) => ["reservation", reservationId] as const;
 
-/** While a hold is live, ask again now and then: it can be cancelled from another tab. */
+/** While a hold is live, ask again now and then: another tab can pay for it or cancel it. */
 const REFETCH_MS = 30_000;
 
 export function ReservationPage() {
@@ -32,7 +33,10 @@ export function ReservationPage() {
       ),
     enabled: isReservationId,
     retry: false,
-    refetchInterval: (query) => (query.state.data?.status === "CREATED" ? REFETCH_MS : false),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "CREATED" || status === "PAYMENT_PENDING" ? REFETCH_MS : false;
+    },
   });
 
   if (!isReservationId) return <NotFoundPage />;
@@ -50,6 +54,7 @@ function ReservationDetails({ reservation }: { reservation: Reservation }) {
   const { listing } = reservation;
   const now = useServerClock(reservation.status === "CREATED", 250);
   const hold = holdState(reservation, now);
+  const [failed, setFailed] = useState<unknown>(null);
 
   return (
     <>
@@ -100,10 +105,13 @@ function ReservationDetails({ reservation }: { reservation: Reservation }) {
               {formatCountdown(hold.leftMs)}
             </p>
             <p className="meta">Nobody else can buy it until the time is up.</p>
+            <PayButton hold={reservation} onFailed={(error) => setFailed(error)}>
+              Checkout
+            </PayButton>
             <CancelHold reservation={reservation} />
           </>
         ) : (
-          <HoldOver kind={hold.kind} reservation={reservation} />
+          <HoldOver kind={hold.kind} reservation={reservation} failed={failed} />
         )}
       </section>
     </>
@@ -113,17 +121,42 @@ function ReservationDetails({ reservation }: { reservation: Reservation }) {
 function HoldOver({
   kind,
   reservation,
+  failed,
 }: {
   kind: "paying" | "bought" | "ran-out" | "cancelled" | "failed";
   reservation: Reservation;
+  /** Why Checkout failed, if it did: by now the hold shows as paying, so this says it. */
+  failed: unknown;
 }) {
   switch (kind) {
     case "paying":
-      return <p className="lede">Your payment is being checked. The ticket stays yours.</p>;
+      return (
+        <>
+          <div className="message" role="status">
+            <p>You've started paying. The ticket stays yours until we know how it went.</p>
+            <OrderLink reservation={reservation} />
+          </div>
+          {reservation.order_id && (
+            <PayButton orderId={reservation.order_id} earlier={failed} quiet>
+              Go to the payment page
+            </PayButton>
+          )}
+        </>
+      );
     case "bought":
-      return <p className="lede">You bought this ticket.</p>;
+      return (
+        <div className="message message--ok" role="status">
+          <p>You bought this ticket.</p>
+          <OrderLink reservation={reservation} />
+        </div>
+      );
     case "failed":
-      return <p className="lede">The payment failed, so the hold ended.</p>;
+      return (
+        <div className="message message--error" role="status">
+          <p>The payment failed, so the hold ended. Nothing was charged.</p>
+          <ListingLink listingId={reservation.listing_id} />
+        </div>
+      );
     case "cancelled":
       return (
         <div className="message" role="status">
@@ -146,6 +179,15 @@ function HoldOver({
         </div>
       );
   }
+}
+
+function OrderLink({ reservation }: { reservation: Reservation }) {
+  if (!reservation.order_id) return null;
+  return (
+    <p>
+      <Link to={`/orders/${reservation.order_id}`}>Go to your order</Link>
+    </p>
+  );
 }
 
 function ListingLink({ listingId }: { listingId: string }) {
@@ -172,6 +214,8 @@ function CancelHold({ reservation }: { reservation: Reservation }) {
       Promise.all([
         queryClient.invalidateQueries({ queryKey: reservationKey(reservation.id) }),
         queryClient.invalidateQueries({ queryKey: ["reservations"] }),
+        queryClient.invalidateQueries({ queryKey: ["orders"] }),
+        queryClient.invalidateQueries({ queryKey: ["order"] }),
         queryClient.invalidateQueries({ queryKey: ["listing", reservation.listing_id] }),
         queryClient.invalidateQueries({ queryKey: ["search"] }),
       ]),

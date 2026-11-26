@@ -1,7 +1,8 @@
 # Local stack. Two ways to use it:
-#   docker compose up --build          Postgres, Mailpit, MinIO, migrations, then the API (localhost:8000)
-#   docker compose up -d db mailpit minio
-#                                      Postgres, Mailpit and MinIO only; run the API on Windows with
+#   docker compose up --build          everything: Postgres, Mailpit, MinIO, fakepay, migrations,
+#                                      then the API (localhost:8000)
+#   docker compose up -d db mailpit minio fakepay
+#                                      everything but the API; run that on Windows with
 #                                      uvicorn --reload, and the frontend with npm run dev
 # Values like ${POSTGRES_USER:-ticketloop} come from .env if it exists, else the default.
 
@@ -51,8 +52,26 @@ services:
     volumes:
       - miniodata:/data
 
+  # The pretend payment gateway (M8): its own app, its own database (an SQLite file), and
+  # nothing in common with the API but the webhook secret. Buyers pay at http://localhost:8090.
+  fakepay:
+    build: .
+    command: ["uvicorn", "fakepay.main:app", "--host", "0.0.0.0", "--port", "8090"]
+    environment:
+      FAKEPAY_DB: /data/fakepay.db
+      FAKEPAY_PUBLIC_URL: http://localhost:8090
+      # The API on the host's port 8000, whether it runs in Docker or on Windows.
+      FAKEPAY_WEBHOOK_URL: http://host.docker.internal:8000/api/v1/payments/webhooks/fakepay
+      FAKEPAY_WEBHOOK_SECRET: &fakepay_secret ${FAKEPAY_WEBHOOK_SECRET:-local-development-only-fakepay-secret-do-not-deploy}
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Docker Desktop has it; Linux needs it spelled out
+    ports:
+      - "8090:8090"
+    volumes:
+      - fakepaydata:/data
+
   # A one-off job: bring the schema up to date, then exit. Kept out of the API's own startup
-  # so several API containers (the M8 race test, load tests) never race to migrate at once.
+  # so several API containers (load tests) never race to migrate at once.
   migrate:
     build: .
     command: ["alembic", "upgrade", "head"]
@@ -77,6 +96,8 @@ services:
       STORAGE_PUBLIC_URL: http://localhost:9000
       STORAGE_ACCESS_KEY: ${STORAGE_ACCESS_KEY:-ticketloop}
       STORAGE_SECRET_KEY: ${STORAGE_SECRET_KEY:-ticketloop-local-secret}
+      FAKEPAY_URL: http://fakepay:8090
+      FAKEPAY_WEBHOOK_SECRET: *fakepay_secret
     ports:
       - "8000:8000"
     depends_on:
@@ -90,3 +111,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+  fakepaydata:

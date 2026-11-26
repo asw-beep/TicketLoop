@@ -20,6 +20,11 @@ LOCAL_JWT_SECRET = "local-development-only-jwt-secret-do-not-deploy"
 LOCAL_STORAGE_SECRET = "ticketloop-local-secret"
 
 
+# Signs fakepay's webhooks on a laptop and in tests. Staging and production refuse to start with
+# it; anyone who reads this file could tell the API that an order has been paid for.
+LOCAL_FAKEPAY_SECRET = "local-development-only-fakepay-secret-do-not-deploy"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -72,6 +77,10 @@ class Settings(BaseSettings):
     # multipart wrapping adds a little. Anything bigger is refused before it is read.
     max_request_bytes: int = 6 * 1024 * 1024
 
+    # Payments (M8): the gateway, and the secret it signs its webhooks with.
+    fakepay_url: str = "http://localhost:8090"
+    fakepay_webhook_secret: SecretStr = SecretStr(LOCAL_FAKEPAY_SECRET)
+
     @property
     def storage_public_endpoint(self) -> str:
         """The storage host the browser reaches, used to sign download links."""
@@ -103,6 +112,17 @@ class Settings(BaseSettings):
         if deployed and self.storage_secret_key.get_secret_value() == LOCAL_STORAGE_SECRET:
             raise ValueError(
                 f"set STORAGE_SECRET_KEY: the built-in key is not for {self.environment}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_fakepay_secret(self) -> Self:
+        secret = self.fakepay_webhook_secret.get_secret_value()
+        if len(secret.encode()) < 32:
+            raise ValueError("FAKEPAY_WEBHOOK_SECRET must be at least 32 bytes long")
+        if self.environment in ("staging", "production") and secret == LOCAL_FAKEPAY_SECRET:
+            raise ValueError(
+                f"set FAKEPAY_WEBHOOK_SECRET: the built-in key is not for {self.environment}"
             )
         return self
 

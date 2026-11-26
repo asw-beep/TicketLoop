@@ -18,6 +18,7 @@ def test_production_starts_with_its_own_storage_secret() -> None:
         environment="production",
         jwt_secret_key="x" * 40,
         storage_secret_key="a-real-secret-from-the-environment",
+        fakepay_webhook_secret="f" * 40,
     )
     assert settings.storage_secret_key.get_secret_value() == "a-real-secret-from-the-environment"
 

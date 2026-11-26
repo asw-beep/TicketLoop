@@ -9,7 +9,13 @@ from sqlalchemy import Engine, make_url
 from app.core.config import Settings
 from app.infrastructure.database.engine import create_db_engine
 from scripts.databases import database_url_with_name, recreate_database, upgrade
-from tests.concurrency.harness import ApiServer, Buyer, make_buyers
+from tests.concurrency.harness import (
+    ApiServer,
+    Buyer,
+    FakepayServer,
+    free_port,
+    make_buyers,
+)
 from tests.integration.conftest import base_settings, require_postgres  # noqa: F401
 
 
@@ -30,9 +36,24 @@ def race_engine(race_settings: Settings, require_postgres: None) -> Iterator[Eng
 
 
 @pytest.fixture(scope="session")
-def api_server(race_settings: Settings, race_engine: Engine) -> Iterator[ApiServer]:
+def fakepay_url() -> str:
+    return f"http://127.0.0.1:{free_port()}"
+
+
+@pytest.fixture(scope="session")
+def api_server(
+    race_settings: Settings, race_engine: Engine, fakepay_url: str
+) -> Iterator[ApiServer]:
     """The API on four worker processes."""
-    with ApiServer(race_settings) as server:
+    with ApiServer(race_settings, env={"FAKEPAY_URL": fakepay_url}) as server:
+        yield server
+
+
+@pytest.fixture(scope="session")
+def fakepay_server(api_server: ApiServer, fakepay_url: str) -> Iterator[FakepayServer]:
+    """The gateway, for the races that really start a payment."""
+    webhook_url = f"{api_server.urls[0]}/api/v1/payments/webhooks/fakepay"
+    with FakepayServer(fakepay_url, webhook_url) as server:
         yield server
 
 

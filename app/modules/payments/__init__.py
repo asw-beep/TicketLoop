@@ -1,1 +1,1 @@
-"""Payments (M10): payment intents, signed webhooks, deduplication, reconciliation and refunds."""
+"""Payments (M8): intents at the gateway, signed webhooks, and reconciliation."""

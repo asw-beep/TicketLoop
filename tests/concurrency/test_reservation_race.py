@@ -15,7 +15,6 @@ test. The double click and the seller's cancel would not pass without it.
 import os
 import random
 import threading
-import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -35,7 +34,7 @@ from app.modules.reservations.service import expire_reservations
 from tests.concurrency.harness import (
     ApiServer,
     Buyer,
-    Call,
+    after,
     audit_counts,
     fire_together,
     make_active_listing,
@@ -55,16 +54,6 @@ pytestmark = pytest.mark.integration
 
 ROUNDS = int(os.environ.get("RACE_ROUNDS", "3"))
 DUEL_ROUNDS = 10
-
-
-def after(seconds: float, call: Call) -> Call:
-    """The same call, starting this much later than everyone else's."""
-
-    def delayed(client: httpx.Client) -> httpx.Response:
-        time.sleep(seconds)
-        return call(client)
-
-    return delayed
 
 
 @pytest.mark.parametrize("round_", range(ROUNDS))

@@ -1,1 +1,1 @@
-"""Orders (M9): the order state machine and Idempotency-Key handling."""
+"""Orders (M8): buying a held ticket. One order per reservation, priced by the server."""

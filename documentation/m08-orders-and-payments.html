@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M8 Payments</title>
+  <meta name="description" content="TicketLoop M8: idempotent orders, a payment gateway that misbehaves on purpose, signed webhooks applied exactly once, reconciliation, and a paid ticket that is never released. How it works and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Orders and payments</h1>
+      <p class="ticket__summary">A buyer pays for the ticket they hold, and money is where retries, lost answers and repeated messages stop being untidy and start costing someone. I built a pretend payment gateway that can be late, silent, repeat itself or lie, and made sure one click is one order and one payment, one webhook counts once, and a ticket someone has paid for is never given away.</p>
+      <p class="ticket__fineprint">Done when: a replayed order request and a repeated webhook each change things once, a forged webhook changes nothing, a lost webhook is repaired by reconciliation, and expiry racing a payment never releases a paid ticket in 50 rounds.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M8</span>
+      <span class="ticket__days">26 Nov</span>
+      <span class="stamp">Done<br>26 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">Every request that moves money carries an <code>Idempotency-Key</code>. The key row, the work and the stored answer are one transaction, so a retry either finds all three or none. Under it, a unique constraint allows one order per reservation, so a buggy client that makes a new key per retry still gets one order.</p>
+        <p class="pitch">I save the payment before I talk to the gateway, and send the payment's own id as the gateway's idempotency key. Whatever dies in between, asking again returns the same intent. The webhook that answers is signed with HMAC over the raw bytes and a timestamp, stored once by its event id, and applied in the same transaction that stores it.</p>
+        <p class="pitch">Webhooks get lost, so reconciliation asks the gateway about anything left open, and repairs it through the same two functions the webhook uses. And the ten-minute clock never touches a hold that is being paid for: the only thing that may release it is the gateway saying nothing was paid. Silence is not an answer.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">Idempotency keys</span><span class="built__note">A key table with a hash of the request. The same request twice gets the stored answer with <code>Idempotent-Replayed: true</code>; a different request with the same key is a 422; one that is still running is waited for, or a 409 when it's out calling another service.</span><code>app/modules/idempotency/service.py</code></li>
+          <li><span class="built__what">Orders</span><span class="built__note"><code>POST /orders</code> turns a hold into an order at the listing's price. No price comes from the client. The buyer and the seller can read it, and it names neither.</span><code>app/modules/orders/service.py</code> <code>app/modules/orders/router.py</code></li>
+          <li><span class="built__what">fakepay</span><span class="built__note">A separate small app with its own SQLite database and its own checkout page. It shares nothing with the API but the webhook secret. Six outcomes: pay, decline, late webhook, webhook twice, forged webhook, no webhook.</span><code>fakepay/main.py</code> <code>fakepay/store.py</code></li>
+          <li><span class="built__what">The gateway client</span><span class="built__note">Create, look up by transaction, look up by my own key. Every way it can go wrong becomes one of two errors: it refused, or it didn't answer.</span><code>app/infrastructure/payments/fakepay.py</code></li>
+          <li><span class="built__what">Payment intents</span><span class="built__note">Saves the payment and moves the reservation to <code>PAYMENT_PENDING</code>, commits, then calls the gateway with no transaction open. An order whose payment is already open gets that one back.</span><code>app/modules/payments/router.py</code></li>
+          <li><span class="built__what">Webhooks</span><span class="built__note">HMAC-SHA256 over the exact bytes plus a timestamp, compared in constant time, five minutes of tolerance. One row per event, kept for ever, with what came of it.</span><code>app/modules/payments/webhooks.py</code></li>
+          <li><span class="built__what">One way to settle</span><span class="built__note"><code>succeed()</code> and <code>fail()</code> change the payment, order, reservation and listing together. Webhook, reconciliation and expiry all call them.</span><code>app/modules/payments/service.py</code></li>
+          <li><span class="built__what">Reconciliation</span><span class="built__note">Asks the gateway about every payment left open for five minutes, repairs each in a transaction of its own, and records the run with every mismatch it found.</span><code>app/modules/payments/reconcile.py</code> <code>scripts/reconcile_payments.py</code></li>
+          <li><span class="built__what">Expiry that asks first</span><span class="built__note">Fifteen minutes after a hold's end, the expiry job asks the gateway about buyers who went to pay and never came back.</span><code>scripts/expire_reservations.py</code></li>
+          <li><span class="built__what">Screens</span><span class="built__note"><strong>Checkout</strong> on a hold, the order page that waits for the webhook, <strong>My orders</strong>.</span><code>frontend/src/components/Checkout.tsx</code> <code>frontend/src/pages/OrderPage.tsx</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">From Checkout to Paid</h2>
+      <div class="section__body">
+        <p>One press of a button, four places it can be cut off, and what happens at each.</p>
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>The order</strong><p><code>INSERT … ON CONFLICT DO NOTHING</code> claims the key. A second copy of the request waits on that row's uncommitted insert, so it can't do the work at the same time. Then the reservation is locked and checked, the order inserted with the listing's price, the 201 body stored under the key, and all of it committed. Cut off before the commit: nothing exists and the retry starts fresh. After: the retry gets the stored body.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>The payment, saved first</strong><p>A second key, this time with a lock marker. The reservation goes to <code>PAYMENT_PENDING</code>, which takes it out of the expiry job's reach, the order follows, and the payment row is saved as <code>CREATED</code>. Commit. From here money may move, and there's a row that says so.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The gateway is asked</strong><p>No transaction and no pooled connection is held while waiting for someone else's server. The payment's id is the gateway's idempotency key. Cut off here: reconciliation, or the buyer's own retry, asks again with the same key and gets the same intent.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>The intent is kept</strong><p>The payment becomes <code>PENDING</code> with the gateway's transaction id. If it was settled while the gateway was answering, the buyer gets a 409 and not a page to pay on.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>The buyer pays, the webhook comes</strong><p>Signature first, over the bytes as received; only then is anything parsed. The event row is inserted, and a repeat inserts nothing and gets its 200. Then <code>succeed()</code>: lock the reservation, check the payment is still open, move payment, order and reservation. One transaction, so a crash anywhere means the gateway tries again and finds a clean slate.</p></div></li>
+          <li><span class="flow__n">6</span><div class="flow__text"><strong>Or it doesn't come</strong><p>Five minutes later reconciliation asks the gateway, hears "succeeded", and calls the same <code>succeed()</code>. If the webhook then turns up, it finds the payment settled and is stored as <code>IGNORED</code>.</p></div></li>
+        </ol>
+<pre><code><span class="c"># app/modules/payments/webhooks.py: before anything is parsed</span>
+expected = hmac.new(
+    secret.encode(), timestamp.encode() + b"." + body, hashlib.sha256
+).hexdigest()
+if not hmac.compare_digest(expected.encode(), signature.encode("utf-8", "replace")):
+    raise BadWebhookSignatureError()</code></pre>
+        <h3>The paid ticket and the clock</h3>
+        <p>The buyer's ten minutes end while they're on the gateway's page. Three things fight over one reservation row:</p>
+        <ul class="tight">
+          <li><strong>Checkout</strong> moves it <code>CREATED → PAYMENT_PENDING</code>, only if its time isn't up. That happens before the gateway is called.</li>
+          <li><strong>The expiry job</strong> moves it <code>CREATED → EXPIRED</code>. It never looks at <code>PAYMENT_PENDING</code>.</li>
+          <li><strong>The overdue check</strong> looks only at <code>PAYMENT_PENDING</code>, only fifteen minutes after the end, and only acts on what the gateway says. fakepay refuses money for an intent older than fifteen minutes, so "expired" is final.</li>
+          <li><strong>Whoever locks the row first decides.</strong> The others re-check and find there's nothing left to do. I raced payment against expiry 50 times, and the paid ticket was released in none of them.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>Run <code>docker compose up -d db mailpit minio fakepay</code>, the API, and <code>npm run dev</code> in <code>frontend/</code>. Reserve a ticket and press <strong>Checkout</strong>.</p>
+        <ul class="built">
+          <li><span class="built__what">Your hold</span><span class="built__note">Now with <strong>Checkout</strong>. Once paying has started, the hold can't be given up, and the page links to the order.</span><code>/reservations/:reservationId</code></li>
+          <li><span class="built__what">fakepay</span><span class="built__note">The gateway's own page, on its own port. Pick what the payment does.</span><code>localhost:8090/checkout/:transactionId</code></li>
+          <li><span class="built__what">Your order</span><span class="built__note">Waits for the webhook and turns to <strong>Paid</strong> by itself. An unfinished payment can be continued from here.</span><code>/orders/:orderId</code></li>
+          <li><span class="built__what">My orders</span><span class="built__note">Everything you've bought, or tried to, newest first.</span><code>/orders</code></li>
+        </ul>
+        <figure class="shot">
+          <img src="assets/m08-hold.png" alt="The hold page: the ticket with a blue stub reading Your hold, a countdown, and two buttons, Checkout and Cancel hold." loading="lazy" width="1100" height="900">
+          <figcaption>The hold, now with Checkout.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m08-fakepay.png" alt="The fakepay checkout page: the amount ₹2,000 and six buttons, Pay, Decline, Pay with the webhook late, twice, forged, or missing." loading="lazy" width="1100" height="900">
+          <figcaption>The gateway's page. Each button is a way for it to behave.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m08-pending.png" alt="The order page with the status Payment pending and a message saying it is waiting for the payment service." loading="lazy" width="1100" height="900">
+          <figcaption>Back from the gateway before the webhook.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m08-paid.png" alt="The order page with the status Paid and a green message: You&#x27;ve paid ₹2,000. The ticket is yours." loading="lazy" width="1100" height="900">
+          <figcaption>The webhook has landed.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+        <h3>Doing things once</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A key table in Postgres</h4>
+            <p class="decision__over">Instead of keys in Redis</p>
+            <p>The key, the order and the stored answer have to commit together. In Redis they're two systems, and the gap between them is exactly where the duplicate order comes from.</p>
+          </div>
+          <div class="decision">
+            <h4>Two layers</h4>
+            <p class="decision__over">Instead of only the key</p>
+            <p>The key catches the same request sent twice. <code>uq_orders_reservation</code> catches a different request for the same thing: a client that makes a new key per retry, or a second tab.</p>
+          </div>
+          <div class="decision">
+            <h4>A refused request doesn't use up its key</h4>
+            <p class="decision__over">Instead of storing errors too</p>
+            <p>A 409 or a 503 is about now. If it were stored, a buyer who waits a moment and presses again would be told the same thing for 24 hours.</p>
+          </div>
+          <div class="decision">
+            <h4>Continue the open payment, whatever the key</h4>
+            <p class="decision__over">Instead of 409 for a new key</p>
+            <p>A closed tab, a second device and a retry after a crash are all the buyer asking to carry on paying. They get the same intent and the same page.</p>
+          </div>
+          <div class="decision">
+            <h4>Commit before calling the gateway</h4>
+            <p class="decision__over">Instead of one transaction around the call</p>
+            <p>A transaction held open during someone else's slow HTTP call holds a row lock and a pooled connection. And if my process died after the gateway said yes, the rollback would erase the only trace of it.</p>
+          </div>
+        </div>
+
+        <h3>Believing the gateway</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Sign the raw bytes</h4>
+            <p class="decision__over">Instead of sign the parsed JSON</p>
+            <p>Parsing and writing JSON again can reorder keys or change spacing. The signature has to cover what was actually sent.</p>
+          </div>
+          <div class="decision">
+            <h4>A timestamp inside the signature</h4>
+            <p class="decision__over">Instead of just the body</p>
+            <p>Otherwise a captured webhook is valid for ever. With it, a new timestamp breaks the signature and an old one is refused after five minutes.</p>
+          </div>
+          <div class="decision">
+            <h4>200 for an event I can't apply</h4>
+            <p class="decision__over">Instead of an error status</p>
+            <p>Any other status makes the gateway send it again, for ever. The event is kept as <code>FAILED</code> with the reason, and logged as an error for a person.</p>
+          </div>
+          <div class="decision">
+            <h4>Compare the amount</h4>
+            <p class="decision__over">Instead of trusting the event's type</p>
+            <p>A genuine webhook for the wrong amount means something is badly wrong. It changes nothing.</p>
+          </div>
+          <div class="decision">
+            <h4>A gateway that forgot an id it gave me is a fault</h4>
+            <p class="decision__over">Instead of treating it as unpaid</p>
+            <p>"Not found" from a payment provider could be a restored backup or a wrong account. Releasing a ticket on that could sell it twice.</p>
+          </div>
+        </div>
+
+        <h3>Time</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>The database's clock</h4>
+            <p class="decision__over">Instead of each process's clock</p>
+            <p>Four API processes and a worker would have four opinions about whether ten minutes are up. Postgres has one.</p>
+          </div>
+          <div class="decision">
+            <h4><code>clock_timestamp()</code> after waiting for a lock</h4>
+            <p class="decision__over">Instead of <code>now()</code></p>
+            <p><code>now()</code> is when the transaction began. A request that waited three seconds for the row would be checking the hold against three seconds ago.</p>
+          </div>
+          <div class="decision">
+            <h4>Reconcile only what nobody has touched for five minutes</h4>
+            <p class="decision__over">Instead of everything open</p>
+            <p>A request that is at this moment waiting for the gateway must not have its payment failed because the gateway hasn't got it yet.</p>
+          </div>
+        </div>
+
+        <h3>fakepay</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>A separate process with its own database</h4>
+            <p class="decision__over">Instead of a class inside the API</p>
+            <p>The failures worth testing are between two systems: a webhook that arrives before the response to the request that caused it, a process that dies between two calls. An in-process fake can't produce them.</p>
+          </div>
+          <div class="decision">
+            <h4>SQLite</h4>
+            <p class="decision__over">Instead of the same Postgres</p>
+            <p>Sharing a database would let me cheat. It's one file, and it's all the gateway needs.</p>
+          </div>
+          <div class="decision">
+            <h4>No refunds</h4>
+            <p class="decision__over">Instead of refunding a late payment</p>
+            <p>Cut from the roadmap. A payment that succeeds after I failed it is logged as an error for a person, and fakepay refuses to take such money anyway.</p>
+          </div>
+        </div>
+
+        <h3>Frontend</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>One key per click, kept until it's answered</h4>
+            <p class="decision__over">Instead of a key per request</p>
+            <p>The browser may retry, and so may the buyer. The same press has to be the same key, both halves of it, or the server can't tell.</p>
+          </div>
+          <div class="decision">
+            <h4>The order page asks the server</h4>
+            <p class="decision__over">Instead of trusting the return from the gateway</p>
+            <p>Anyone can open the return address. Only the order's status says whether it's paid.</p>
+          </div>
+          <div class="decision">
+            <h4>Reset the button when the page comes back from the browser's cache</h4>
+            <p class="decision__over">Instead of leaving it</p>
+            <p>Pressing Back on the gateway's page can bring the old page back exactly as it was, button disabled.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>What is an idempotency key, and how did you implement it?</summary>
+          <div class="qa__a">
+            <p>A value the client makes once per action and repeats on every retry, so the server can tell a retry from a second action. I insert a row for (user, key) with <code>ON CONFLICT DO NOTHING</code>. If it went in, I do the work and store the response in the same transaction. If it didn't, I read the row: a different request hash is a 422, a stored response is replayed. A concurrent duplicate blocks on the uncommitted insert until the first one commits, so there's never a moment when both do the work.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why do you need the unique constraint as well?</summary>
+          <div class="qa__a">
+            <p>They catch different mistakes. The key catches one request sent twice. The constraint on <code>reservation_id</code> catches two different requests for the same purchase: a client that generates a new key on each retry, or two tabs. I tested both with 50 concurrent requests: 50 identical bodies with one key, one 201 and 49 conflicts with fifty keys.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you call an external service safely from inside a request?</summary>
+          <div class="qa__a">
+            <p>Save what I'm about to do, commit, call, save the answer. The saved row means a crash leaves a trace; no transaction is open during the call, so a slow gateway doesn't hold locks or use up the pool; and the row's id goes along as the gateway's idempotency key, so repeating the call can't create a second intent.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What if you crash after the gateway says yes and before you save it?</summary>
+          <div class="qa__a">
+            <p>The payment is <code>CREATED</code> with no transaction id. The buyer's retry, or reconciliation, asks with the same key and gets the same intent, and I save it then. If the gateway has never heard of the key, the call never arrived. Once the hold has ended, the payment is failed so the ticket can go back on sale; before that, the buyer can still try again.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you verify a webhook?</summary>
+          <div class="qa__a">
+            <p>The gateway sends a timestamp and <code>HMAC-SHA256(secret, timestamp + "." + body)</code>. I compute the same over the bytes I received, before parsing, and compare with <code>compare_digest</code> so the time taken says nothing about where they differ. Then I check the timestamp is within five minutes. A forged one gets 401 and writes nothing.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why does a duplicate webhook get a 200?</summary>
+          <div class="qa__a">
+            <p>Because the gateway reads anything else as "try again". Having it already is success. The unique index on (provider, event id) makes the second insert do nothing, and the insert and its effect are one transaction, so "already stored" also means "already applied".</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What if the webhook never arrives?</summary>
+          <div class="qa__a">
+            <p>Reconciliation. Every payment left open and untouched for five minutes is looked up at the gateway, and the answer goes through the same <code>succeed()</code> and <code>fail()</code>. I made fakepay forget 20 webhooks: one run fixed 20, the next fixed 0. Each run leaves a row saying what it checked, what differed and what it did.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>The webhook and reconciliation arrive together. What happens?</summary>
+          <div class="qa__a">
+            <p>Both lock the reservation row, so one goes first. The second, once it has the lock, re-reads the payment and finds it's no longer open, and does nothing. The event is stored as <code>IGNORED</code>. There's a race test for exactly this.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>A buyer pays at 9:59 and the hold ends at 10:00. Who wins?</summary>
+          <div class="qa__a">
+            <p>The buyer. Starting to pay moves the reservation to <code>PAYMENT_PENDING</code> before the gateway is even called, and the expiry job never touches that status. Both moves need the row to be <code>CREATED</code>, and the row lock lets one of them see it first. If the clock got there first, the buyer gets a 409 before any money moves.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>And if they open the payment page and walk away?</summary>
+          <div class="qa__a">
+            <p>The gateway gives them 15 minutes. After that, plus a margin, the expiry job asks what happened. If it expired unpaid, the order is cancelled and the ticket released. If it was paid, it's marked paid. If the gateway doesn't answer, nothing happens and it asks again later. The clock alone never releases it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why not store the gateway's failure under the key?</summary>
+          <div class="qa__a">
+            <p>It isn't the answer to the request, it's the state of the world. The buyer should be able to press again with the same key and have it work.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What's the lock order, and why does it matter here?</summary>
+          <div class="qa__a">
+            <p>Reservation, order, payment, listing. Settling a payment touches all four, and cancelling or expiring touches three of them. If two paths took them in different orders they could each hold what the other needs. Locking the reservation first also means that whoever has it can read the rest and trust it.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How did you test the gateway misbehaving?</summary>
+          <div class="qa__a">
+            <p>fakepay is a real process in the race tests and the browser tests, with six outcomes. For the API tests I use a fake transport that can time out, answer 500, answer HTML, or answer something that isn't the shape I expect. Each of those becomes "unavailable", and the test checks nothing was released.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>A buyer sent to pay for a ticket that was already gone.</strong> While the gateway was answering, reconciliation could settle the payment, and the request still returned a checkout page. It now looks at the payment again after the call and answers 409.</li>
+          <li><strong>Failing a payment its buyer had just come back to.</strong> Reconciliation reads the payment, asks the gateway, hears "no such intent", and by then the buyer has pressed the button again and is creating it. <code>fail()</code> now does nothing if the payment has been touched since it was read, and pressing the button touches it.</li>
+          <li><strong>A race that always ended the same way.</strong> Payment against expiry gave the same winner in all 50 rounds, so half the code was never tested. The webhook now gets a delay that grows each round, and the test fails unless both outcomes turn up.</li>
+          <li><strong>Two clocks in one job.</strong> Reconciliation worked out "five minutes ago" from Python's clock and compared it with Postgres's. In Docker on a laptop that slept, they differ. It's the database's clock on both sides now.</li>
+          <li><strong>Back from the gateway froze the button.</strong> Browsers keep the old page in memory and show it as it was, with Checkout still disabled and spinning. The page now listens for being shown again.</li>
+          <li><strong>An expired intent handed out again kept the ticket for ever.</strong> Coming back to an order returned the same intent even after the gateway's 15 minutes, and touched the payment, so reconciliation never asked about it. A buyer who kept coming back kept the ticket without paying. Now the gateway's answer is applied there and then (409, and the order is <code>CANCELLED</code> or <code>PAID</code>), and only a payment with no transaction id yet is touched.</li>
+          <li><strong>A no that wasn't about this payment.</strong> A refusal on a second try put the ticket back on sale, while the page from the first try could still take the money. Now a refusal releases only a payment this request created. A 401 or a 404 from the gateway is about how I asked, so it counts as silence.</li>
+          <li><strong>One silent payment stopped all the others.</strong> Reconciliation stopped at the first lookup without an answer, so one payment the gateway wouldn't talk about hid everything behind it, every run. It now notes that payment and goes on, and stops only after three in a row.</li>
+          <li><strong>The 503 message vanished.</strong> After a failed Checkout the hold refreshes and shows as paying, which unmounted the button and its alert. The paying view now keeps the message and offers <strong>Go to the payment page</strong>.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>Paid, but the ticket hasn't moved.</strong> M9 hands it over: an outbox row in the same transaction as <code>PAID</code>, a worker, and a transfer.</li>
+          <li><strong>Reconciliation and expiry are scripts</strong> until M9's Celery beat runs them.</li>
+          <li><strong>No refunds and no payouts.</strong> Cut from the roadmap; a payment that succeeds too late is an error in the log.</li>
+          <li><strong>The order page always speaks to the buyer.</strong> A seller who opens an order's address reads "Your order", and the API refuses them if they press the pay button.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d db mailpit minio fakepay
+uv run alembic upgrade head
+uv run pytest tests/unit/test_fakepay.py tests/unit/test_fakepay_gateway.py  <span class="c"># the gateway and its client</span>
+uv run pytest tests/integration/test_payment_webhooks.py tests/integration/test_reconciliation.py
+uv run pytest tests/concurrency/test_payment_race.py                         <span class="c"># orders, webhooks, the clock</span>
+uv run python -m scripts.reconcile_payments                                  <span class="c"># SUCCEEDED: checked 0, fixed 0.</span>
+uv run python -m scripts.expire_reservations --once                          <span class="c"># and "Settled 0 overdue payment(s)."</span>
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 uv run pytest                           <span class="c"># 1028 tests, what CI runs</span>
+
+cd frontend &amp;&amp; npm run dev     <span class="c"># localhost:5173</span>
+npm test                       <span class="c"># 146 unit tests</span>
+npm run e2e                    <span class="c"># 20 browser tests, 2 new in this module</span>
+gh run list --workflow ci.yml --limit 3</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m07-reservations-and-the-race.html">Previous<strong>M7 Reservations and the race</strong></a>
+    <span class="pager__next">Next<br><strong>M9 Outbox, worker and transfer</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

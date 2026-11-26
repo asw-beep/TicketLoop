@@ -123,10 +123,10 @@ stateDiagram-v2
 | CREATED | EXPIRED | expiry worker | system | `expires_at <= now()`. Listing back to `ACTIVE` (or `EXPIRED`); order, if any, `CREATED → CANCELLED`. Outbox `reservation.expired`. |
 | CREATED | CANCELLED | `POST /reservations/{id}/cancel` | buyer | Listing back to `ACTIVE`; order, if any, `→ CANCELLED`. |
 | PAYMENT_PENDING | CONFIRMED | `payment.succeeded` webhook or reconciliation | system | Payment `→ SUCCEEDED`, order `→ PAID`, outbox `payment.succeeded`. |
-| PAYMENT_PENDING | FAILED | `payment.failed` webhook or reconciliation | system | Payment `→ FAILED`, order `→ PAYMENT_FAILED`, listing back to `ACTIVE`. |
-| PAYMENT_PENDING | EXPIRED | expiry worker, after asking the gateway | system | Only when `expires_at + 15 min grace <= now()` **and** the gateway says the intent was never paid. Payment `→ FAILED` (reason `timeout`), order `→ CANCELLED`, listing back to `ACTIVE`. If the gateway says paid, apply success instead. If the gateway cannot be reached, do nothing and try later. |
+| PAYMENT_PENDING | FAILED | `payment.failed` webhook, the gateway refusing the intent, or reconciliation | system | Payment `→ FAILED`, order `→ PAYMENT_FAILED`, listing back to `ACTIVE`. |
+| PAYMENT_PENDING | EXPIRED | expiry worker, after asking the gateway | system | Only when `expires_at + 15 min grace <= now()`, nobody has touched the payment for 5 minutes, **and** the gateway says the intent expired unpaid. Payment `→ FAILED` (reason `timeout`), order `→ CANCELLED`, listing back to `ACTIVE`. If the gateway says paid, apply success instead. If the gateway cannot be reached, do nothing and try later. |
 
-As built in M7 (`PAYMENT_PENDING` and later moves arrive with M8):
+As built in M7 and M8:
 
 - **The reservation moves first, then its listing.** Cancelling and expiring both lock the reservation and then release the listing, so they cannot wait on each other. Releasing goes through `release_listing()`, which picks `ACTIVE` or `EXPIRED` by the listing's own end; no route calls it directly.
 - **A hold past its end is over even before the expiry job reaches it.** `reserve` answers its own buyer 409 `listing-not-available` with `reason: hold-ended` rather than handing back a hold nobody can pay for. It can still be cancelled, which puts the ticket back on sale sooner.
@@ -135,7 +135,7 @@ As built in M7 (`PAYMENT_PENDING` and later moves arrive with M8):
 
 The rule from FR-07: the expiry worker's normal scan touches **only** `CREATED`. A `PAYMENT_PENDING` reservation means money may be moving; it is resolved by asking the gateway, never by the clock alone. See hard problem 5 in [`hard-problems.md`](hard-problems.md).
 
-## Order (M8, M9)
+## Order (M8 built, M9)
 
 ```mermaid
 stateDiagram-v2
@@ -170,7 +170,7 @@ stateDiagram-v2
 
 Refunds are cut from the slimmed roadmap: a `TRANSFER_FAILED` order ends there. Paying sellers out is outside this project's scope.
 
-## Payment (M8)
+## Payment (M8, built)
 
 ```mermaid
 stateDiagram-v2
@@ -187,9 +187,19 @@ stateDiagram-v2
 | --- | --- | --- | --- | --- |
 | — | CREATED | `POST /payments/intents` | buyer | Saved and committed **before** the gateway call, with `idempotency_key = id`. |
 | CREATED | PENDING | gateway response | system | Sets `provider_transaction_id`. If we crash first, reconciliation repeats the call with the same idempotency key and the gateway returns the same intent. |
-| CREATED | FAILED | gateway refusal, or reconciliation finds no intent | system | Order `→ PAYMENT_FAILED`, reservation `→ FAILED`. |
+| CREATED | FAILED | gateway refusal, or reconciliation finds no intent | system | Order `→ PAYMENT_FAILED`, reservation `→ FAILED`, listing released. |
 | PENDING | SUCCEEDED | webhook or reconciliation | system | Amount and currency must equal the order's. Order `→ PAID`, reservation `→ CONFIRMED`. |
-| PENDING | FAILED | webhook, gateway timeout, or reconciliation | system | Order `→ PAYMENT_FAILED` or `→ CANCELLED` (timeout). |
+| PENDING | FAILED | webhook, gateway timeout, or reconciliation | system | Order `→ PAYMENT_FAILED`, or `→ CANCELLED` when the buyer simply never paid (`timeout`). Listing released either way. |
+
+As built in M8:
+
+- **`succeed()` and `fail()` in `app/modules/payments/service.py` are the only two functions that settle a payment.** The webhook, reconciliation and the expiry job all call them, so it does not matter who finds out first.
+- **The reservation's row lock is taken first, everywhere:** reservation, then order, then payment, then listing. Whoever holds it can read the rest and trust it until they commit. Paying, cancelling and the clock all fight over that one row.
+- **A payment that is settled stays settled.** The second caller finds it final and changes nothing. If the gateway ever says "paid" about a payment we failed, the event is `IGNORED` and an error is logged: there are no refunds in this project, so a person has to look.
+- **An intent the gateway gave us and no longer knows is a fault, not "unpaid".** It is reported by every reconciliation run and nothing is released.
+- **Reconciliation can time out a `PAYMENT_PENDING` order with no grace.** The expiry job waits 15 minutes past the hold's end before it asks; reconciliation asks about any payment untouched for 5 minutes. If the gateway says the intent expired, either one moves it `PAYMENT_PENDING → CANCELLED`, because the gateway's word is final. A `CREATED` payment the gateway never heard of is failed only once its hold has ended.
+- **A buyer coming back settles an old intent.** `POST /payments/intents` on an order whose intent was paid or has expired applies that answer (`PAID`, or `CANCELLED` and `EXPIRED`) instead of handing out its page.
+- **A refusal releases the ticket only for a new payment.** For a payment an earlier try started, the gateway may hold an intent that can still be paid, so nothing changes until reconciliation knows.
 
 Every webhook, applied or not, stays in `payment_events`. `provider_response` holds only the latest snapshot. This is how FR-09's "never silently overwritten" holds.
 

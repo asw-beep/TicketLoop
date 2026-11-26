@@ -18,8 +18,8 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M5 · Listings, verification and audit log | Done: listing a verified ticket at no more than face value; admin review with no self-review; one state machine whose every move is a conditional `UPDATE` plus an audit row in the same transaction; listing history; the event-cancel cascade and listing expiry; races between admins proven with real concurrent transactions; screens for all of it |
 | M6 · Discovery: search, filters, pagination | Done: public search with filters and sorts; keyset pagination on every list; indexes proven with `EXPLAIN ANALYZE` on 100,000 listings ([results](docs/discovery-performance.md)): page 500 in 0.2 ms against 45 ms with `OFFSET`; the front page is the search |
 | M7 · Reservations and the race | Done: 10-minute holds by one conditional `UPDATE`; 100 buyers against four API processes end with exactly one winner, 20 rounds in a row; compared with `FOR UPDATE` and `SERIALIZABLE` ([design and numbers](docs/reservation-design.md)); holds expire with `SKIP LOCKED`; an event with a held ticket can't be cancelled; reserve, countdown and cancel on screen |
-| M8 · Orders and payments | Next |
-| M9 · Outbox, worker and transfer | Planned (Fri 27 Nov) |
+| M8 · Orders and payments | Done: idempotent orders at the server's price; a pretend gateway, fakepay, that can be late, silent, repeat itself or forge; HMAC-signed webhooks applied exactly once; reconciliation that repairs what a webhook never told us; a paid ticket is never released, 50 races in a row; checkout, order page and My orders on screen |
+| M9 · Outbox, worker and transfer | Next |
 | M10 · Redis: caching and rate limits | Planned (Sat 28 Nov) |
 | M11 · Observability and delivery | Planned (Sun 29 Nov) |
 | M12 · Load testing and the numbers | Planned (Mon 30 Nov) |
@@ -30,7 +30,7 @@ The roadmap was slimmed to these seven modules on 23 Nov 2026; see [the design](
 
 You need Docker Desktop, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and Node 24 LTS for the frontend.
 
-**Everything in containers** (Postgres, Mailpit, MinIO, then a one-off `migrate` job, then the API):
+**Everything in containers** (Postgres, Mailpit, MinIO, fakepay, then a one-off `migrate` job, then the API):
 
 ```bash
 docker compose up --build
@@ -38,10 +38,12 @@ curl localhost:8000/api/v1/health
 # {"status":"ok","checks":{"database":"ok"}}
 ```
 
-**Day to day** (Postgres, Mailpit and MinIO in Docker, the API and the frontend on Windows, both reloading as you edit):
+**Day to day** (Postgres, Mailpit, MinIO and fakepay in Docker, the API and the frontend on Windows, both reloading as you edit):
 
 ```bash
-docker compose up -d db mailpit minio # Postgres, a fake inbox at http://localhost:8025, and S3 storage
+docker compose up -d db mailpit minio fakepay
+                                      # Postgres, a fake inbox at http://localhost:8025, S3 storage,
+                                      # and the pretend payment gateway at http://localhost:8090
 cp .env.example .env                  # optional; the defaults already match compose
 uv sync                               # create .venv and install dependencies
 uv run alembic upgrade head           # create or update the tables
@@ -63,8 +65,8 @@ MinIO stores the uploaded proof of purchase. Its web console is at http://localh
 Set `LOG_JSON=false` in `.env` for coloured, readable log lines while developing. Stop the `api` container first (`docker compose stop api`) if it is running, since both use port 8000.
 
 ```bash
-docker compose down      # stop everything; data survives in the pgdata and miniodata volumes
-docker compose down -v   # stop and delete the database and the stored files too
+docker compose down      # stop everything; data survives in the pgdata, miniodata and fakepaydata volumes
+docker compose down -v   # stop and delete the databases and the stored files too
 ```
 
 ## Try the auth flow
@@ -182,11 +184,42 @@ Holds that run out are closed by a loop that Celery beat replaces in M9:
 uv run python -m scripts.expire_reservations          # every 30 seconds; --once for a single pass
 ```
 
-The race itself, against four API processes and a database of its own:
+## Try paying for it
+
+Carry on from a hold. **Checkout** takes the buyer to fakepay's own page, where you choose what the payment does:
+
+- **Pay**: back on the order's page, it turns to **Paid** as soon as the webhook lands.
+- **Pay, webhook late**: the order's page says it is waiting, and turns to Paid by itself.
+- **Pay, webhook twice** and **Pay, forged webhook**: the first still pays once; the second is refused with a 401, and reconciliation finds the payment instead.
+- **Pay, no webhook**: the money moved and nobody told us. Run reconciliation (below) five minutes later.
+- **Decline**: the order fails and the ticket is back on sale.
+
+Close the tab halfway and come back through **My orders**: it is the same payment, never a second one. From a terminal, `Idempotency-Key` is whatever you like, the same one on a retry:
+
+```bash
+HOLD=$(curl -s -X POST $B/listings/$LISTING/reservations -H "Authorization: Bearer $BUYER" | jq -r .id)
+ORDER=$(curl -s $B/orders -H "Authorization: Bearer $BUYER" -H 'Idempotency-Key: try-1' \
+  -H 'content-type: application/json' -d "{\"reservation_id\":\"$HOLD\"}" | jq -r .id)
+curl -s $B/payments/intents -H "Authorization: Bearer $BUYER" -H 'Idempotency-Key: try-2' \
+  -H 'content-type: application/json' -d "{\"order_id\":\"$ORDER\"}" | jq -r .checkout_url   # open it, or:
+# curl -s localhost:8090/v1/intents/<transaction_id>/outcome -H 'content-type: application/json' -d '{"outcome":"succeed"}'
+curl -s $B/orders/$ORDER -H "Authorization: Bearer $BUYER" | jq -r .status                       # PAID
+```
+
+Payments nobody told us about are found by asking the gateway:
+
+```bash
+uv run python -m scripts.reconcile_payments           # SUCCEEDED: checked 1, fixed 1.
+```
+
+`scripts.expire_reservations` asks too, about buyers who went to pay and never came back, and never releases a ticket without an answer. Give the API and fakepay the same `FAKEPAY_WEBHOOK_SECRET` (32 bytes or more) anywhere but your laptop; staging and production refuse to start with the built-in one.
+
+The races themselves, against four API processes and a database of their own:
 
 ```bash
 uv run pytest tests/concurrency                                              # every race, 3 rounds
 RACE_ROUNDS=20 uv run pytest tests/concurrency/test_reservation_race.py      # the recorded proof
+uv run pytest tests/concurrency/test_payment_race.py                         # orders, webhooks, the clock
 uv run python -m tests.concurrency.report                                    # three locking strategies, compared
 ```
 
@@ -221,7 +254,8 @@ The frontend, from `frontend/`:
 ```bash
 npm test                  # unit tests (Vitest)
 npm run e2e               # browser tests in your Chrome; needs `docker compose up -d db mailpit minio`.
-                          # They start their own API (8001) and dev server (5174) on their own database, ticketloop_e2e
+                          # They start their own API (8001), fakepay (8091) and dev server (5174)
+                          # on their own database, ticketloop_e2e
 npm run typecheck && npm run lint && npm run format:check
 npm run api:types         # after changing the API: regenerate openapi.json and the TypeScript types
 ```
@@ -241,16 +275,20 @@ app/
     listings/              listings, the listing state machine, review, history, the event cascade and expiry
     discovery/             public search: filters, sorts, the event's listings
     reservations/          10-minute holds: the race, cancelling, expiry
+    orders/                orders: one per held ticket, at the listing's price
+    payments/              payment intents, signed webhooks, settling, reconciliation
+    idempotency/           Idempotency-Key: a request sent twice does its work once
     audit/                 the append-only audit log, record() to write to it, and the state machine class
-  infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory); later Redis, RabbitMQ
+  infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory), the payment gateway's client; later Redis, RabbitMQ
   workers/                 background jobs (M9 onward)
+fakepay/                   the pretend payment gateway: its own app, database and checkout page
 tests/
   unit/                    fast, no external services
   integration/             need Postgres
-  concurrency/             real races: four API processes, 100 buyers; report.py compares strategies
+  concurrency/             real races: four API processes, a real fakepay, 100 buyers; report.py compares strategies
 migrations/                Alembic env.py and one file per schema change
 scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi,
-                           expire_listings, expire_reservations, seed_discovery, explain_discovery, databases (throwaway ones), e2e_api
+                           expire_listings, expire_reservations, reconcile_payments, seed_discovery, explain_discovery, databases (throwaway ones), e2e_api
 frontend/                  React + TypeScript app (Vite); each module adds its screens
   src/api/                 typed client; schema.d.ts is generated from the backend
   src/auth/                access token in memory, refresh through the HttpOnly cookie
@@ -259,8 +297,8 @@ frontend/                  React + TypeScript app (Vite); each module adds its s
 .github/workflows/ci.yml   backend tests, frontend checks and browser tests on every push
 docs/                      design documents (below)
 documentation/             one HTML page per finished module for revision and interview prep; open index.html
-docker-compose.yml         Postgres, Mailpit, MinIO, the migrate job, the API
-Dockerfile                 the API image
+docker-compose.yml         Postgres, Mailpit, MinIO, fakepay, the migrate job, the API
+Dockerfile                 the API image, which also runs fakepay
 ```
 
 ## Design docs

@@ -23,6 +23,7 @@ from app.infrastructure.external_providers.email import (
     InMemoryEmailSender,
     SmtpEmailSender,
 )
+from app.infrastructure.payments import FakepayGateway
 from app.infrastructure.storage import S3Storage, StorageError
 
 log = structlog.get_logger(__name__)
@@ -45,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except StorageError as error:
                 log.warning("storage.unavailable", error=str(error))
         yield
+        app.state.payment_gateway.close()
         app.state.engine.dispose()  # close pooled connections cleanly
         log.info("app.shutdown")
 
@@ -55,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.session_factory = create_session_factory(app.state.engine)  # used by get_db
     app.state.email_sender = create_email_sender(settings)
     app.state.storage = S3Storage.from_settings(settings)  # builds clients; no network call
+    app.state.payment_gateway = FakepayGateway.at(settings.fakepay_url)
 
     # Middleware added last runs first. The size limit sits inside the request context, so
     # even a refused upload gets a request ID and an access-log line.
