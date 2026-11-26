@@ -210,20 +210,29 @@ def test_a_purchase_through_the_api_ends_with_the_ticket_in_the_buyers_name(
     assert paid.status_code == 200
     order_id = uuid.UUID(order["id"])
 
+    def told() -> list[str]:
+        with sessions() as db:
+            return sorted(
+                db.scalars(
+                    select(Notification.notification_type).where(Notification.user_id == buyer.id)
+                )
+            )
+
+    # ticket_received follows transfer.completed, one relay pass after the order completes.
     with Worker(broker, "purchase"):
-        relay_until(sessions, publisher, completed(sessions, [order_id]))
+        relay_until(
+            sessions,
+            publisher,
+            lambda: (
+                completed(sessions, [order_id])()
+                and told() == ["payment_succeeded", "ticket_received"]
+            ),
+        )
 
     check_sold_once(sessions, order_id)
     seen = httpx.get(f"{api}/api/v1/orders/{order_id}", headers=headers).json()
     assert seen["status"] == "COMPLETED"
     assert seen["transfer"]["status"] == "COMPLETED"
-    with sessions() as db:
-        kinds = db.scalars(
-            select(Notification.notification_type)
-            .where(Notification.user_id == buyer.id)
-            .order_by(Notification.created_at)
-        ).all()
-        assert sorted(kinds) == ["payment_succeeded", "ticket_received"]
 
 
 def test_a_dead_broker_keeps_every_event_and_a_live_one_gets_them_all(
