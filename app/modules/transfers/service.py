@@ -32,6 +32,7 @@ from sqlalchemy import Text, cast, exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.telemetry import client_span
 from app.infrastructure.database.errors import violated_constraint
 from app.infrastructure.external_providers.tickets import (
     TicketProvider,
@@ -182,7 +183,9 @@ def perform_transfer(
     # No transaction open: the provider may be slow. If this process dies here, the message is
     # delivered again and the provider is asked again with the same key, which is safe.
     try:
-        reference = provider.transfer(request)
+        # Its span is the one marked failed when the provider says no, or does not answer.
+        with client_span("ticket provider transfer", {"ticketloop.attempt": attempt}):
+            reference = provider.transfer(request)
     except TransferUnavailable as error:
         if attempt < MAX_ATTEMPTS:
             _note(sessions, transfer_id, f"try {attempt}: {error}")

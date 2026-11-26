@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     rate_limit_payment_per_minute: int = 10  # per user, payment intents
     rate_limit_search_per_minute: int = 60  # per address
 
+    # Observability (M11). The API serves /metrics itself; the worker and the relay serve
+    # theirs on these ports, 0 meaning not at all (tests, and the drills on a laptop).
+    worker_metrics_port: int = 0
+    relay_metrics_port: int = 0
+    # Traces go to an OTLP endpoint (Jaeger in docker-compose.yml) only when switched on.
+    tracing_enabled: bool = False
+    otlp_endpoint: str = "http://localhost:4318"
+
     @property
     def storage_public_endpoint(self) -> str:
         """The storage host the browser reaches, used to sign download links."""

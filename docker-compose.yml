@@ -1,8 +1,10 @@
 # Local stack. Two ways to use it:
 #   docker compose up --build          everything: Postgres, Mailpit, MinIO, fakepay, RabbitMQ,
-#                                      Redis, migrations, the API (localhost:8000), and the
-#                                      worker, beat and relay that move events and tickets
-#   docker compose up -d db mailpit minio fakepay rabbitmq redis worker beat relay
+#                                      Redis, migrations, the API (localhost:8000), the
+#                                      worker, beat and relay that move events and tickets,
+#                                      and Prometheus, Grafana and Jaeger to watch them
+#   docker compose up -d db mailpit minio fakepay rabbitmq redis worker beat relay \
+#                        prometheus grafana jaeger
 #                                      everything but the API; run that on Windows with
 #                                      uvicorn --reload, and the frontend with npm run dev
 # Values like ${POSTGRES_USER:-ticketloop} come from .env if it exists, else the default.
@@ -110,13 +112,24 @@ services:
     restart: unless-stopped
     command: ["celery", "-A", "app.workers.celery_app", "worker",
               "-Q", "transfers,notifications,maintenance", "--concurrency", "2", "--loglevel", "INFO"]
-    environment: &worker_env
-      DATABASE_URL: &database_url postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/${POSTGRES_DB:-ticketloop}
-      BROKER_URL: amqp://ticketloop:ticketloop@rabbitmq:5672//
-      REDIS_URL: redis://redis:6379/0
-      FAKEPAY_URL: http://fakepay:8090
-      FAKEPAY_WEBHOOK_SECRET: *fakepay_secret
-      LOG_JSON: "true"
+    environment:
+      # What the worker, beat and the relay share; each adds its own below.
+      <<: &worker_env
+        DATABASE_URL: &database_url postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/${POSTGRES_DB:-ticketloop}
+        BROKER_URL: amqp://ticketloop:ticketloop@rabbitmq:5672//
+        REDIS_URL: redis://redis:6379/0
+        FAKEPAY_URL: http://fakepay:8090
+        FAKEPAY_WEBHOOK_SECRET: *fakepay_secret
+        LOG_JSON: "true"
+        TRACING_ENABLED: "true"
+        OTLP_ENDPOINT: &otlp_endpoint http://jaeger:4318
+      # The pool processes write their counters here, and the main process serves their sum
+      # on :9100. Emptied each time the worker starts.
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      WORKER_METRICS_PORT: "9100"
+      # The pretend ticket provider: succeed, or permanent / unknown / retryable to watch a
+      # transfer fail (TICKET_PROVIDER_MODE=permanent docker compose up -d worker).
+      TICKET_PROVIDER_MODE: ${TICKET_PROVIDER_MODE:-succeed}
     depends_on: &after_migrations
       db:
         condition: service_healthy
@@ -143,7 +156,9 @@ services:
     build: .
     restart: unless-stopped
     command: ["python", "-m", "app.workers.relay"]
-    environment: *worker_env
+    environment:
+      <<: *worker_env
+      RELAY_METRICS_PORT: "9101"
     depends_on: *after_migrations
 
   # A one-off job: bring the schema up to date, then exit. Kept out of the API's own startup
@@ -175,6 +190,8 @@ services:
       FAKEPAY_URL: http://fakepay:8090
       FAKEPAY_WEBHOOK_SECRET: *fakepay_secret
       REDIS_URL: redis://redis:6379/0
+      TRACING_ENABLED: "true"
+      OTLP_ENDPOINT: *otlp_endpoint
     ports:
       - "8000:8000"
     depends_on:
@@ -187,8 +204,51 @@ services:
       redis:
         condition: service_healthy
 
+  # ---------------------------------------------------------------- watching it (M11)
+  # Nothing above depends on these: with Jaeger down, spans are dropped and nothing waits.
+
+  # Scrapes the API, the worker, the relay and RabbitMQ every 5 s. http://localhost:9090
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # the API, whether it runs here or on Windows
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+
+  # The dashboard, provisioned from files: http://localhost:3000 opens on it, no login needed
+  # to look. Log in as admin (password below) to change it; changes made in the UI are not
+  # saved back to the file.
+  grafana:
+    image: grafana/grafana:12.2.1
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-ticketloop}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/ticketloop.json
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+  # Traces, kept in memory: http://localhost:16686. The API, worker and relay send them over
+  # OTLP/HTTP to :4318, which is published so an API run on Windows can send them too.
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0
+    ports:
+      - "16686:16686" # the UI
+      - "4318:4318" # OTLP over HTTP
+
 volumes:
   pgdata:
   miniodata:
   fakepaydata:
   rabbitmqdata:
+  prometheusdata:

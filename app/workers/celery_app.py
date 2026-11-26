@@ -21,11 +21,14 @@ a broker with a running development worker without either eating the other's mes
 """
 
 from celery import Celery
-from celery.signals import setup_logging, worker_init
+from celery.signals import setup_logging, worker_init, worker_process_init
 from kombu import Exchange, Queue
+from opentelemetry.instrumentation.celery import CeleryInstrumentor
 
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
+from app.core.metrics import serve_worker_metrics
+from app.core.telemetry import WORKER, configure_tracing
 
 QUEUES = ("transfers", "notifications", "maintenance")
 
@@ -113,5 +116,22 @@ def _set_up_logging(**_: object) -> None:
 
 
 @worker_init.connect
-def _on_worker_start(**_: object) -> None:
+def _serve_metrics(**_: object) -> None:
+    """A receiver of its own: Celery logs a start-up receiver's error and carries on, so a
+    broker that is not up yet (after a reboot Docker starts everything at once) fails the
+    dead-letter declaration below without also leaving the worker with no metrics."""
+    serve_worker_metrics(get_settings().worker_metrics_port)
+
+
+@worker_init.connect
+def _declare_dead_letter_queues(**_: object) -> None:
     declare_dead_letter_queues(celery_app, get_settings())
+
+
+@worker_process_init.connect
+def _on_pool_process_start(**_: object) -> None:
+    """In each prefork pool process, after the fork: tracing is set up where the tasks run,
+    so its export thread is the process's own. Each task then runs in the trace its message
+    carries."""
+    if configure_tracing(get_settings(), WORKER):
+        CeleryInstrumentor().instrument()

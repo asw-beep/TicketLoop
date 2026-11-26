@@ -16,8 +16,10 @@ from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.metrics import expose as expose_metrics
 from app.core.middleware import RequestContextMiddleware
-from app.infrastructure.database.engine import create_db_engine
+from app.core.telemetry import API, configure_tracing, instrument_app, instrument_engine
+from app.infrastructure.database.engine import create_db_engine, create_scrape_engine
 from app.infrastructure.database.session import create_session_factory
 from app.infrastructure.external_providers.email import (
     EmailSender,
@@ -52,6 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if app.state.redis is not None:
             app.state.redis.close()
         app.state.engine.dispose()  # close pooled connections cleanly
+        app.state.metrics_engine.dispose()
         log.info("app.shutdown")
 
     app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
@@ -59,6 +62,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = create_db_engine(settings)
     app.state.session_factory = create_session_factory(app.state.engine)  # used by get_db
+    # What /metrics reads from Postgres goes through a connection of its own (see engine.py).
+    app.state.metrics_engine = create_scrape_engine(settings)
+    app.state.metrics_sessions = create_session_factory(app.state.metrics_engine)
     app.state.email_sender = create_email_sender(settings)
     app.state.storage = S3Storage.from_settings(settings)  # builds clients; no network call
     app.state.payment_gateway = FakepayGateway.at(settings.fakepay_url)
@@ -70,6 +76,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     app.include_router(build_api_router(settings.api_prefix))
+    expose_metrics(app)
+    if configure_tracing(settings, API):
+        instrument_app(app)
+        instrument_engine(app.state.engine)
     return app
 
 

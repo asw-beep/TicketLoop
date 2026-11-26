@@ -162,3 +162,89 @@ def test_busy_for_ever() -> None:
 def test_refused_and_unknown(mode: str, error: type[Exception]) -> None:
     with pytest.raises(error):
         FakeTicketProvider(mode).transfer(request())  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------- counted (M11)
+
+
+def worker_tasks(outcome: str) -> float:
+    from prometheus_client import REGISTRY
+
+    found = REGISTRY.get_sample_value(
+        "worker_tasks_total", {"task": FakeTask.name, "outcome": outcome}
+    )
+    return found or 0.0
+
+
+@pytest.mark.parametrize(
+    ("outcome", "raised"),
+    [("done", None), ("retry", Retry(when=1.0)), ("rejected", Reject("poison", requeue=False))],
+)
+def test_every_delivery_is_counted_by_how_it_ended(outcome: str, raised: Exception | None) -> None:
+    before = worker_tasks(outcome)
+
+    def work() -> None:
+        if raised is not None:
+            raise raised
+
+    if raised is None:
+        tasks._counted(FakeTask(retries=0), work)  # type: ignore[arg-type]
+    else:
+        with pytest.raises(type(raised)):
+            tasks._counted(FakeTask(retries=0), work)  # type: ignore[arg-type]
+
+    assert worker_tasks(outcome) == before + 1
+
+
+def test_every_line_a_task_logs_names_its_event_and_order() -> None:
+    # Bound when Celery starts the task and unbound after it has logged how the task ended, so
+    # Celery's own "Task ... succeeded" line names the order too.
+    import structlog
+    from celery.signals import task_postrun, task_prerun
+
+    order_id, event_id = str(uuid.uuid4()), str(uuid.uuid4())
+    message = {"id": event_id, "type": "transfer.initiated", "payload": {"order_id": order_id}}
+
+    task_prerun.send(sender=FakeTask, task_id="t-1", task=FakeTask, args=[message], kwargs={})
+    during = structlog.contextvars.get_contextvars()
+    task_postrun.send(sender=FakeTask, task_id="t-1", task=FakeTask, args=[message], kwargs={})
+
+    assert during["order_id"] == order_id
+    assert during["event_id"] == event_id
+    assert "order_id" not in structlog.contextvars.get_contextvars()
+
+
+@pytest.mark.parametrize("args", [[], ["not a message"], [{"id": 1, "payload": "x"}], None])
+def test_a_task_without_a_readable_event_logs_without_ids(args: object) -> None:
+    import structlog
+    from celery.signals import task_postrun, task_prerun
+
+    task_prerun.send(sender=FakeTask, task_id="t-2", task=FakeTask, args=args, kwargs={})
+    during = structlog.contextvars.get_contextvars()
+    task_postrun.send(sender=FakeTask, task_id="t-2", task=FakeTask, args=args, kwargs={})
+
+    assert "order_id" not in during
+    assert structlog.contextvars.get_contextvars() == {}
+
+
+def test_a_worker_that_starts_before_the_broker_still_serves_its_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # After a reboot Docker starts every container at once, and the worker can start before
+    # RabbitMQ answers. Celery logs a start-up receiver's error and carries on, so declaring
+    # the dead-letter queues failing must not also skip emptying and serving the metrics.
+    from celery.signals import worker_init
+
+    from app.core.config import get_settings
+    from app.workers import celery_app as worker
+
+    def broker_down(*_: object) -> None:
+        raise OSError("connection refused")
+
+    served: list[int] = []
+    monkeypatch.setattr(worker, "declare_dead_letter_queues", broker_down)
+    monkeypatch.setattr(worker, "serve_worker_metrics", served.append)
+
+    worker_init.send(sender=None)
+
+    assert served == [get_settings().worker_metrics_port]

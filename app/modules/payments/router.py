@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from app.api.rate_limits import per_user
 from app.core.dependencies import AppSettings
 from app.core.exceptions import AppError
+from app.core.metrics import PAYMENT_EVENTS, WEBHOOK_SECONDS, payment_type
 from app.infrastructure.database.session import DbSession
 from app.infrastructure.payments import GatewayRefused, GatewayUnavailable, PaymentGateway
 from app.modules.idempotency import service as idempotency
@@ -122,16 +123,25 @@ def receive_webhook(
 ) -> WebhookAck:
     """For the gateway only, which signs what it sends. 200 means "we have it", for a repeat
     too; anything else and it sends the event again."""
-    if provider != PROVIDER:
-        raise UnknownProviderError()
-    webhooks.verify(
-        settings.fakepay_webhook_secret.get_secret_value(),
-        body,
-        request.headers.get(webhooks.SIGNATURE_HEADER),
-        request.headers.get(webhooks.TIMESTAMP_HEADER),
-        webhooks.now(),
-    )
-    webhooks.receive(db, webhooks.parse(body))
+    with WEBHOOK_SECONDS.time():
+        try:
+            if provider != PROVIDER:
+                raise UnknownProviderError()
+            webhooks.verify(
+                settings.fakepay_webhook_secret.get_secret_value(),
+                body,
+                request.headers.get(webhooks.SIGNATURE_HEADER),
+                request.headers.get(webhooks.TIMESTAMP_HEADER),
+                webhooks.now(),
+            )
+            event = webhooks.parse(body)
+        except AppError:
+            PAYMENT_EVENTS.labels("unknown", "rejected").inc()
+            raise
+        outcome = webhooks.receive(db, event)
+        PAYMENT_EVENTS.labels(
+            payment_type(event.type), outcome.value.lower() if outcome else "duplicate"
+        ).inc()
     return WebhookAck()
 
 

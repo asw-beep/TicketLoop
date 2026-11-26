@@ -13,10 +13,13 @@ from typing import Any
 
 import structlog
 from celery import Celery
+from opentelemetry.instrumentation.celery import CeleryInstrumentor
+from prometheus_client import start_http_server
 from sqlalchemy.exc import OperationalError
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.telemetry import RELAY, configure_tracing, instrument_engine
 from app.infrastructure.database.engine import create_db_engine
 from app.infrastructure.database.session import create_session_factory
 from app.modules.outbox.relay import BATCH, PublishError, RelayReport, relay_once
@@ -55,7 +58,12 @@ def main(argv: list[str] | None = None) -> int:
 
     settings = get_settings()
     configure_logging(level=settings.log_level, json_logs=settings.log_json)
+    if settings.relay_metrics_port:
+        start_http_server(settings.relay_metrics_port)  # outbox_published_total and the rest
     engine = create_db_engine(settings)
+    if configure_tracing(settings, RELAY):
+        CeleryInstrumentor().instrument()  # puts each publish's trace in its task's headers
+        instrument_engine(engine)
     publisher = CeleryPublisher(create_celery(settings))
     sessions = create_session_factory(engine)
     try:

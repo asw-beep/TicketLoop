@@ -27,9 +27,10 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 
 # Never run the server as root inside the container. /data is where fakepay keeps its
-# SQLite file; a new volume mounted there takes over this owner.
+# SQLite file; a new volume mounted there takes over this owner. /tmp/prometheus is where the
+# worker's pool processes write their metrics.
 RUN useradd --create-home --uid 10001 appuser \
-    && install -d -o appuser /data
+    && install -d -o appuser /data /tmp/prometheus
 USER appuser
 
 ENV PATH="/app/.venv/bin:$PATH"

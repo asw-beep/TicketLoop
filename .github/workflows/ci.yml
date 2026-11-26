@@ -1,9 +1,10 @@
-# Runs on every push and pull request, three jobs side by side:
-#   test       the backend: lint, migrations, every test against a real Postgres 17 and MinIO
+# Runs on every push and pull request, five jobs side by side:
+#   test       the backend: lint, migrations, every test against Postgres 17, MinIO, RabbitMQ
+#              and Redis
 #   frontend   the React app: format, lint, types, unit tests, build, and API types in sync
-#   e2e        the browser tests: Chrome clicking through Vite, the API, Postgres, Mailpit and MinIO
-# Later modules add the services they need (Redis, RabbitMQ, fakepay, the worker), and M11 adds an
-# image build with a health check, Bandit, pip-audit and npm audit.
+#   e2e        the browser tests: Chrome clicking through Vite, the API, its worker and relay
+#   image      the Docker image built, migrated and started with production settings
+#   security   Bandit, pip-audit and npm audit: known vulnerabilities fail the build
 name: CI
 
 on:
@@ -254,3 +255,94 @@ jobs:
             frontend/playwright-report
             frontend/test-results
           retention-days: 7
+
+  # The image docker compose runs, started the way a deployment would start it: production
+  # settings (the built-in development secrets are refused there), its own migration, and its
+  # own user, never root.
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ticketloop
+          POSTGRES_PASSWORD: ticketloop
+          POSTGRES_DB: ticketloop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ticketloop -d ticketloop"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg://ticketloop:ticketloop@localhost:5432/ticketloop
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the image
+        run: docker build -t ticketloop:ci .
+
+      # --network host: the container reaches the Postgres service on localhost, as the job does.
+      - name: Migrate with the image
+        run: docker run --rm --network host -e DATABASE_URL ticketloop:ci alembic upgrade head
+
+      - name: Start the API with production settings
+        run: |
+          docker run -d --name api --network host -e DATABASE_URL             -e ENVIRONMENT=production             -e JWT_SECRET_KEY="$(openssl rand -hex 32)"             -e STORAGE_SECRET_KEY="$(openssl rand -hex 32)"             -e FAKEPAY_WEBHOOK_SECRET="$(openssl rand -hex 32)"             ticketloop:ci
+
+      - name: Wait for its health check
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8000/api/v1/health && exit 0
+            sleep 1
+          done
+          docker logs api
+          exit 1
+
+      - name: It runs as uid 10001, not root
+        run: test "$(docker exec api id -u)" = "10001"
+
+      - name: Its logs, when something above failed
+        if: failure()
+        run: docker logs api
+
+  # Known vulnerabilities and risky code fail the build.
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.2"
+          enable-cache: true
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # The app and fakepay; tests and scripts never ship. A high-severity finding fails.
+      - name: Bandit
+        run: uvx bandit==1.9.4 -r app fakepay --severity-level high
+
+      # Exactly the packages the image installs, pinned and hashed by uv.lock. pip-audit gives
+      # no severities, so any known vulnerability fails.
+      - name: pip-audit
+        run: |
+          uv export --locked --no-dev --no-emit-project --format requirements.txt             -o requirements-runtime.txt
+          uvx pip-audit==2.10.1 -r requirements-runtime.txt --require-hashes --disable-pip             --progress-spinner off
+
+      # Every package in package-lock.json, the build tools included. A high or critical
+      # advisory fails; a moderate one is left for `npm audit fix` in its own time.
+      - name: npm audit
+        working-directory: frontend
+        run: npm audit --audit-level=high

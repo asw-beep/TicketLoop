@@ -1,0 +1,27 @@
+# What Prometheus scrapes, every 5 s. Local only: in a deployment /metrics sits behind the
+# network edge, not on the public internet.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # The API, on the host's port 8000: the same address whether it runs in Docker or on
+  # Windows with uvicorn --reload.
+  - job_name: api
+    static_configs:
+      - targets: ["host.docker.internal:8000"]
+
+  # The Celery worker's main process, serving the sum of its pool processes' counters.
+  - job_name: worker
+    static_configs:
+      - targets: ["worker:9100"]
+
+  - job_name: relay
+    static_configs:
+      - targets: ["relay:9101"]
+
+  # Queue depths, one series per queue.
+  - job_name: rabbitmq
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: ["rabbitmq:15692"]

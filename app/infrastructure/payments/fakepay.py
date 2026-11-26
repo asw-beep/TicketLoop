@@ -1,8 +1,16 @@
-"""The client for fakepay, the pretend gateway in fakepay/."""
+"""The client for fakepay, the pretend gateway in fakepay/.
+
+Each call is a CLIENT span named by its route, never by an id in its path, and carries the
+trace on in a `traceparent` header.
+"""
+
+from collections.abc import Mapping
+from typing import Any
 
 import httpx2 as httpx
 from pydantic import BaseModel, ValidationError
 
+from app.core import telemetry
 from app.infrastructure.payments.base import (
     GatewayIntent,
     GatewayRefused,
@@ -61,27 +69,40 @@ class FakepayGateway:
         return _parse(response)
 
     def by_transaction(self, transaction_id: str) -> GatewayIntent | None:
-        return self._look_up(f"/v1/intents/{transaction_id}")
+        return self._look_up(f"/v1/intents/{transaction_id}", route="/v1/intents/{transaction_id}")
 
     def by_idempotency_key(self, idempotency_key: str) -> GatewayIntent | None:
         return self._look_up("/v1/intents", idempotency_key=idempotency_key)
 
-    def _look_up(self, path: str, **params: str) -> GatewayIntent | None:
-        response = self._send("GET", path, params=params)
+    def _look_up(self, path: str, route: str | None = None, **params: str) -> GatewayIntent | None:
+        response = self._send("GET", path, route=route, params=params)
         if response.status_code == 404:
             return None
         if response.status_code >= 400:
             raise GatewayUnavailable(f"fakepay answered {response.status_code} to a lookup")
         return _parse(response)
 
-    def _send(self, method: str, path: str, **kwargs: object) -> httpx.Response:
-        try:
-            response = self._client.request(method, path, **kwargs)
-        except httpx.HTTPError as error:  # timeouts and broken connections included
-            raise GatewayUnavailable(f"fakepay did not answer: {error!r}") from error
-        if response.status_code >= 500 or response.status_code in _TRY_LATER:
-            raise GatewayUnavailable(f"fakepay answered {response.status_code}")
-        return response
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        route: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """`route` is the path as a template, when the path has an id in it."""
+        attributes = {"http.request.method": method, "url.template": route or path}
+        with telemetry.client_span(f"fakepay {method} {route or path}", attributes) as span:
+            sent = {**(headers or {}), **telemetry.current_context_headers()}
+            try:
+                response = self._client.request(method, path, headers=sent, **kwargs)
+            except httpx.HTTPError as error:  # timeouts and broken connections included
+                raise GatewayUnavailable(f"fakepay did not answer: {error!r}") from error
+            span.set_attribute("http.response.status_code", response.status_code)
+            if response.status_code >= 500 or response.status_code in _TRY_LATER:
+                raise GatewayUnavailable(f"fakepay answered {response.status_code}")
+            return response
 
 
 def _parse(response: httpx.Response) -> GatewayIntent:

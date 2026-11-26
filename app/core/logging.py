@@ -7,18 +7,32 @@ Two kinds of log calls exist in this process:
 Both are routed through one stdlib handler whose formatter runs structlog's processors, so
 both come out in the same JSON shape. `merge_contextvars` copies whatever the request
 middleware bound (the request ID) into every line logged while that request is running.
+`add_correlation_id` adds the trace id of the span the line was written in, when there is one:
+the same value in the API's, the relay's and the worker's lines for one purchase.
 """
 
 import logging
 
 import structlog
-from structlog.typing import Processor
+from opentelemetry import trace
+from structlog.typing import EventDict, Processor, WrappedLogger
 
 _HANDLER_NAME = "ticketloop"
+
+
+def add_correlation_id(_: WrappedLogger, __: str, event_dict: EventDict) -> EventDict:
+    """The current trace id as `correlation_id`, the id to open in Jaeger. None outside a
+    trace, or with tracing off."""
+    context = trace.get_current_span().get_span_context()
+    if context.is_valid:
+        event_dict.setdefault("correlation_id", format(context.trace_id, "032x"))
+    return event_dict
+
 
 # Run on every log line, whether it came from structlog or from the stdlib logging module.
 _SHARED_PROCESSORS: list[Processor] = [
     structlog.contextvars.merge_contextvars,
+    add_correlation_id,
     structlog.stdlib.add_log_level,
     structlog.stdlib.add_logger_name,
     structlog.processors.TimeStamper(fmt="iso", utc=True),

@@ -22,6 +22,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from app.core.telemetry import current_context_headers
 from app.modules.outbox.models import OutboxEvent, ProcessedEvent
 
 
@@ -61,13 +62,15 @@ def emit(
     event_type: EventType,
     payload: Mapping[str, Any],
 ) -> uuid.UUID:
-    """Add an event to the caller's transaction. Never commits."""
+    """Add an event to the caller's transaction. Never commits. The current trace goes with
+    it, so the relay and the worker continue the trace that caused it."""
     event = OutboxEvent(
         id=uuid.uuid4(),
         aggregate_type=aggregate_type,
         aggregate_id=aggregate_id,
         event_type=str(event_type),
         payload={key: _json_safe(value) for key, value in payload.items()},
+        headers=current_context_headers(),
     )
     db.add(event)
     db.flush()

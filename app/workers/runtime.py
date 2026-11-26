@@ -9,6 +9,7 @@ from functools import cache
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
+from app.core.telemetry import instrument_engine
 from app.infrastructure.database.engine import create_db_engine
 from app.infrastructure.database.session import create_session_factory
 from app.infrastructure.external_providers.tickets import FakeTicketProvider, TicketProvider
@@ -21,7 +22,10 @@ def sessions() -> sessionmaker[Session]:
     """Their commits bump the cache like the API's: a transfer that sells a listing, or the
     expiry job, changes what search shows."""
     settings = get_settings()
-    factory = create_session_factory(create_db_engine(settings))
+    engine = create_db_engine(settings)
+    if settings.tracing_enabled:
+        instrument_engine(engine)
+    factory = create_session_factory(engine)
     factory.configure(info={"cache": search_cache()})
     return factory
 

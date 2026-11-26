@@ -43,6 +43,16 @@ Every endpoint the backend will expose, with who may call it, what it takes, wha
 | --- | --- | --- | --- | --- |
 | `GET /health` | Public | — | 200 `{"status": "ok", "checks": {"database": "ok"}}` | 503 same shape with `"unavailable"` |
 
+## Metrics (M11, built)
+
+| Method and path | Who | Request | Success | Errors |
+| --- | --- | --- | --- | --- |
+| `GET /metrics` | Public; behind the network edge when deployed | — | 200 `text/plain`, Prometheus's text format | — |
+
+Outside `/api/v1`, like Prometheus expects, and not in the OpenAPI document. Per route: `http_requests_total{handler, method, status}` (status grouped as `2xx`, `4xx`, `5xx`) and `http_request_duration_seconds` buckets; `handler` is the route's template, or `none` for a path that matches no route. Then `reservation_attempts_total{result}`, `payment_events_total{type, outcome}`, `payment_webhook_seconds`, `outbox_published_total`, `outbox_publish_failures_total`, `worker_tasks_total{task, outcome}` (from the worker), `outbox_backlog` and `outbox_oldest_unpublished_seconds` (read from Postgres when scraped, on a connection of its own so a busy pool never holds the scrape up, with a 1-second limit, and left out when Postgres is down), `db_pool_checked_out_connections`, `cache_requests_total{outcome}`, `cache_bumps_owed_total` and `rate_limit_decisions_total{decision}`. Every label value comes from a fixed list; none is an id.
+
+With tracing on, every request but `/metrics` and `/health` is a trace, and a `traceparent` header on the request continues the caller's trace.
+
 ## Authentication (M3, built)
 
 | Method and path | Who | Request | Success | Errors |
@@ -232,4 +242,4 @@ Content-Type: application/problem+json
 
 ## Endpoints added to `plan.md` section 10
 
-`plan.md` lists the core paths; these were added because the features need them: `/health`, password reset and change, all `/admin/events` (including `GET /admin/events`, which lists every status), `/admin/providers` and `/admin/tickets` routes, ticket documents (upload, list and link), `/listings/me` (with its `ticket_id` filter), `/listings/{id}/submit`, `/listings/{id}/history`, `GET /admin/listings` (every status, with `status` and `ticket_id` filters), and `/reservations/me`. Cut on 23 Nov 2026 with the slim roadmap: interests and allocation, refunds, disputes, transfer callbacks, retry and abandon, reconciliation routes, the history timeline, and admin user and audit routes.
+`plan.md` lists the core paths; these were added because the features need them: `/health`, `/metrics`, password reset and change, all `/admin/events` (including `GET /admin/events`, which lists every status), `/admin/providers` and `/admin/tickets` routes, ticket documents (upload, list and link), `/listings/me` (with its `ticket_id` filter), `/listings/{id}/submit`, `/listings/{id}/history`, `GET /admin/listings` (every status, with `status` and `ticket_id` filters), and `/reservations/me`. Cut on 23 Nov 2026 with the slim roadmap: interests and allocation, refunds, disputes, transfer callbacks, retry and abandon, reconciliation routes, the history timeline, and admin user and audit routes.

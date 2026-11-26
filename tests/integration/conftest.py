@@ -105,6 +105,7 @@ def db_app(test_settings: Settings, db_connection: Connection) -> FastAPI:
     factory = create_session_factory(db_connection)
     factory.configure(join_transaction_mode="create_savepoint")
     app.state.session_factory = factory
+    app.state.metrics_sessions = factory  # the backlog /metrics reads, from the same transaction
     # Uploads go to a dict, not MinIO; tests that need the real server swap in s3_storage.
     app.state.storage = InMemoryStorage()
     return app

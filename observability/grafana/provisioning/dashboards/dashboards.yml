@@ -1,0 +1,11 @@
+# Load every dashboard file in the mounted folder. The files are the source: an edit made
+# in the UI lasts until Grafana restarts.
+apiVersion: 1
+
+providers:
+  - name: ticketloop
+    folder: Ticket Loop
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /var/lib/grafana/dashboards

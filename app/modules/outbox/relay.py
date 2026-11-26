@@ -26,6 +26,8 @@ import structlog
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.metrics import OUTBOX_FAILURES, OUTBOX_PUBLISHED
+from app.core.telemetry import continued
 from app.modules.outbox.models import OutboxEvent
 from app.modules.outbox.service import CONSUMERS, Consumer, message
 
@@ -61,6 +63,14 @@ def backoff(retry_count: int, rand: Callable[[], float] = random.random) -> time
     return timedelta(seconds=ceiling * (0.5 + rand() / 2))
 
 
+def _span_attributes(event: OutboxEvent) -> dict[str, str]:
+    found = {"ticketloop.event_id": str(event.id)}
+    order_id = event.payload.get("order_id") if isinstance(event.payload, dict) else None
+    if isinstance(order_id, str):
+        found["ticketloop.order_id"] = order_id
+    return found
+
+
 def relay_once(
     sessions: sessionmaker[Session], publisher: Publisher, *, batch: int = BATCH
 ) -> RelayReport:
@@ -77,9 +87,14 @@ def relay_once(
         report.claimed = len(events)
         for event in events:
             try:
-                for consumer in CONSUMERS.get(event.event_type, ()):
-                    publisher.publish(consumer, message(event))
+                # In the trace the event was emitted in; Celery carries it on to the worker.
+                with continued(
+                    event.headers, f"outbox publish {event.event_type}", _span_attributes(event)
+                ):
+                    for consumer in CONSUMERS.get(event.event_type, ()):
+                        publisher.publish(consumer, message(event))
             except PublishError as error:
+                OUTBOX_FAILURES.inc()
                 event.retry_count += 1
                 event.next_attempt_at = func.now() + backoff(event.retry_count)
                 event.last_error = str(error)[:1000]
@@ -95,4 +110,5 @@ def relay_once(
                 break
             event.published_at = func.now()
             report.published += 1
+            OUTBOX_PUBLISHED.inc()
     return report

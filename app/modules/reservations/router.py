@@ -6,6 +6,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response
 
 from app.api.rate_limits import per_user
+from app.core.exceptions import AppError
+from app.core.metrics import RESERVATION_ATTEMPTS, reservation_result
 from app.core.pagination import Cursor, Limit, Page
 from app.infrastructure.database.session import DbSession
 from app.modules.identity.dependencies import CurrentUser
@@ -30,7 +32,12 @@ def reserve(
 ) -> ReservationOut:
     """Hold an ACTIVE listing for 10 minutes while you pay. Of many buyers at once exactly one
     gets it. Asking again while you hold it returns the hold you have."""
-    reservation, created = service.reserve(db, listing_id, user)
+    try:
+        reservation, created = service.reserve(db, listing_id, user)
+    except AppError as error:
+        RESERVATION_ATTEMPTS.labels(reservation_result(error.code)).inc()
+        raise
+    RESERVATION_ATTEMPTS.labels("reserved" if created else "already_yours").inc()
     if not created:
         response.status_code = 200
     return ReservationOut.model_validate(reservation)

@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M11 Observability</title>
+  <meta name="description" content="TicketLoop M11: Prometheus metrics with bounded labels, OpenTelemetry traces carried through the transactional outbox and RabbitMQ into the Celery worker, the trace id on every log line, Grafana and Jaeger in Compose, and a CI that starts the image and fails on known vulnerabilities. How it works and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Observability and delivery</h1>
+      <p class="ticket__summary">When a purchase goes wrong, nobody asks whether the server is up. They ask what happened to this buyer's order. So I made every part of the system say what it did in a way that can be followed: metrics for how much and how fast, a trace for one purchase's path from the API through the queue into the worker, and log lines that name the order and the trace. And CI now builds the image that ships, starts it the way a deployment would, and fails on known vulnerabilities.</p>
+      <p class="ticket__fineprint">Done when: one failed purchase can be found in the logs by its order id, opened as a trace that crosses RabbitMQ, and its failing step pointed at. I did exactly that against the Docker stack: grep the worker's logs for the order, take the <code>correlation_id</code> from the error line, open it in Jaeger. The trace holds the webhook, the relay's publishes and the worker's tasks, 79 spans from three services, and one span marked as the error: the ticket provider refusing.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M11</span>
+      <span class="ticket__days">26 Nov</span>
+      <span class="stamp">Done<br>26 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">Metrics first. Prometheus counters and histograms where things happen: every request by its route template, reservations by result, payment webhooks by type and outcome, worker tasks by how they ended, the outbox backlog. Every label takes its value from a short fixed list, so a forged webhook or a made-up path can't create new series. A Grafana dashboard, provisioned from files in the repository, shows requests, errors and p50, p95 and p99 per route next to the purchase flow and the queues.</p>
+        <p class="pitch">Then traces, with OpenTelemetry. The API, the SQL statements, the relay and the Celery worker each make spans, and they join into one trace per purchase. The hard part is the outbox: the request commits and returns before its event is even published, so nothing ties the two together. I store the request's trace context in the outbox row, in the same <code>INSERT</code> as the event. The relay publishes inside a span that continues it, and Celery carries it in the message to the worker.</p>
+        <p class="pitch">Last, logs and delivery. Every log line written inside a span carries the trace id as <code>correlation_id</code>, and a worker's lines name the event's order. That is the whole walk: order id to log line, log line to trace, trace to the red span. CI gained two jobs: one builds the image, migrates with it and starts it with production settings as uid 10001 until its health check answers; the other runs Bandit, pip-audit and npm audit and fails on what they find.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">The metrics</span><span class="built__note">Counters and histograms in prometheus-client's registry, and <code>/metrics</code> from prometheus-fastapi-instrumentator: request counts and latency per route template, status grouped as 2xx, 4xx, 5xx, and a path that matches no route counted as <code>none</code>.</span><code>app/core/metrics.py</code> <code>app/main.py</code></li>
+          <li><span class="built__what">Counted where it happens</span><span class="built__note">The reserve route counts <code>reserved</code>, <code>already_yours</code> or the refusal's problem code; the webhook counts its type and outcome and times itself; the relay counts what it published and what the broker refused; each consumer task counts <code>done</code>, <code>retry</code> or <code>rejected</code>.</span><code>app/modules/reservations/router.py</code> <code>app/modules/payments/router.py</code> <code>app/modules/outbox/relay.py</code> <code>app/workers/tasks.py</code></li>
+          <li><span class="built__what">Read when Prometheus asks</span><span class="built__note">The outbox backlog and the age of its oldest event (one indexed query with a 1-second limit, on a connection of its own so a busy pool never holds a scrape up, left out when Postgres is down), connections checked out of the pool, and M10's cache and rate-limit counts.</span><code>app/core/metrics.py</code></li>
+          <li><span class="built__what">The worker's numbers</span><span class="built__note">Celery's pool processes each write their counters to files in <code>PROMETHEUS_MULTIPROC_DIR</code>; the main process serves the sum on port 9100, and empties the folder when it starts. The relay serves its own on 9101.</span><code>app/workers/celery_app.py</code> <code>app/workers/relay.py</code></li>
+          <li><span class="built__what">Tracing</span><span class="built__note"><code>configure_tracing()</code> sets up OTLP export in batches, only with <code>TRACING_ENABLED=true</code>. The FastAPI instrumentation makes a server span per request; my own listener on SQLAlchemy's cursor events makes a span per statement run inside a trace.</span><code>app/core/telemetry.py</code></li>
+          <li><span class="built__what">The trace through the outbox</span><span class="built__note"><code>emit()</code> stores <code>current_context_headers()</code> in the row. The relay publishes each event inside <code>continued(row.headers, ...)</code>; empty or broken headers start a new trace, never an error. Celery's instrumentation takes it from there, in the relay and in each pool process.</span><code>app/modules/outbox/service.py</code> <code>app/modules/outbox/relay.py</code> <code>app/workers/celery_app.py</code></li>
+          <li><span class="built__what">Calls to other systems</span><span class="built__note">Each fakepay call is a client span named by its route, never by the id in its path, and sends <code>traceparent</code>. The ticket provider call is a client span too; a refusal, an unknown outcome or a busy answer is recorded on it as the error.</span><code>app/infrastructure/payments/fakepay.py</code> <code>app/modules/transfers/service.py</code></li>
+          <li><span class="built__what">Logs that name the trace and the order</span><span class="built__note">A structlog processor adds the current trace id as <code>correlation_id</code>. Celery's <code>task_prerun</code> binds the event's ids (<code>event_id</code>, <code>order_id</code>, <code>transfer_id</code> and the rest) and <code>task_postrun</code> unbinds them, so even Celery's own "Task succeeded" line names the order.</span><code>app/core/logging.py</code> <code>app/workers/tasks.py</code></li>
+          <li><span class="built__what">Prometheus, Grafana, Jaeger</span><span class="built__note">Three pinned images in Compose. Prometheus scrapes the API, the worker, the relay and RabbitMQ's per-queue metrics; Grafana opens on the dashboard; Jaeger keeps traces in memory. Nothing in the shop waits for any of them.</span><code>docker-compose.yml</code> <code>observability/</code></li>
+          <li><span class="built__what">Delivery in CI</span><span class="built__note">An <code>image</code> job (build, migrate, start with production settings and generated secrets, health 200, uid 10001) and a <code>security</code> job (Bandit at high severity, pip-audit on the locked runtime packages, <code>npm audit --audit-level=high</code>).</span><code>.github/workflows/ci.yml</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">One failed purchase, from its order id to the failing step</h2>
+      <div class="section__body">
+        <p>The provider set to refuse (<code>TICKET_PROVIDER_MODE=permanent</code>), one ticket bought through the API and fakepay's checkout, and then the walk someone on call would take.</p>
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>The buyer pays</strong><p>fakepay posts the webhook. The API's server span starts a new trace, since fakepay sends no <code>traceparent</code>. The handler settles the payment, and <code>emit()</code> writes <code>payment.succeeded</code> with <code>{"traceparent": "00-08403b20…-…-01"}</code> in its headers, in the same transaction.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>The relay publishes it</strong><p>A moment later (34 ms this time; at most a second, the relay's pause between passes), in another process, the relay claims the row and opens <code>outbox publish payment.succeeded</code> from those headers: a child of the webhook's span. It sends two tasks, start the transfer and notify the buyer, and Celery's instrumentation writes the context into each message.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The worker starts the transfer</strong><p><code>run/transfers.start</code> continues the trace from the message. Its own <code>emit()</code>, <code>transfer.initiated</code>, stores the same trace, so the next publish and <code>run/transfers.perform</code> are in it too.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>The provider refuses</strong><p>The <code>ticket provider transfer</code> span records <code>TransferRefused</code> and is marked as the error. The transfer and the order go to review, and the worker logs <code>transfer.needs_review</code> at error level, with the order id and the trace id.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>Finding it</strong><p><code>docker compose logs worker | grep &lt;order id&gt;</code> gives five lines, all with the same <code>correlation_id</code>, one of them the error with its reason. Opened in Jaeger: 79 spans from three services, one error, the provider call. Jaeger also finds it from the order alone: tag <code>ticketloop.order_id</code>.</p></div></li>
+        </ol>
+<pre><code><span class="c"># the worker's error line, one JSON object per line</span>
+{"transfer_id": "645a50f0…", "reason": "refused: the provider refused: ticket not transferable",
+ "event": "transfer.needs_review", "order_id": "6869df23-d9bc-40f4-9d9d-78cc0359155b",
+ "correlation_id": "08403b20745a7b0161d8edac5d403d85", "level": "error", ...}
+
+<span class="c"># app/modules/outbox/relay.py: each event published in the trace it was emitted in</span>
+with continued(event.headers, f"outbox publish {event.event_type}", attributes):
+    for consumer in CONSUMERS.get(event.event_type, ()):
+        publisher.publish(consumer, message(event))</code></pre>
+        <h3>Why the trace goes into the outbox row</h3>
+        <p>Without it, the trace would end at the webhook's response. The relay runs on its own schedule, in its own process, and starts from a row in a table: it has no idea which request wrote it. The row is the only thing the two share, so the context has to travel in it. Writing it in the same <code>INSERT</code> as the event means it exists exactly when the event does, which is the outbox's whole point. And Celery's instrumentation already knows how to carry a context through a message. All the relay has to do is publish inside a span with the right parent.</p>
+        <h3>The trade-off: labels from fixed lists</h3>
+        <p>A metric label is forever: every distinct value is a new time series that Prometheus stores and searches. A route's real path has ids in it, a listing per series, without end; a webhook's event type is whatever the sender wrote. So labels only take values from short lists in the code: the route template, the known problem codes or <code>other</code>, the known event types or <code>unknown</code>. What that costs: <code>/metrics</code> can't say which listing was slow. That's what traces are for. A span is one request's story, so ids go there, as attributes Jaeger can search.</p>
+        <h3>Measured, on the Docker stack</h3>
+        <p>All four Prometheus targets up: the API, the worker, the relay, RabbitMQ. The failed purchase above took 2.16 seconds from the webhook to the last notification, most of it the relay's one-second pause between passes, twice; the webhook itself took 23 ms. The worker's counters added up across its two pool processes, and after <code>docker compose restart worker</code> they started from nothing. With Jaeger stopped, requests took the same 6 to 30 ms as before; the only sign was one line per lost batch, <code>Failed to export spans batch</code>, written by the exporter's background thread. And the image, started with <code>ENVIRONMENT=production</code> and generated secrets, answered its health check as uid 10001.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>The app has no new screens. The new screens are the tools that watch it: Grafana's dashboard, and Jaeger with the failed purchase from above.</p>
+        <figure class="shot">
+          <img src="assets/m11-grafana.png" alt="The Ticket Loop dashboard in Grafana, dark theme: rows of time-series panels for requests per second by route, errors and refusals, latency p50, p95 and p99 by route, reservation attempts, payment webhooks, webhook time, the outbox backlog, the relay, worker tasks, queue depths, dead-letter queues, the cache, rate limits and database connections." loading="lazy" width="1400" height="2010">
+          <figcaption>The dashboard, after a few purchases, cached searches and a burst of bad logins.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m11-jaeger-search.png" alt="Jaeger&#x27;s search page with service ticketloop-worker and the tag ticketloop.order_id set to one order. One trace found: POST /api/v1/payments/webhooks/{provider}, 79 spans, 1 error, across ticketloop-api, ticketloop-relay and ticketloop-worker." loading="lazy" width="1400" height="700">
+          <figcaption>Found by the order id alone: one trace, three services, one error.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m11-jaeger-trace.png" alt="The trace in Jaeger with the span ticket provider transfer opened: tags error true and otel.status_description TransferRefused: the provider refused: ticket not transferable, and a log entry with event exception and its message." loading="lazy" width="1400" height="1000">
+          <figcaption>The failing step: the provider's refusal, recorded on its span.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+        <h3>Metrics</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Route templates as labels</h4>
+            <p class="decision__over">Instead of the path asked for</p>
+            <p>A path has ids in it, so one series per listing, without end. The template is one per route, and a path no route matches counts as <code>none</code>.</p>
+          </div>
+          <div class="decision">
+            <h4>A fixed list for every label</h4>
+            <p class="decision__over">Instead of the value as it arrived</p>
+            <p>A forged webhook can send any event type; counted as sent, each would add a series. Anything not on the list is <code>unknown</code> or <code>other</code>.</p>
+          </div>
+          <div class="decision">
+            <h4>Backlog read by the API when scraped</h4>
+            <p class="decision__over">Instead of counted by the relay</p>
+            <p>Any number of relays may run and none sees the whole table. One indexed count with a 1-second limit answers for all of them, on a connection of its own, and with Postgres down the gauge is left out while <code>/metrics</code> still answers.</p>
+          </div>
+          <div class="decision">
+            <h4>Files for the worker's processes</h4>
+            <p class="decision__over">Instead of a port per pool process</p>
+            <p>Pool processes come and go. They write to files, the main process serves their sum on one port, and it empties the folder when it starts so a restart doesn't count the dead.</p>
+          </div>
+          <div class="decision">
+            <h4>Retries as an outcome</h4>
+            <p class="decision__over">Instead of a separate counter</p>
+            <p><code>worker_tasks_total{task, outcome}</code> with <code>done</code>, <code>retry</code>, <code>rejected</code>: one query gives the share of deliveries that needed another go.</p>
+          </div>
+        </div>
+
+        <h3>Traces</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>The trace stored in the outbox row</h4>
+            <p class="decision__over">Instead of a new trace per message</p>
+            <p>A new trace per message would leave the webhook, each task and the provider call as separate stories, to be matched up by hand. One trace answers "what happened to this purchase" in one page.</p>
+          </div>
+          <div class="decision">
+            <h4>Celery's instrumentation for the queue</h4>
+            <p class="decision__over">Instead of my own message headers</p>
+            <p>It already writes the context into the message and continues it in the worker. My part was giving it the right parent span.</p>
+          </div>
+          <div class="decision">
+            <h4>My own SQL spans</h4>
+            <p class="decision__over">Instead of OpenTelemetry's SQLAlchemy instrumentation</p>
+            <p>It supports SQLAlchemy below 2.1, and on 2.1 it fails while starting. A few dozen lines on SQLAlchemy's cursor events give a span per statement inside a trace, with placeholders, never values; a failed one carries its error's class and SQLSTATE, not Postgres's message, which can quote the row.</p>
+          </div>
+          <div class="decision">
+            <h4>A hand-written span for fakepay</h4>
+            <p class="decision__over">Instead of the httpx instrumentation</p>
+            <p>The client is httpx2, which that instrumentation doesn't patch. Mine is named by the route template, and the request carries <code>traceparent</code>.</p>
+          </div>
+          <div class="decision">
+            <h4>Ids on spans, never on metrics</h4>
+            <p class="decision__over">Instead of the same labels on both</p>
+            <p>An order id on a span lets Jaeger search by it. On a metric it would be a new series per order.</p>
+          </div>
+          <div class="decision">
+            <h4>Off unless switched on</h4>
+            <p class="decision__over">Instead of always on</p>
+            <p>Off, there is no exporter and every span is a no-op. On, spans leave in batches from a background thread, so a slow or missing Jaeger costs a request nothing.</p>
+          </div>
+        </div>
+
+        <h3>Delivery</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Start the image with production settings</h4>
+            <p class="decision__over">Instead of with the local defaults</p>
+            <p>Production refuses the built-in secrets, so starting it with generated ones is the start a deployment makes, and a setting it can't start without fails here first.</p>
+          </div>
+          <div class="decision">
+            <h4>pip-audit on the locked export</h4>
+            <p class="decision__over">Instead of on the virtualenv</p>
+            <p><code>uv export --no-dev</code> is exactly what the image installs, pinned and hashed. The test tools never ship.</p>
+          </div>
+          <div class="decision">
+            <h4>Fail on high</h4>
+            <p class="decision__over">Instead of on everything</p>
+            <p>npm reports 8 moderate advisories in the build tools today; failing on them would keep CI red for code that never reaches a browser. pip-audit gives no severities, so any known vulnerability fails.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>Metrics, logs, traces: what's each for?</summary>
+          <div class="qa__a">
+            <p>Metrics are numbers over time, cheap to keep and to alert on: how many, how fast, how full. Logs are what one process said happened, with detail. A trace is one request's path across processes, with timings for each step. Metrics tell you something is wrong, a trace shows where, and the logs say why.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you follow a request across a message queue?</summary>
+          <div class="qa__a">
+            <p>Put the trace context in the message. The producer injects <code>traceparent</code> (a trace id and the parent span's id) into the message headers, and the consumer extracts it and starts its span as a child. Celery's OpenTelemetry instrumentation does that on <code>send_task</code> and in the worker.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>And across the outbox, where nothing is sent at request time?</summary>
+          <div class="qa__a">
+            <p>The request writes the event to a table and returns; the relay publishes it later from another process. So I store the trace context in the outbox row's <code>headers</code>, in the same transaction as the event. The relay starts its publish span from those headers, and from there Celery carries it. An old or broken value just starts a new trace.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What's a correlation id, and where does yours come from?</summary>
+          <div class="qa__a">
+            <p>A value that ties together every log line about one piece of work. Mine is the OpenTelemetry trace id, added to each line by a structlog processor. So the id in the logs is the one Jaeger opens, and it stays the same from the API through the relay into the worker.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What is high cardinality, and why avoid it?</summary>
+          <div class="qa__a">
+            <p>The number of distinct label values. Every combination is a separate time series that Prometheus keeps in memory and on disk. Put a user or order id in a label and the series grow with the traffic until Prometheus struggles. I only use labels from short fixed lists, and put ids on spans instead.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How do you get p95 and p99 per route?</summary>
+          <div class="qa__a">
+            <p>A histogram per route with fixed buckets, 5 ms to 5 s. Then <code>histogram_quantile(0.95, sum by (le, handler) (rate(http_request_duration_seconds_bucket[5m])))</code>. It's an estimate within a bucket, so the buckets have to sit around the latencies you care about.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How does a prefork Celery worker expose metrics?</summary>
+          <div class="qa__a">
+            <p>Each pool process is its own Python process with its own counters, so one HTTP port per process doesn't work. prometheus-client's multiprocess mode has each process write to files in a shared folder, and the main process serves their sum. The folder is emptied when the worker starts, or a restart would add the old processes' counts.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What happens if Jaeger is down?</summary>
+          <div class="qa__a">
+            <p>Nothing a user sees. Spans are exported in batches from a background thread with a 2-second timeout; when the export fails the batch is dropped and one line is logged. I stopped Jaeger and timed requests: the same 6 to 30 ms as before.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What about /metrics when Postgres is down?</summary>
+          <div class="qa__a">
+            <p>It still answers, without the backlog gauge. The backlog is read when Prometheus scrapes, with a 1-second statement limit, and any error just leaves it out. It reads on a connection of its own, so requests holding every connection of the pool don't hold the scrape up either. One test points the app at a database that isn't there, another holds the whole pool, and both check the answer comes back quickly.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What does your CI check before code ships?</summary>
+          <div class="qa__a">
+            <p>Lint, every test against real Postgres, MinIO, RabbitMQ and Redis, the frontend's checks and browser tests, and now the image: built, migrated with itself and started with production settings until its health check answers, running as uid 10001. Plus Bandit at high severity, pip-audit on the exact runtime packages, and npm audit at high.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>How would you get paged?</summary>
+          <div class="qa__a">
+            <p>I haven't built alerting; it's the next thing. I'd write Prometheus rules on what users feel: the 5xx rate, p99 over a budget, <code>outbox_oldest_unpublished_seconds</code> over a minute (events stuck), and any message in a dead-letter queue.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>The request counter counted nothing.</strong> Each test builds a new app, and the instrumentator registers its metrics once per process: the second app got nothing back for the taken names and recorded nothing, silently. The HTTP metrics are made once per process now and shared.</li>
+          <li><strong>A negative age for the oldest event.</strong> <code>now()</code> in Postgres is the transaction's start, so a row created a moment later looked like it came from the future. The age uses <code>clock_timestamp()</code>, floored at zero.</li>
+          <li><strong>The SQLAlchemy instrumentation would have stopped the API starting.</strong> It refused SQLAlchemy 2.1.9 with an error at every start, so the first traces had no SQL in them. With its version check skipped it crashed outright, importing the asyncio extension, which needs a package we don't install. With tracing on, the API wouldn't have started. I wrote the span listener myself, with a test for a statement and a failing one.</li>
+          <li><strong>The order id was missing from the worker's lines.</strong> I bound the ids inside the task, but Celery writes its "Task succeeded" line after the task returns, and a successful transfer logs nothing else. Grepping a good purchase's order id found nothing. They're bound on Celery's <code>task_prerun</code> now and unbound on <code>task_postrun</code>, which comes after that line.</li>
+          <li><strong>/metrics without Postgres took 3 seconds on Windows.</strong> A refused local connection takes about 2 seconds there. The test sets a 2-second connect timeout and allows 4.5, inside Prometheus's scrape timeout, which is the 5-second scrape interval.</li>
+          <li><strong>Four things the final review found.</strong> A scrape took its connection from the request pool, so a busy pool made it wait 30 seconds and Prometheus dropped the whole scrape at 5; it has a connection of its own now. Every statement outside a trace (the relay's poll each second, each scrape) started a one-span trace of its own, about 120,000 a day; statements are traced only inside a trace now. A failed statement's span carried Postgres's message, which quotes the row: a taken email, sent to Jaeger; it carries the error's class and SQLSTATE now. And a worker started before RabbitMQ (after a reboot, Docker starts everything at once) never served its metrics, because the dead-letter declaration failed first in the same start-up hook; they're separate hooks now. Each has a test that failed first.</li>
+          <li><strong>The queue panel showed Celery's own queues.</strong> RabbitMQ reports every queue, including Celery's <code>celeryev</code> and <code>pidbox</code> queues. The panels match the three queue names, with or without a test prefix.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>No alerting.</strong> The numbers are there; the rules and someone to page are not.</li>
+          <li><strong>Logs are found with <code>docker compose logs | grep</code>.</strong> There's no log store like Loki; at this size, grep on JSON lines works.</li>
+          <li><strong>Traces live in Jaeger's memory.</strong> A restart loses them.</li>
+          <li><strong>fakepay isn't traced.</strong> A purchase's trace starts at the webhook, not at the checkout page.</li>
+          <li><strong>A <code>--pool solo</code> worker has no spans.</strong> Tracing is set up in each prefork pool process, as compose runs it.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d --build
+open http://localhost:3000   <span class="c"># Grafana: the dashboard</span>
+open http://localhost:9090   <span class="c"># Prometheus: Status, Target health; all four up</span>
+open http://localhost:16686  <span class="c"># Jaeger</span>
+TICKET_PROVIDER_MODE=permanent docker compose up -d worker   <span class="c"># then buy a ticket, and:</span>
+docker compose logs --no-log-prefix worker | grep $ORDER | jq -c '{event, reason, correlation_id}'
+docker compose up -d worker
+uv run pytest tests/integration/test_metrics.py tests/integration/test_tracing.py
+uv run pytest tests/unit/test_compose.py tests/unit/test_observability_config.py tests/unit/test_ci.py
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 REQUIRE_BROKER=1 REQUIRE_REDIS=1 uv run pytest   <span class="c"># 1253 tests, what CI runs</span>
+uvx bandit==1.9.4 -r app fakepay --severity-level high
+
+cd frontend &amp;&amp; npm test        <span class="c"># 160 unit tests</span>
+npm run e2e                    <span class="c"># 21 browser tests</span>
+npm audit --audit-level=high
+gh run list --workflow ci.yml --limit 3</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m10-redis-caching-and-rate-limits.html">Previous<strong>M10 Redis: caching and rate limits</strong></a>
+    <span class="pager__next">Next<br><strong>M12 Load testing and the numbers</strong> (not written yet)</span>
+  </nav>
+
+</div>
+</body>
+</html>

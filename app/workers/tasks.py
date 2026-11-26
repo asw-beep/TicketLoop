@@ -10,16 +10,20 @@ tests call directly. Here only the delivery rules live:
   dead-letter queue. A poison message must not loop for ever.
 """
 
+import contextvars
 import random
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 import structlog
 from celery import Task
-from celery.exceptions import Reject
+from celery.exceptions import Reject, Retry
+from celery.signals import task_postrun, task_prerun
+from opentelemetry import trace
 from sqlalchemy.exc import OperationalError
 
+from app.core.metrics import WORKER_TASKS
 from app.modules.notifications.service import notify
 from app.modules.outbox.service import Consumer
 from app.modules.transfers.service import Outcome, perform_transfer, start_transfer
@@ -63,38 +67,101 @@ def _deliver[T](task: Task, work: Callable[[], T]) -> T:
         raise Reject(f"{type(error).__name__}: {error}", requeue=False) from error
 
 
+# The ids a worker's log lines can be found by, taken from the event's payload when it has them.
+_LOG_IDS = ("order_id", "transfer_id", "payment_id", "reservation_id", "listing_id")
+
+
+def _log_ids(message: Any) -> dict[str, str]:
+    if not isinstance(message, dict):
+        return {}
+    ids = {"event_id": str(message["id"])[:64]} if "id" in message else {}
+    payload = message.get("payload")
+    if isinstance(payload, dict):
+        ids |= {key: str(payload[key])[:64] for key in _LOG_IDS if payload.get(key) is not None}
+    return ids
+
+
+# Each pool process runs one task at a time; this is what the running one bound.
+_BOUND: dict[str, Mapping[str, contextvars.Token[Any]]] = {}
+
+
+@task_prerun.connect
+def _bind_event_ids(task_id: str | None = None, args: Any = None, **_: Any) -> None:
+    """Every line a task logs names its event and order, Celery's own "Task ... succeeded"
+    line included: bound before the task starts, unbound once Celery has logged how it ended."""
+    message = args[0] if isinstance(args, list | tuple) and args else None
+    ids = _log_ids(message)
+    if ids and task_id:
+        _BOUND[task_id] = structlog.contextvars.bind_contextvars(**ids)
+
+
+@task_postrun.connect
+def _unbind_event_ids(task_id: str | None = None, **_: Any) -> None:
+    tokens = _BOUND.pop(task_id, None) if task_id else None
+    if tokens:
+        structlog.contextvars.reset_contextvars(**tokens)
+
+
+def _counted[T](task: Task, run: Callable[[], T], message: Any = None) -> T:
+    """Run one delivery with its event's ids on its span, so Jaeger finds it by order id, and
+    count how it ended: done (acknowledged), retry, or rejected to the dead-letter queue."""
+    ids = _log_ids(message)
+    trace.get_current_span().set_attributes({f"ticketloop.{k}": v for k, v in ids.items()})
+    try:
+        result = run()
+    except Retry:
+        WORKER_TASKS.labels(task.name, "retry").inc()
+        raise
+    except Reject:
+        WORKER_TASKS.labels(task.name, "rejected").inc()
+        raise
+    WORKER_TASKS.labels(task.name, "done").inc()
+    return result
+
+
 @celery_app.task(name=Consumer.START_TRANSFER.value, bind=True, max_retries=None)
 def start_transfer_task(self: Task, message: dict[str, Any]) -> None:
-    event_id, _, payload = _event(message)
+    def run() -> None:
+        event_id, _, payload = _event(message)
 
-    def work() -> None:
-        with runtime.sessions()() as db, db.begin():
-            start_transfer(db, event_id, payload)
+        def work() -> None:
+            with runtime.sessions()() as db, db.begin():
+                start_transfer(db, event_id, payload)
 
-    _deliver(self, work)
+        _deliver(self, work)
+
+    _counted(self, run, message)
 
 
 @celery_app.task(name=Consumer.PERFORM_TRANSFER.value, bind=True, max_retries=None)
 def perform_transfer_task(self: Task, message: dict[str, Any]) -> None:
-    event_id, _, payload = _event(message)
-    outcome = _deliver(
-        self,
-        lambda: perform_transfer(runtime.sessions(), runtime.ticket_provider(), event_id, payload),
-    )
-    if outcome == Outcome.RETRY:
-        # The transfer counts its own attempts and gives up after the fifth.
-        raise self.retry(countdown=retry_delay(self.request.retries))
+    def run() -> None:
+        event_id, _, payload = _event(message)
+        outcome = _deliver(
+            self,
+            lambda: perform_transfer(
+                runtime.sessions(), runtime.ticket_provider(), event_id, payload
+            ),
+        )
+        if outcome == Outcome.RETRY:
+            # The transfer counts its own attempts and gives up after the fifth.
+            raise self.retry(countdown=retry_delay(self.request.retries))
+
+    _counted(self, run, message)
 
 
 @celery_app.task(name=Consumer.NOTIFY.value, bind=True, max_retries=None)
 def notify_task(self: Task, message: dict[str, Any]) -> None:
-    event_id, event_type, payload = _event(message)
+    def run() -> None:
+        event_id, event_type, payload = _event(message)
 
-    def work() -> None:
-        with runtime.sessions()() as db, db.begin():
-            notify(db, event_id, event_type, payload)
+        def work() -> None:
+            with runtime.sessions()() as db, db.begin():
+                notify(db, event_id, event_type, payload)
 
-    _deliver(self, work)
+        _deliver(self, work)
+
+    _counted(self, run, message)
 
 
 # ------------------------------------------------------------------ scheduled by beat
