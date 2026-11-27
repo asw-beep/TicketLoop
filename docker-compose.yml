@@ -2,7 +2,8 @@
 #   docker compose up --build          everything: Postgres, Mailpit, MinIO, fakepay, RabbitMQ,
 #                                      Redis, migrations, the API (localhost:8000), the
 #                                      worker, beat and relay that move events and tickets,
-#                                      and Prometheus, Grafana and Jaeger to watch them
+#                                      Prometheus, Grafana and Jaeger to watch them, and the
+#                                      browser app (localhost:5173)
 #   docker compose up -d db mailpit minio fakepay rabbitmq redis worker beat relay \
 #                        prometheus grafana jaeger
 #                                      everything but the API; run that on Windows with
@@ -193,7 +194,8 @@ services:
       TRACING_ENABLED: "true"
       OTLP_ENDPOINT: *otlp_endpoint
     ports:
-      - "8000:8000"
+      # 8000-8003 for the load test's four containers (docker-compose.load.yml).
+      - "${API_PORTS:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy # wait for pg_isready, not just for the container to start
@@ -203,6 +205,16 @@ services:
         condition: service_started # the image has no shell or curl for a healthcheck
       redis:
         condition: service_healthy
+
+  # The browser app, built and served by nginx, which forwards /api to the API: open
+  # http://localhost:5173. To work on the app with hot reload, `docker compose stop web`, then
+  # `npm run dev` in frontend/ takes the same port.
+  web:
+    build: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - api # the order only: nginx looks the API up per request, so it never waits for it
 
   # ---------------------------------------------------------------- watching it (M11)
   # Nothing above depends on these: with Jaeger down, spans are dropped and nothing waits.

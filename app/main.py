@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from redis import Redis
 
 from app.api.router import build_api_router
+from app.core.admission import AdmissionMiddleware
 from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
@@ -71,8 +72,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.redis, app.state.cache, app.state.limiter = create_redis_parts(settings)
 
     # Middleware added last runs first. The size limit sits inside the request context, so
-    # even a refused upload gets a request ID and an access-log line.
+    # even a refused upload gets a request ID and an access-log line. Admission sits inside it
+    # too, so a request's logged time includes its wait to be let in (app/core/admission.py).
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
+    app.add_middleware(AdmissionMiddleware)
     app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     app.include_router(build_api_router(settings.api_prefix))

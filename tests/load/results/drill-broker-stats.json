@@ -1,0 +1,70 @@
+{
+ "started": 1795720367.192267,
+ "ended": 1795720664.1180315,
+ "samples": 56,
+ "peaks": {
+  "api": {
+   "cpu_percent": 811.5,
+   "memory_mib": 510.5
+  },
+  "worker": {
+   "cpu_percent": 607.0,
+   "memory_mib": 685.4
+  },
+  "relay": {
+   "cpu_percent": 47.0,
+   "memory_mib": 86.3
+  },
+  "beat": {
+   "cpu_percent": 0.3,
+   "memory_mib": 91.2
+  },
+  "fakepay": {
+   "cpu_percent": 24.5,
+   "memory_mib": 85.7
+  },
+  "prometheus": {
+   "cpu_percent": 3.3,
+   "memory_mib": 53.9
+  },
+  "db": {
+   "cpu_percent": 173.0,
+   "memory_mib": 393.2
+  },
+  "grafana": {
+   "cpu_percent": 3.4,
+   "memory_mib": 105.6
+  },
+  "jaeger": {
+   "cpu_percent": 0.9,
+   "memory_mib": 49.4
+  },
+  "redis": {
+   "cpu_percent": 10.3,
+   "memory_mib": 35.7
+  },
+  "rabbitmq": {
+   "cpu_percent": 435.2,
+   "memory_mib": 224.9
+  },
+  "minio": {
+   "cpu_percent": 3.0,
+   "memory_mib": 69.3
+  },
+  "mailpit": {
+   "cpu_percent": 4.1,
+   "memory_mib": 22.2
+  },
+  "k6": {
+   "cpu_percent": 29.9,
+   "memory_mib": 106.9
+  }
+ },
+ "prometheus": {
+  "cache hit ratio": 0.436,
+  "connections in use, most": 16.0,
+  "outbox backlog, most": 621.0,
+  "oldest unpublished event, s": 71.087,
+  "messages waiting, most": 1319.0
+ }
+}

@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M12 Load testing</title>
+  <meta name="description" content="TicketLoop M12: k6 spike, load and rate-limit tests and a broker drill under load on 100,000 listings, an invariants check after every run, a thread and connection-pool deadlock found and fixed, the throughput ceiling measured and explained, and the whole stack behind one command. How it works and how to explain it in an interview.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="assets/notes.css">
+  <script src="assets/notes.js" defer></script>
+</head>
+<body>
+<div class="page">
+
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">All modules</a></nav>
+
+  <header class="ticket">
+    <div class="ticket__main">
+      <p class="ticket__series">TicketLoop build log</p>
+      <h1 class="ticket__title">Load testing and the numbers</h1>
+      <p class="ticket__summary">Every module so far claimed the system stays correct under pressure. This one applied the pressure and wrote down what happened. 1,000 buyers on one ticket at once, up to 1,000 users browsing and buying, RabbitMQ pulled out mid-run, and after every run a SQL check for a ticket sold twice. Correctness held everywhere. The first spike found a deadlock no test had reached, and the 500-user run missed the latency targets for a reason I measured rather than guessed. Then I put the browser app in Compose, so one command starts all of it.</p>
+      <p class="ticket__fineprint">Done when: 1,000 users on one listing give one reservation and no 5xx; throughput and p50, p95 and p99 are measured; and there are zero oversells in every run. After fixing the deadlock the first run found, 1,000 simultaneous reservations gave 1 hold, 999 clean 409s and no 5xx. The invariants check returned 0 rows after all eight runs, across 12,315 orders. The numbers, with the hardware, data volume and script behind each, are in <code>docs/test-results.md</code> and the README.</p>
+    </div>
+    <div class="ticket__stub">
+      <span class="ticket__number">M12</span>
+      <span class="ticket__days">27 Nov</span>
+      <span class="stamp">Done<br>27 Nov 2026</span>
+    </div>
+  </header>
+
+  <main>
+
+    <section class="section" aria-labelledby="pitch">
+      <h2 id="pitch">The 30-second answer</h2>
+      <div class="section__body">
+        <p class="pitch">I wrote the test plan before running anything: for each test, what I expected and why, the script, what I'd measure and the pass line. Then a load stack, laid over the everyday Compose file: four API containers on a database seeded with 2,000 events, 100,000 listings and 1,000 buyers. k6 runs in a container on the same network. One Python runner starts each test, samples <code>docker stats</code>, asks Prometheus for the run's own window, and finishes with <code>check_invariants.sql</code>. A violation there fails the run, whatever its latencies.</p>
+        <p class="pitch">The spike, 1,000 buyers on one listing at once, found a real bug. Correctness held, with exactly one winner, but 131 requests got 500s and 688 got no answer. FastAPI runs a sync route in several thread-pool hops, and a request kept its database connection across them. Under a burst, every thread waited for a connection that belonged to a request waiting for a thread. I fixed it with an admission gate: no more requests inside a process than it has threads. A small reproduction went from 13 seconds of 500s to passing in 0.7.</p>
+        <p class="pitch">At 100 users every target held: reads p95 62 ms, reservations 106 ms. At 500 they didn't, and I didn't stop at "needs more hardware". Prometheus showed each API process at 1.17 cores for about 90 requests a second, about 13 ms of CPU each, while Postgres sat near one core of sixteen. With eight processes instead of four, throughput rose 43% at the same CPU per request: a per-process ceiling, then the laptop's. The broker drill showed the outbox doing its job: buyers kept paying with RabbitMQ down, and 621 waiting events were delivered within 30 seconds of its return.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="built">
+      <h2 id="built">What I built</h2>
+      <div class="section__body">
+        <ul class="built">
+          <li><span class="built__what">The plan, first</span><span class="built__note">Six tests, each with a hypothesis, a script, what it measures and a pass line, plus the machine, data and configuration they belong to. Written and committed before the first run, so the results can't move the goalposts.</span><code>docs/test-plan.md</code></li>
+          <li><span class="built__what">The load stack</span><span class="built__note"><code>docker-compose.load.yml</code> over the everyday file: every service on <code>ticketloop_perf</code>; four API containers on ports 8000 to 8003; rate limits raised (one k6 container is one address); one trace in a hundred; Postgres at 200 connections; Prometheus finding each API container by DNS; and k6 itself, only when asked.</span><code>docker-compose.load.yml</code> <code>observability/prometheus-load.yml</code></li>
+          <li><span class="built__what">The invariants</span><span class="built__note">Five checks in one query, one row per violation: two open listings for a ticket, two live holds on a listing, a successful payment whose order isn't paid, a ticket not owned by its last buyer, and a listing sold twice. Each is proven by a test that plants its violation and finds it.</span><code>scripts/check_invariants.sql</code> <code>tests/integration/test_invariants.py</code></li>
+          <li><span class="built__what">The k6 scripts</span><span class="built__note">The spike (1,000 users, one reservation each, at once); the load (80% browse, 20% reserve, order, pay at fakepay and wait for <code>PAID</code>); the limits (20 users searching without pause). Thresholds encode the pass lines, so k6's exit code is the verdict, and each summary is written without the buyers' tokens.</span><code>tests/load/spike.js</code> <code>tests/load/load.js</code> <code>tests/load/limits.js</code> <code>tests/load/lib.js</code></li>
+          <li><span class="built__what">The runner</span><span class="built__note">One command per test: <code>seed</code>, <code>up</code>, <code>spike</code>, <code>load --vus N [--apis N]</code>, <code>limits</code> (the real limits, then the raised ones back whatever happens), <code>drill-broker</code> (RabbitMQ stopped at 60 s and started at 120 s under 100 users), <code>invariants</code>.</span><code>scripts/load_test.py</code></li>
+          <li><span class="built__what">The admission gate</span><span class="built__note">An ASGI middleware with one <code>anyio.Semaphore</code> per event loop, sized from the thread limiter, so a request inside always finds a thread for its next hop. <code>/metrics</code> skips it.</span><code>app/core/admission.py</code> <code>tests/integration/test_burst.py</code></li>
+          <li><span class="built__what">The results</span><span class="built__note">A table per test: requests a second, p50, p95 and p99 per kind, errors, connections, CPU and memory, the cache hit ratio and the outbox delay. Every miss is explained, with Grafana screenshots. Each run's raw summary is committed.</span><code>docs/test-results.md</code> <code>tests/load/results/</code></li>
+          <li><span class="built__what">One command</span><span class="built__note">The React app built and served by nginx, which forwards <code>/api</code> to the API: one origin, as with Vite's dev server. <code>docker compose up -d --build</code> now starts all fifteen services, the migrate job among them, with the app at localhost:5173.</span><code>frontend/Dockerfile</code> <code>frontend/nginx.conf</code> <code>docker-compose.yml</code></li>
+          <li><span class="built__what">The README</span><span class="built__note">What the project proves, with the numbers; the one-command start; an architecture diagram; a 5-minute demo I ran as written; the results table. The feature-by-feature tour moved to its own page.</span><code>README.md</code> <code>docs/walkthrough.md</code></li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="flow">
+      <h2 id="flow">One run, from the command to the verdict</h2>
+      <div class="section__body">
+        <p><code>uv run python -m scripts.load_test load --vus 500</code>, against the load stack.</p>
+        <ol class="flow">
+          <li><span class="flow__n">1</span><div class="flow__text"><strong>The runner starts watching</strong><p>A thread runs <code>docker stats</code> every 3 seconds. Then <code>docker compose run --rm --no-deps k6 run -e VUS=500 /scripts/load.js</code>. <code>--no-deps</code> matters: <code>compose run</code> otherwise brings dependencies up to date, and could recreate the containers it is about to test.</p></div></li>
+          <li><span class="flow__n">2</span><div class="flow__text"><strong>k6 sets up</strong><p>It logs in all 1,000 buyers, ten at a time, and gathers event ids. Every counter gets a 0, because k6 never judges a threshold on a metric with no samples, and a spike with no 5xx would otherwise skip its <code>server_errors == 0</code> check.</p></div></li>
+          <li><span class="flow__n">3</span><div class="flow__text"><strong>The users run</strong><p>They ramp up over 30 seconds, hold for 3 minutes and ramp down over 15. Each connection picks one of the four API containers at random from DNS. Buyers reserve, order, start paying, tell fakepay to succeed, and poll the order until it is <code>PAID</code>.</p></div></li>
+          <li><span class="flow__n">4</span><div class="flow__text"><strong>k6 judges</strong><p>Reads p95 under 300 ms, reservations p95 under 500 ms, fewer than 1% failed. <code>handleSummary</code> writes <code>results/load-500.json</code>, and k6 exits 99 when a threshold is crossed.</p></div></li>
+          <li><span class="flow__n">5</span><div class="flow__text"><strong>The runner adds what k6 can't see</strong><p>Prometheus over exactly the run's window: connections in use, the cache hit ratio, the outbox backlog and its oldest event, the queue depth. Then the peaks from <code>docker stats</code>, then <code>check_invariants.sql</code> on the whole perf database, and the verdict: thresholds, then violations.</p></div></li>
+        </ol>
+<pre><code><span class="c"># scripts/check_invariants.sql, the last of five checks: the oversell itself</span>
+SELECT 'sold-twice', listing_id::text, count(*) || ' paid orders'
+FROM orders
+WHERE status IN ('PAID', 'TRANSFER_PENDING', 'COMPLETED', 'TRANSFER_FAILED')
+GROUP BY listing_id
+HAVING count(*) &gt; 1
+
+<span class="c"># app/core/admission.py: no more requests inside than there are threads</span>
+async def __call__(self, scope, receive, send):
+    if scope["type"] != "http" or scope["path"] in UNLIMITED_PATHS:
+        await self.app(scope, receive, send)
+        return
+    async with _semaphore():
+        await self.app(scope, receive, send)</code></pre>
+        <h3>The deadlock, step by step</h3>
+        <p>A sync route in FastAPI isn't one call. Each sync dependency (the session, the signed-in user) runs in a thread from anyio's pool of 40, then the route in another, then the response's validation in another; between hops the request gives its thread back. The session takes a connection on its first query and keeps it until <code>get_db</code> commits, after the response is built. Send 250 requests to one process at once, 15 connections in its pool: 40 of them get threads, 15 get connections, and the other 25 threads wait for a connection. Now the 15 that hold connections finish a hop and need a thread for the next. There are none: all 40 are waiting for a connection. Nothing moves until the pool's 30-second timeout fails the waiters with 500s. The gate keeps the number inside at 40, so a request that finishes a hop always finds a thread, and every connection comes back. Committing the sign-in early only moved the problem: timing the checkouts showed the listing query then held its connection through validation.</p>
+        <h3>Why 500 users missed, measured</h3>
+        <p>During the 500-user hold, each of the four API processes used 1.16 to 1.17 cores, 4.66 in all, for 358 requests a second: about 13 ms of CPU a request, for queries, rows into objects, validating and serializing, and the middleware. One Python process runs Python on one core at a time, so it tops out a little over one core: about 90 requests a second, 350 for four. Postgres peaked at 126% of one core out of 16 and Redis at 12%. The pool showed all 60 connections in use, but only because requests held them while they waited for CPU. On eight processes: 469 requests a second, reads p95 862 ms instead of 1,340, each process at 0.90 cores and the same 13 to 14 ms a request. The ceiling had been per process. At eight it was the laptop, whose 16 threads also ran Postgres, the worker, k6, and RabbitMQ's spinning schedulers.</p>
+        <h3>Measured</h3>
+        <p>Spike: 1 reserved, 999 refused, 0 5xx; the reservations' p95 2,730 ms, because 1,000 short requests took turns. Load at 100 users: 195 requests a second, reads p95 62 ms, reservations p95 106 ms, 2,168 purchases, nothing failed. At 500: 327 a second, reads p95 1,340 ms. At 1,000: 307 a second, reads p95 3,023 ms, 0.01% failed. Real limits: 119 searches allowed of the 120 a minute the bucket allows, 104,913 refused with <code>Retry-After</code>. Broker drill: backlog 621, oldest event 71 s, delivered within 30 s of RabbitMQ's return, 9,247 orders all completed. Races: 100 rounds each, all passed. Invariants: 0 rows, every run.</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="screens">
+      <h2 id="screens">Screens</h2>
+      <div class="section__body">
+        <p>No new app screens: M12 measures. Below, the README's demo against the one-command stack, and Grafana during two of the runs.</p>
+        <figure class="shot">
+          <img src="assets/m12-demo-paid.png" alt="An order page in the TicketLoop app showing a ticket for Dada Food Fair, ₹200, with the status Paid and the message: You&#x27;ve paid ₹200. We&#x27;re handing the ticket over to you. This page updates by itself." loading="lazy" width="1280" height="860">
+          <figcaption>With RabbitMQ stopped: paid, and waiting for the transfer.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m12-demo-completed.png" alt="The same order page with the status Completed: the ticket is the buyer&#x27;s." loading="lazy" width="1280" height="860">
+          <figcaption>12 seconds after RabbitMQ started again, without a reload.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m12-load-500.png" alt="The Grafana dashboard over the 500-user run: about 95 requests a second on each of the three read routes, p50 latency climbing to between 1 and 1.75 seconds, steady reservations and payments, the outbox backlog under 100, and all 60 database connections in use." loading="lazy" width="1400" height="2010">
+          <figcaption>500 users: latency climbs while throughput stays flat; every connection taken.</figcaption>
+        </figure>
+        <figure class="shot">
+          <img src="assets/m12-drill-delivery.png" alt="The dashboard&#x27;s delivery panels over the broker drill: the outbox backlog rising to about 620 and the oldest event to about 70 seconds while RabbitMQ is down, then both falling to nothing; a spike of about 650 waiting messages that drains within seconds; empty dead-letter queues." loading="lazy" width="1400" height="642">
+          <figcaption>The broker drill: the backlog grows while RabbitMQ is down, then drains.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="decisions">
+      <h2 id="decisions">Decisions</h2>
+      <div class="section__body">
+        <h3>The test setup</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>The plan written before any run</h4>
+            <p class="decision__over">Instead of the plan written with the results</p>
+            <p>A pass line set after seeing the numbers is a description, not a test. Committing the plan first means a miss stays a miss.</p>
+          </div>
+          <div class="decision">
+            <h4>Four API containers</h4>
+            <p class="decision__over">Instead of one container with <code>--workers 4</code></p>
+            <p>Each container is its own Prometheus target, so the per-process CPU that explained the 500-user miss was visible. The cost: four sets of ports and a DNS lookup in Prometheus.</p>
+          </div>
+          <div class="decision">
+            <h4>k6 in a container on the compose network</h4>
+            <p class="decision__over">Instead of k6 on Windows against published ports</p>
+            <p>DNS spreads users over the four containers, and no Windows port forwarding is in the path. The cost: k6 shares the CPUs it is measuring, which the results say.</p>
+          </div>
+          <div class="decision">
+            <h4>Rate limits raised, then one run with the real ones</h4>
+            <p class="decision__over">Instead of the real limits throughout</p>
+            <p>One k6 container is one address; the real search limit would refuse all but 60 a minute and measure nothing else. The limits run tests them on their own, and the runner always restores the raised ones.</p>
+          </div>
+          <div class="decision">
+            <h4>One trace in a hundred</h4>
+            <p class="decision__over">Instead of tracing off, or every request</p>
+            <p>Off would test a different system from the one that runs. Every request would put Jaeger, which keeps traces in memory, in the measurement.</p>
+          </div>
+          <div class="decision">
+            <h4>Users, not arrival rate</h4>
+            <p class="decision__over">Instead of k6's arrival-rate executors</p>
+            <p>A user waits for each page before the next, as people do, so when the system slows the offered load falls with it. That's why 1,000 users gave 307 requests a second, not more. An arrival rate would show queues growing without bound past the ceiling; I chose to measure what users get.</p>
+          </div>
+        </div>
+
+        <h3>Judging the runs</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>Invariants checked in SQL after every run</h4>
+            <p class="decision__over">Instead of trusting the k6 counters</p>
+            <p>k6 sees answers, not rows. Only the database can say whether a ticket was sold twice, and the constraints aren't the check: the check assumes they could have failed.</p>
+          </div>
+          <div class="decision">
+            <h4>Thresholds as the pass lines</h4>
+            <p class="decision__over">Instead of reading the numbers by eye</p>
+            <p>k6 exits 99 when one is crossed, so the runner's exit code is the verdict. Counters start at 0 so their thresholds are always judged.</p>
+          </div>
+          <div class="decision">
+            <h4>Prometheus over each run's own window</h4>
+            <p class="decision__over">Instead of the dashboard's 5-minute averages</p>
+            <p>The panels average over 5 minutes and carry the previous run's tail. The tables use <code>max_over_time</code> and <code>increase</code> over exactly the run.</p>
+          </div>
+          <div class="decision">
+            <h4>Test the explanation</h4>
+            <p class="decision__over">Instead of write "CPU-bound" and stop</p>
+            <p>"Each process tops out" predicts that more processes raise throughput at the same CPU per request. <code>--apis 8</code> ran it: 43% more, at 13 to 14 ms a request.</p>
+          </div>
+        </div>
+
+        <h3>The fix and the stack</h3>
+        <div class="decisions">
+          <div class="decision">
+            <h4>An admission gate</h4>
+            <p class="decision__over">Instead of a bigger pool, or committing the sign-in early</p>
+            <p>A bigger pool moves the threshold, not the cycle. The early commit moved the hold to the next hop. Capping requests inside at the thread count breaks the cycle for any pool size. The cost: async routes are capped at 40 in flight too.</p>
+          </div>
+          <div class="decision">
+            <h4>nginx in front of the app</h4>
+            <p class="decision__over">Instead of FastAPI serving the built files</p>
+            <p>The API image stays the API. nginx gives one origin, as Vite's proxy does, so the <code>SameSite=Strict</code> refresh cookie works unchanged. It looks the API up per request, so it starts in any order and survives the API being recreated.</p>
+          </div>
+          <div class="decision">
+            <h4>The demo on the seeded database</h4>
+            <p class="decision__over">Instead of a separate demo seed script</p>
+            <p>The load tests' seed already makes 100,000 buyable listings and 1,000 buyers with a known password in ten seconds; <code>POSTGRES_DB=ticketloop_perf</code> points the stack at it. Nothing new to maintain.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="interview">
+      <h2 id="interview">Interview questions</h2>
+      <div class="section__body">
+        <div class="qa-tools">
+          <button class="button" type="button" data-toggle-answers aria-pressed="false">Show all answers</button>
+          <p>Answer out loud first, then open.</p>
+        </div>
+
+        <details class="qa">
+          <summary>How did you load test it?</summary>
+          <div class="qa__a">
+            <p>With k6, against four API containers on a database of 100,000 listings, from a test plan written before the first run. A spike (1,000 users reserve one listing at once), a mixed load at 100, 500 and 1,000 users, the real rate limits, and RabbitMQ stopped under load. After every run, a SQL check of the invariants: a run with one violation fails whatever its latencies.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Spike, load, stress, soak: what's the difference?</summary>
+          <div class="qa__a">
+            <p>A spike is a sudden burst: does it break or queue? Load is the expected traffic held for a while: does it meet its targets? Stress pushes past capacity to find where and how it fails. Soak holds load for hours to find leaks and slow drift. I ran spike and load, and a broker failure under load; stress to 10,000 and soak were out of scope.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why check invariants? Wasn't correctness already tested?</summary>
+          <div class="qa__a">
+            <p>The tests prove the rules for the cases I thought of. Under load the system meets interleavings nobody wrote down. The check doesn't trust the constraints: it asks the data whether any ticket ended up listed twice, held twice, sold twice, or owned by someone other than its last buyer. Zero rows after every run is the claim.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What did the spike find?</summary>
+          <div class="qa__a">
+            <p>A deadlock between the thread pool and the connection pool. A sync FastAPI route runs in several thread-pool hops, and the request held its connection across them. Under a burst every thread was waiting for a connection held by a request waiting for a thread, until the pool timed out with 500s. Correctness still held: one winner. I fixed it with an admission gate sized to the thread pool, and reproduced it in a test with 4 threads and 2 connections.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Why not just make the pool bigger?</summary>
+          <div class="qa__a">
+            <p>It moves the threshold, not the cycle: a burst bigger than the new pool deadlocks the same way. And connections cost Postgres memory and context switches. The gate makes the cycle impossible for any pool size, and the waiting requests hold nothing.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>500 users missed the latency target. Why?</summary>
+          <div class="qa__a">
+            <p>Each API process is one Python interpreter, which runs Python on one core at a time. Prometheus showed each at 1.17 cores for about 90 requests a second, 13 ms of CPU each, while Postgres sat near one core of sixteen. So four processes top out at about 350 a second, and beyond that requests queue. I checked by doubling the processes: 43% more throughput at the same CPU per request.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What would you do to meet the target at 1,000 users?</summary>
+          <div class="qa__a">
+            <p>First profile where the 13 ms go: serialization and turning rows into objects are the usual suspects. Then run as many API processes as there are spare cores, and put k6 on its own machine. Async routes would remove the thread hops but not the CPU, so they come after the profile.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>p50, p95, p99: which do you watch?</summary>
+          <div class="qa__a">
+            <p>p50 is the typical request. p95 and p99 are the slow tail, which every heavy user meets sooner or later. A page that makes ten calls has a good chance of hitting one call's p95. I set targets on p95 and report p99, because averages hide the tail.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>Is your load test lying to you anywhere?</summary>
+          <div class="qa__a">
+            <p>In three ways I know of, and the results say so. k6 runs on the same machine, so it takes CPU from what it measures. Users wait for each answer (a closed model), so past the ceiling they ask less, and requests a second stop rising rather than queues growing without bound. And the dashboard averages over 5 minutes, so the numbers come from Prometheus over each run's own window.</p>
+          </div>
+        </details>
+
+        <details class="qa">
+          <summary>What did the broker drill show?</summary>
+          <div class="qa__a">
+            <p>That RabbitMQ is only downstream. With it stopped for a minute under 100 users, nobody's request failed and paying still worked, because the webhook needs only Postgres. 621 events waited in the outbox. Within 30 seconds of RabbitMQ's return they were delivered, every order completed, and nothing was transferred twice.</p>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="traps">
+      <h2 id="traps">Traps and fixes</h2>
+      <div class="section__body">
+        <ul class="tight">
+          <li><strong>The spike's deadlock.</strong> No test had sent more requests to one process than it had threads. The first spike got 131 500s and 688 timeouts while the invariants stayed clean. Committing the sign-in early didn't fix it; timing the checkouts showed the hold had moved to the next hop. The admission gate did, with a test that failed first.</li>
+          <li><strong>k6 skipped a threshold without saying so.</strong> A threshold on a metric with no samples is never judged, so a perfect spike with no 5xx would not have checked <code>server_errors == 0</code> at all. Every counter gets a 0 in setup. Only thresholded sub-metrics appear in the summary, so the timings that are only reported carry a <code>max&gt;=0</code> threshold, commented as such.</li>
+          <li><strong><code>--summary-export</code> turns the pass flags upside down.</strong> In k6 1.4.2 its format marks a passed threshold <code>false</code>. The runner reads only <code>handleSummary</code>'s data, where <code>ok: true</code> means passed.</li>
+          <li><strong>The CPU peaks pointed the wrong way.</strong> <code>docker stats</code> showed the API at 1,283% at its peak. That was the setup minute, when 1,000 Argon2 sign-ins hash on four lanes outside Python's lock. During the hold, Prometheus showed the real number: 1.17 cores a process.</li>
+          <li><strong>"Settled 174 s after the broker came back."</strong> The runner waits for k6 to finish before checking, and the load ran for another 165 s. The dashboard showed the backlog cleared in 5 s and the queues in 30.</li>
+          <li><strong>The dashboard blurred the runs together.</strong> Its panels average over 5 minutes, and the runs were back to back, so each picture carried the last one's tail, and a 3-second spike vanished entirely. The numbers come from Prometheus over each run's window; the spike is told in numbers, not pictures.</li>
+          <li><strong>The deadlocked run couldn't be watched.</strong> <code>/metrics</code> needs a thread too, so during the deadlock Prometheus's scrapes timed out and the dashboard has gaps. With the gate, <code>/metrics</code> skips the queue.</li>
+        </ul>
+
+        <h3>Known gaps, on purpose</h3>
+        <ul class="tight">
+          <li><strong>k6 shares the machine.</strong> It took up to 108% of a core at 1,000 users from the system it measured.</li>
+          <li><strong>The knee isn't pinned down.</strong> The targets hold at 195 requests a second and miss at 327; I didn't search between.</li>
+          <li><strong>The 13 ms aren't profiled.</strong> That is the first thing to do before tuning anything.</li>
+          <li><strong>No stress or soak.</strong> Pushing to 10,000 users and holding for hours were cut from the roadmap.</li>
+          <li><strong>Behind nginx, every browser shares one address for the rate limits.</strong> As with Vite's proxy: fine for one person on localhost. A deployment would let uvicorn trust the proxy's <code>X-Forwarded-For</code>.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="check">
+      <h2 id="check">Check it still works</h2>
+      <div class="section__body">
+<pre><code>docker compose up -d --build                   <span class="c"># everything; the app at http://localhost:5173</span>
+uv run python -m scripts.load_test seed        <span class="c"># the demo's and the load tests' data</span>
+uv run python -m scripts.load_test up          <span class="c"># the load stack: four API containers</span>
+uv run python -m scripts.load_test spike       <span class="c"># 1 reserved, 999 refused, 0 5xx, invariants 0 rows</span>
+uv run python -m scripts.load_test load --vus 100
+uv run python -m scripts.load_test limits
+uv run python -m scripts.load_test drill-broker
+docker compose up -d                           <span class="c"># back to the development database</span>
+uv run pytest tests/integration/test_burst.py tests/integration/test_invariants.py
+uv run pytest tests/unit/test_admission.py tests/unit/test_load_test.py tests/unit/test_web_image.py
+RACE_ROUNDS=100 uv run pytest tests/concurrency/test_reservation_race.py
+REQUIRE_POSTGRES=1 REQUIRE_STORAGE=1 REQUIRE_BROKER=1 REQUIRE_REDIS=1 uv run pytest   <span class="c"># 1292 tests, what CI runs</span>
+
+cd frontend &amp;&amp; npm test        <span class="c"># 160 unit tests</span>
+npm run e2e                    <span class="c"># 21 browser tests</span>
+gh run list --workflow ci.yml --limit 3</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="pager" aria-label="Modules">
+    <a href="m11-observability-and-delivery.html">Previous<strong>M11 Observability and delivery</strong></a>
+  </nav>
+
+</div>
+</body>
+</html>

@@ -2,9 +2,134 @@
 
 [![CI](https://github.com/asw-beep/TicketLoop/actions/workflows/ci.yml/badge.svg)](https://github.com/asw-beep/TicketLoop/actions/workflows/ci.yml)
 
-A FastAPI backend for fixed-price ticket resale, built to stay correct when 100 buyers hit one ticket at once, when requests are retried, when webhooks arrive twice, and when the message broker goes down.
+A marketplace where people resell tickets at no more than face value: FastAPI and Postgres, with RabbitMQ, Celery, Redis and a React app. It is built to stay correct when 100 buyers hit one ticket at once, when requests are retried, when webhooks arrive twice, and when the message broker goes down.
+
+The M12 load tests ([results](docs/test-results.md)) checked that:
+- **The spike.** 1,000 buyers pressed **Reserve** on one ticket in the same instant. Exactly one got the hold; the other 999 got a clean "someone was first", and nobody got an error.
+- **100 users** browsed and bought for three and a half minutes:
+  - reads p95 62 ms, reservations p95 106 ms;
+  - 2,168 paid purchases, no failed request.
+- **RabbitMQ stopped for a minute under load:**
+  - buyers kept paying, while 621 events waited in the outbox;
+  - all of them were delivered within 30 s of its return, and every ticket changed hands once.
+- **The invariants.** After every run a SQL check looked for a ticket listed twice, held twice, sold twice, or owned by anyone but its last buyer. It found none, across 12,315 orders.
+- **Where it stops.** On a laptop, four API processes top out at about 350 requests a second, and past that latency misses the targets. The ceiling is measured, explained, and moves when the processes are doubled.
 
 The specification is [`plan.md`](plan.md). The build order and study plan is [`build-and-learn-plan.md`](build-and-learn-plan.md).
+
+## Start it
+
+You need Docker Desktop.
+
+```bash
+docker compose up -d --build
+```
+
+Then open http://localhost:5173. The first build takes a few minutes.
+
+| What | Where |
+| --- | --- |
+| The app | http://localhost:5173 |
+| The API's explorer | http://localhost:8000/docs |
+| fakepay, the pretend payment gateway | http://localhost:8090 |
+| Mailpit, every email the app sends | http://localhost:8025 |
+| Grafana, the dashboard | http://localhost:3000 |
+| Jaeger, traces | http://localhost:16686 |
+| RabbitMQ's console | http://localhost:15672 (`ticketloop` / `ticketloop`) |
+
+`docker compose down` stops it all, and the data stays in Docker volumes. `docker compose down -v` deletes the data too.
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    browser([Browser]) --> web["web: nginx serving the React app"]
+    web -->|/api| api["API: FastAPI"]
+    api --> pg[("Postgres: every rule a constraint, and the outbox")]
+    api --> redis[("Redis: cache and rate limits")]
+    api -->|payment intent| fakepay["fakepay: pretend gateway"]
+    fakepay -->|signed webhook| api
+    api --> mailpit["Mailpit: email"]
+    relay["relay"] -->|unpublished events| pg
+    relay -->|publish| mq[["RabbitMQ"]]
+    beat["beat: expiry, reconciliation"] --> mq
+    mq --> worker["Celery worker: transfer, notifications"]
+    worker --> pg
+    prometheus["Prometheus"] -.->|scrape| api
+    prometheus -.->|scrape| worker
+    prometheus -.->|scrape| mq
+    grafana["Grafana"] --> prometheus
+    api -.->|traces| jaeger["Jaeger"]
+    worker -.->|traces| jaeger
+```
+
+Postgres decides everything that matters:
+- **Who holds a ticket.** One conditional `UPDATE`, backed by a partial unique index.
+- **What was paid.** A signed webhook, applied once.
+- **Who owns the ticket.** A transfer written in the same transaction as its event in the outbox.
+
+Redis only makes reads faster and limits abuse. RabbitMQ only carries what happens after a payment. Either can go down without losing a sale or selling a ticket twice.
+
+## The 5-minute demo
+
+This needs the stack started above, plus [uv](https://docs.astral.sh/uv/).
+
+**1. Load the demo data.** This fills a database with 2,000 events, 100,000 listings and 1,000 buyers (about 10 s), then points the stack at it:
+
+```bash
+uv run python -m scripts.load_test seed
+POSTGRES_DB=ticketloop_perf docker compose up -d
+```
+
+(In PowerShell: `$env:POSTGRES_DB = 'ticketloop_perf'; docker compose up -d; Remove-Item Env:POSTGRES_DB`.)
+
+**2. Buy a ticket.**
+- Open http://localhost:5173. The front page is the search.
+- Open any ticket, press **Log in to reserve**, and sign in as `buyer-0001@perf.example.in` with the password `load test password 123`. Any number up to 1000 works.
+- Press **Reserve**. The ticket is yours for 10 minutes, counted down on the page. In a private window as `buyer-0002`, **Reserve** on the same ticket is told that someone was first.
+- **Checkout** takes you to fakepay; press **Pay**.
+- Back on your order, it turns **Paid** when fakepay's signed webhook lands. A moment later it turns **Completed**, once the worker has handed the ticket over, and the ticket is under **My tickets**.
+
+**3. Stop the broker and buy another.**
+- Run `docker compose stop rabbitmq`, then buy a second ticket the same way.
+- Paying still works, because the webhook needs only Postgres. The order turns **Paid**, then stays there: the ticket's transfer is waiting in the outbox, and Grafana shows the backlog rising.
+- Run `docker compose start rabbitmq`. Within seconds of RabbitMQ answering, the relay publishes what waited, and the order turns **Completed** by itself.
+
+<p>
+  <img src="documentation/assets/m12-demo-paid.png" alt="The order, paid, while RabbitMQ is down" width="49%">
+  <img src="documentation/assets/m12-demo-completed.png" alt="The same order, completed, once RabbitMQ is back" width="49%">
+</p>
+
+I ran it as written in Chrome against the one-command stack:
+- the first order completed in under 5 s;
+- the second sat at **Paid** with RabbitMQ down;
+- it completed 12 s after `docker compose start rabbitmq`, which is mostly RabbitMQ starting up.
+
+**4. Back to your own data:** `docker compose up -d`.
+
+Every other feature, step by step, is in [`docs/walkthrough.md`](docs/walkthrough.md):
+- accounts and password reset;
+- registering and verifying a ticket, and listing it for review;
+- search, holds, every way a payment can go;
+- the transfer drills, the cache and the limits, metrics, traces and logs.
+
+## Results
+
+These were measured on a laptop: an Intel Core i5-13450HX (10 cores, 16 threads) with 23.7 GB of RAM. Docker had 16 threads and 11.5 GiB, and k6 ran inside the same VM. The database held 2,000 events, 100,000 listings and 1,000 buyers.
+
+The plan was written before the runs ([test plan](docs/test-plan.md)). Every number, every miss explained and how to run them again are in [results](docs/test-results.md).
+
+| Test | Result |
+| --- | --- |
+| Spike: 1,000 buyers reserve one ticket at once | 1 hold, 999 × 409, 0 errors, after fixing the deadlock the first run found |
+| Load, 100 users (80% browse, 20% buy) | 195 req/s; reads p95 62 ms, reservations p95 106 ms; 0 failed. **Meets NFR-03** |
+| Load, 500 users | 327 req/s; reads p95 1,340 ms. **Misses NFR-03**: each API process tops out at about 90 req/s (13 ms of CPU a request) |
+| Load, 500 users on 8 API processes | 469 req/s; reads p95 862 ms: the ceiling moves with the processes |
+| Load, 1,000 users | 307 req/s; reads p95 3,023 ms; the same ceiling; 0.01% failed |
+| The real rate limits | 119 of the 120 searches a minute allows; 104,913 × 429 with `Retry-After`; 0 errors |
+| RabbitMQ down for 60 s under load | 0 failed requests; a backlog of 621 delivered within 30 s of its return; all 9,247 orders completed |
+| Races, 100 rounds each | reservation 110/110; payment against expiry 2/2 |
+| Invariants after every run | 0 violations |
 
 ## Status
 
@@ -22,23 +147,13 @@ The specification is [`plan.md`](plan.md). The build order and study plan is [`b
 | M9 · Outbox, worker and transfer | Done: every event written in the transaction of its change and published by a relay that waits out a dead broker; RabbitMQ and Celery with late acknowledgement and dead-letter queues; consumers that do their work once however often a message arrives; the ticket moves to its buyer through an idempotent provider call, or to review; a broker outage, a killed worker and a poison message, all automated drills; the order page follows the ticket to My tickets |
 | M10 · Redis: caching and rate limits | Done: search and the event page cached in Redis under versioned keys that a commit to `listings` or `events` makes unreachable, found by the session, so no write in the API or the worker can forget; 30 to 60 second jittered expiry; `X-Cache` on every cached route; token buckets in one Lua script on Redis's clock for login, password reset, reserve, payment and search, with `429` and `Retry-After`; when Redis is down every route still answers, uncached and unlimited, and only the request that finds it gone waits; a countdown on every form that can be refused |
 | M11 · Observability and delivery | Done: Prometheus metrics on `/metrics` (requests, errors and p50/p95/p99 per route, reservation results, payment webhooks, worker task outcomes, the outbox backlog, cache and rate-limit counts), with no id ever in a label; OpenTelemetry traces from the API through the outbox and RabbitMQ into the worker, in Jaeger; the trace id on every log line as `correlation_id`, so one failed purchase is found by its order id, opened as one trace and its failing step is the red span; Prometheus, a provisioned Grafana dashboard and Jaeger in Compose; CI builds the image and starts it with production settings, and fails on a high-severity Bandit finding, a known vulnerability in a runtime package or a high npm advisory |
-| M12 · Load testing and the numbers | Next (Mon 30 Nov) |
+| M12 · Load testing and the numbers | Done: k6 spike, load and rate-limit runs and a broker drill under load on a seeded database of 100,000 listings, with an invariants check after every run ([plan](docs/test-plan.md), [results](docs/test-results.md)); a thread and connection-pool deadlock found by the spike and fixed with an admission gate; the throughput ceiling measured and explained; the races at 100 rounds; the browser app in Compose behind nginx, so one command starts everything |
 
 The roadmap was slimmed to these seven modules on 23 Nov 2026; see [the design](docs/superpowers/specs/2026-11-23-slim-roadmap-m6-m12-design.md) for what was cut and why.
 
-## Run it
+## Run it day to day
 
-You need Docker Desktop, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and Node 24 LTS for the frontend.
-
-**Everything in containers** (Postgres, Mailpit, MinIO, fakepay, RabbitMQ, Redis, then a one-off `migrate` job, then the API, the Celery worker, beat and the outbox relay, and Prometheus, Grafana and Jaeger to watch them):
-
-```bash
-docker compose up --build
-curl localhost:8000/api/v1/health
-# {"status":"ok","checks":{"database":"ok"}}
-```
-
-**Day to day** (everything but the API in Docker, the API and the frontend on Windows, both reloading as you edit):
+You need Docker Desktop, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), and Node 24 LTS for the frontend. Everything but the API and the frontend runs in Docker; those two run on Windows and reload as you edit:
 
 ```bash
 docker compose up -d db mailpit minio fakepay rabbitmq redis worker beat relay \
@@ -63,252 +178,26 @@ npm install
 npm run dev                           # http://localhost:5173
 ```
 
-The dev server forwards `/api` to the API on port 8000, so the browser sees one origin.
+The dev server forwards `/api` to the API on port 8000, so the browser sees one origin, as nginx does in the one-command stack. If that stack is running, stop its API and app first (`docker compose stop api web`), since they use the same ports, 8000 and 5173.
 
 Celery does not run on Windows, so the worker, beat and relay run in Docker even when the API does not. After changing code they use, rebuild them: `docker compose up -d --build worker beat relay`.
 
-MinIO stores the uploaded proof of purchase. Its web console is at http://localhost:9001 (user `ticketloop`, password `ticketloop-local-secret`); the files sit in the bucket `ticketloop-documents`, which the API creates on startup when `ENVIRONMENT=local`. Anywhere else, create the bucket yourself and set `STORAGE_ENDPOINT_URL`, `STORAGE_PUBLIC_URL` (the host browsers reach, used to sign download links), `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` and `STORAGE_REGION`; see `.env.example`. Staging and production refuse to start with the built-in storage secret.
+MinIO stores the uploaded proof of purchase. Its web console is at http://localhost:9001 (user `ticketloop`, password `ticketloop-local-secret`). The files sit in the bucket `ticketloop-documents`, which the API creates on startup when `ENVIRONMENT=local`.
 
-Set `LOG_JSON=false` in `.env` for coloured, readable log lines while developing. Stop the `api` container first (`docker compose stop api`) if it is running, since both use port 8000.
+Anywhere else, create the bucket yourself and set these (see `.env.example`):
+- `STORAGE_ENDPOINT_URL`;
+- `STORAGE_PUBLIC_URL`, the host browsers reach, used to sign download links;
+- `STORAGE_BUCKET`, `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` and `STORAGE_REGION`.
+
+Staging and production refuse to start with the built-in storage secret.
+
+Set `LOG_JSON=false` in `.env` for coloured, readable log lines while developing.
 
 ```bash
 docker compose down      # stop everything; data survives in the pgdata, miniodata, fakepaydata,
                          # rabbitmqdata and prometheusdata volumes
 docker compose down -v   # stop and delete the databases and the stored files too
 ```
-
-## Try the auth flow
-
-Open http://localhost:5173: create an account, change your name, log out and in, and use **Forgot your password?**. The reset email lands in Mailpit at http://localhost:8025, and its link opens the reset page.
-
-From a terminal instead (`-c` and `-b` keep the refresh cookie in a file, as a browser would):
-
-```bash
-B=localhost:8000/api/v1
-curl -s $B/auth/register -H 'content-type: application/json' \
-  -d '{"email":"asha@example.in","password":"correct horse battery staple","full_name":"Asha"}'
-curl -s -c jar.txt $B/auth/login -H 'content-type: application/json' \
-  -d '{"email":"asha@example.in","password":"correct horse battery staple"}'
-# {"access_token":"eyJ...","token_type":"bearer","expires_in":900}  plus the refresh cookie
-curl -s $B/users/me -H "Authorization: Bearer <access_token>"
-curl -s -b jar.txt -c jar.txt -X POST $B/auth/refresh   # a new access token; the cookie rotates
-```
-
-Or open http://localhost:8000/docs, log in, and paste the access token into **Authorize**.
-
-No route grants the admin role. Promote a registered account from the command line:
-
-```bash
-uv run python -m scripts.make_admin asha@example.in            # --revoke to undo
-```
-
-Set `JWT_SECRET_KEY` (at least 32 bytes) anywhere but your laptop; staging and production refuse to start with the built-in development key.
-
-## Try the ticket flow
-
-1. Create two accounts at http://localhost:5173/register, one for you as admin and one as a ticket holder (a private window keeps the sessions apart).
-2. Promote the first: `uv run python -m scripts.make_admin <email>`, then reload the page. **Events**, **Verify tickets** and **Review listings** appear in the top bar.
-3. **Events → New event**: fill it in with a start time in the future, create it (it starts as a draft), then **Publish**.
-4. As the ticket holder, **My tickets → Register a ticket**: pick the event, enter the category, the price you paid in rupees, and the order and ticket numbers.
-5. On the ticket's page, upload a PDF, PNG or JPEG up to 5 MB, then **Open** it: the file comes straight from MinIO through a link that works for 5 minutes.
-6. As the admin, **Verify tickets**: open the same file, then **Verify** (with or without "Transfer eligible") or **Reject** with a reason. The holder's ticket page shows the decision.
-
-The same from a terminal (it uses [`jq`](https://jqlang.org/) to pick fields out of the JSON), with `$ADMIN` and `$HOLDER` holding access tokens from `/auth/login`:
-
-```bash
-B=localhost:8000/api/v1
-PROVIDER=$(curl -s $B/admin/providers -H "Authorization: Bearer $ADMIN" | jq -r '.[0].id')
-EVENT=$(curl -s $B/admin/events -H "Authorization: Bearer $ADMIN" -H 'content-type: application/json' \
-  -d "{\"name\":\"Monsoon Beats\",\"category\":\"CONCERT\",\"venue\":\"Stadium\",\"city\":\"Kochi\",
-       \"starts_at\":\"2027-01-15T13:00:00Z\",\"organizer\":\"Backwater Live\",\"provider_id\":\"$PROVIDER\"}" | jq -r .id)
-curl -s -X PATCH $B/admin/events/$EVENT -H "Authorization: Bearer $ADMIN" \
-  -H 'content-type: application/json' -d '{"status":"PUBLISHED"}'
-TICKET=$(curl -s $B/tickets -H "Authorization: Bearer $HOLDER" -H 'content-type: application/json' \
-  -d "{\"event_id\":\"$EVENT\",\"ticket_category\":\"GENERAL\",\"original_price_paise\":250000,
-       \"purchase_reference\":\"ORD-1\",\"provider_reference\":\"TKT-1\"}" | jq -r .id)
-DOC=$(curl -s $B/tickets/$TICKET/documents -H "Authorization: Bearer $HOLDER" -F file=@receipt.pdf | jq -r .id)
-curl -s $B/tickets/$TICKET/documents/$DOC -H "Authorization: Bearer $HOLDER"   # {"url": "...", "expires_at": "..."}
-curl -s $B/admin/tickets/$TICKET/verify -H "Authorization: Bearer $ADMIN" \
-  -H 'content-type: application/json' -d '{"decision":"VERIFIED","transfer_eligible":true}'
-```
-
-## Try the listing flow
-
-Carry on from the ticket flow, with the ticket verified as **Transfer eligible**.
-
-1. As the holder, open the ticket's page. Under **Sell this ticket**, enter an asking price no higher than what you paid and press **Submit for review** (or **Save draft** to submit later from the listing's page).
-2. The listing's page shows **Pending review**. Change the price there while you wait if you like.
-3. As the admin, **Review listings**: check the listing against **View the ticket and its evidence**, then **Approve**, or **Reject** with a reason the holder will see. An admin cannot review their own listing, so if your admin account is also the seller, approve it from a second admin account.
-4. Back as the holder, the listing is **Active**, and **History** reads: listed as a draft, submitted for review, approved by an admin. Anyone else opening the listing's address sees the ticket and the price, but no history and no controls; a draft or pending listing is "Not found" to them.
-5. **My listings** has every listing in every status. **Review listings → All listings** shows an admin everyone's.
-
-From a terminal, carrying on with the variables above:
-
-```bash
-LISTING=$(curl -s $B/listings -H "Authorization: Bearer $HOLDER" -H 'content-type: application/json' \
-  -d "{\"ticket_id\":\"$TICKET\",\"asking_price_paise\":200000}" | jq -r .id)     # a DRAFT
-curl -s -X POST $B/listings/$LISTING/submit -H "Authorization: Bearer $HOLDER"       # PENDING_VERIFICATION
-curl -s -X POST $B/admin/listings/$LISTING/approve -H "Authorization: Bearer $ADMIN" # ACTIVE
-curl -s $B/listings/$LISTING                                                         # the public view, no token
-curl -s $B/listings/$LISTING/history -H "Authorization: Bearer $HOLDER" | jq '.items[].action'
-```
-
-`ACTIVE` listings whose end has passed become `EXPIRED` when the expiry job runs, every 5 minutes in Docker. To run it by hand:
-
-```bash
-uv run python -m scripts.expire_listings   # Expired 0 listing(s).
-```
-
-## Try the search
-
-http://localhost:5173 is the search page, with or without an account. To see it full, seed a separate database with 2,000 events and 100,000 listings (Faker; it refuses any database whose name does not end in `_perf`) and run the API against it:
-
-```bash
-export DATABASE_URL=postgresql+psycopg://ticketloop:ticketloop@localhost:5432/ticketloop_perf
-uv run python -m scripts.seed_discovery --reset
-uv run python -m scripts.explain_discovery   # every query's plan, page 1 against page 500; writes docs/discovery-performance.md
-uv run uvicorn app.main:app
-unset DATABASE_URL                           # back to the development database
-```
-
-(In PowerShell: `$env:DATABASE_URL = '…'`, and `Remove-Item Env:DATABASE_URL` after.)
-
-```bash
-curl -s "$B/listings?q=cup&city=Mumbai&max_price_paise=500000&sort=-created_at" | jq '.items[].event.name'
-```
-
-## Try the reservation
-
-Open a listing from the search in two browsers with two accounts (neither the seller's) and press **Reserve** in both. One gets a page counting down from 10:00; the other is told somebody was first. **Cancel hold** gives the ticket back; **My holds** lists every hold.
-
-```bash
-curl -s -X POST $B/listings/$LISTING/reservations -H "Authorization: Bearer $BUYER"   # 201, or 200 if you hold it
-curl -s $B/reservations/me -H "Authorization: Bearer $BUYER" | jq '.items[0]'
-```
-
-Holds that run out are closed every 30 seconds by Celery beat in Docker, or by hand:
-
-```bash
-uv run python -m scripts.expire_reservations          # every 30 seconds; --once for a single pass
-```
-
-## Try paying for it
-
-Carry on from a hold. **Checkout** takes the buyer to fakepay's own page, where you choose what the payment does:
-
-- **Pay**: back on the order's page, it turns to **Paid** as soon as the webhook lands, then to **Completed** once the worker has handed the ticket over. It is under the buyer's **My tickets** now, and the seller's listing says **Sold**.
-- **Pay, webhook late**: the order's page says it is waiting, and turns to Paid by itself.
-- **Pay, webhook twice** and **Pay, forged webhook**: the first still pays once; the second is refused with a 401, and reconciliation finds the payment instead.
-- **Pay, no webhook**: the money moved and nobody told us. Run reconciliation (below) five minutes later.
-- **Decline**: the order fails and the ticket is back on sale.
-
-Close the tab halfway and come back through **My orders**: it is the same payment, never a second one. From a terminal, `Idempotency-Key` is whatever you like, the same one on a retry:
-
-```bash
-HOLD=$(curl -s -X POST $B/listings/$LISTING/reservations -H "Authorization: Bearer $BUYER" | jq -r .id)
-ORDER=$(curl -s $B/orders -H "Authorization: Bearer $BUYER" -H 'Idempotency-Key: try-1' \
-  -H 'content-type: application/json' -d "{\"reservation_id\":\"$HOLD\"}" | jq -r .id)
-curl -s $B/payments/intents -H "Authorization: Bearer $BUYER" -H 'Idempotency-Key: try-2' \
-  -H 'content-type: application/json' -d "{\"order_id\":\"$ORDER\"}" | jq -r .checkout_url   # open it, or:
-# curl -s localhost:8090/v1/intents/<transaction_id>/outcome -H 'content-type: application/json' -d '{"outcome":"succeed"}'
-curl -s $B/orders/$ORDER -H "Authorization: Bearer $BUYER" | jq -r .status                       # PAID
-```
-
-Payments nobody told us about are found by asking the gateway, every 2 minutes in Docker, or by hand:
-
-```bash
-uv run python -m scripts.reconcile_payments           # SUCCEEDED: checked 1, fixed 1.
-```
-
-`scripts.expire_reservations` asks too, about buyers who went to pay and never came back, and never releases a ticket without an answer. Give the API and fakepay the same `FAKEPAY_WEBHOOK_SECRET` (32 bytes or more) anywhere but your laptop; staging and production refuse to start with the built-in one.
-
-The races themselves, against four API processes and a database of their own:
-
-```bash
-uv run pytest tests/concurrency                                              # every race, 3 rounds
-RACE_ROUNDS=20 uv run pytest tests/concurrency/test_reservation_race.py      # the recorded proof
-uv run pytest tests/concurrency/test_payment_race.py                         # orders, webhooks, the clock
-uv run python -m tests.concurrency.report                                    # three locking strategies, compared
-uv run pytest tests/concurrency/test_messaging.py                            # the M9 drills; needs RabbitMQ
-```
-
-## Watch the ticket change hands
-
-With the worker, beat and relay running, every paid order goes on by itself: the relay publishes `payment.succeeded`, a worker creates the transfer, another asks the pretend ticket provider, and the ticket becomes the buyer's. If a message is lost on the way (it ended in a dead-letter queue), beat's `resume_transfers` job picks the order up again after 10 minutes. The worker, beat and relay restart by themselves if they exit. RabbitMQ's console (http://localhost:15672) shows the queues `transfers`, `notifications` and `maintenance`, and their dead-letter queues.
-
-```bash
-curl -s $B/orders/$ORDER -H "Authorization: Bearer $BUYER" | jq '{status, transfer: .transfer.status}'
-curl -s $B/notifications -H "Authorization: Bearer $BUYER" | jq '.items[].notification_type'
-docker compose logs -f worker relay                                      # what they did, as JSON
-```
-
-The drills, by hand:
-
-- **The broker is down:** `docker compose stop rabbitmq`, pay for a few orders, and `outbox_events` fills up with unpublished rows. `docker compose start rabbitmq`: the relay publishes them all, and each ticket moves once.
-- **A worker dies mid-transfer:** set `TICKET_PROVIDER_DELAY_SECONDS: "30"` on the worker in `docker-compose.yml`, pay, `docker compose kill worker` while it waits, then `docker compose up -d worker`. The message comes back, the provider is asked again with the same key, and the ticket moves once.
-- **The provider fails:** `TICKET_PROVIDER_MODE` set to `retryable` (with `TICKET_PROVIDER_FAILURES`), `permanent` or `unknown`. Busy is retried 5 times, then the transfer and the order go to review; the other two go there at once.
-
-(In PowerShell: `$env:RACE_ROUNDS = '20'` first, and `Remove-Item Env:RACE_ROUNDS` after.)
-
-## Watch the cache and the limits
-
-Search (`GET /listings` and `GET /events/{id}/listings`, first page) and the event page (`GET /events/{id}`) are cached in Redis for 30 to 60 seconds. Every answer says how it was served in `X-Cache`: `MISS` (computed, then stored), `HIT` (from Redis), or `BYPASS` (not cached: a later page, caching off, or Redis down). Any committed change to a listing or an event, from the API or the worker, makes the cached pages that depend on it unreachable at once (a change made by one of the hand-run scripts in `scripts/` shows within a minute), so a reservation, a review or an edit is never hidden behind a stale page.
-
-```bash
-curl -si "$B/listings?q=coldplay" | grep -i x-cache     # MISS
-curl -si "$B/listings?q=coldplay" | grep -i x-cache     # HIT
-docker compose exec redis redis-cli --scan --pattern 'cache:*'   # the keys and the versions
-```
-
-The rate limits are token buckets in Redis. Over the limit, the API answers `429` with `Retry-After` and the problem type `rate-limited`, and the form shows a countdown.
-
-| Route | Limit (a minute) | Counted per | Setting |
-| --- | --- | --- | --- |
-| `POST /auth/login`, `POST /auth/password-reset/request` | 5 | email and address, each route its own bucket | `RATE_LIMIT_LOGIN_PER_MINUTE` |
-| `POST /listings/{id}/reservations` | 10 | user | `RATE_LIMIT_RESERVE_PER_MINUTE` |
-| `POST /payments/intents` | 10 | user | `RATE_LIMIT_PAYMENT_PER_MINUTE` |
-| `GET /listings`, `GET /events/{id}/listings` | 60 | address | `RATE_LIMIT_SEARCH_PER_MINUTE` |
-
-```bash
-for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w '%{http_code} ' $B/auth/login \
-  -H 'content-type: application/json' -d '{"email":"a@b.co","password":"wrong"}'; done
-# 401 401 401 401 401 429
-```
-
-**Redis is down:** `docker compose stop redis`. Every route still answers, from Postgres, with `X-Cache: BYPASS` and no limits; the API logs `redis.unavailable` once, stops asking Redis, and pings it in the background every 5 seconds until it answers (`redis.available`). Only the request that found it gone waited: in Docker, about 4 seconds, while the stopped container's name fails to resolve. `docker compose start redis` and caching and limits come back by themselves. Redis never decides anything that matters: who holds a ticket, what was paid and who owns it are all Postgres.
-
-`CACHE_ENABLED=false` or `RATE_LIMIT_ENABLED=false` turns either off; `REDIS_URL` says where Redis is.
-
-## Watch it run: metrics, traces and logs
-
-| What | Where |
-| --- | --- |
-| Grafana: one dashboard with requests, errors and latency per route, reservations, payments, the outbox, the queues, the worker, the cache and the limits | http://localhost:3000 (no login to look; `admin` / `ticketloop` to edit) |
-| Prometheus: every series, and whether each target is up | http://localhost:9090 (Status, then Target health) |
-| Jaeger: traces | http://localhost:16686 |
-| The raw numbers | http://localhost:8000/metrics for the API; the worker's (:9100) and the relay's (:9101) inside the compose network |
-
-Every label takes its value from a short fixed list: a route's template (`/api/v1/listings/{listing_id}`), never the path asked for; a problem code from the known ones, else `other`; a webhook's event type, else `unknown`. Made-up paths and forged webhooks add no new series. Prometheus scrapes the API on the host's port 8000, so it finds it whether it runs in Docker or on Windows.
-
-Tracing is on in Compose (`TRACING_ENABLED=true`, `OTLP_ENDPOINT=http://jaeger:4318`). For an API run on Windows, put `TRACING_ENABLED=true` in `.env`; it sends to Jaeger's published port on localhost. With Jaeger stopped nothing waits: spans are sent in batches from a background thread, and dropped.
-
-**From a failed purchase to its failing step:**
-
-```bash
-TICKET_PROVIDER_MODE=permanent docker compose up -d worker   # the provider refuses every transfer
-# buy a ticket as in "Try paying for it"; the order ends TRANSFER_FAILED
-docker compose logs --no-log-prefix worker | grep $ORDER | jq -c '{event, reason, correlation_id}'
-# {"event":"transfer.needs_review","reason":"refused: the provider refused: ticket not transferable",
-#  "correlation_id":"08403b20745a7b0161d8edac5d403d85"}
-# open http://localhost:16686/trace/08403b20745a7b0161d8edac5d403d85: the webhook, the relay's
-# publishes and the worker's tasks in one trace, and the span "ticket provider transfer" marked
-# as an error, with the exception on it
-docker compose up -d worker                                  # back to succeeding
-```
-
-(In PowerShell: `$env:TICKET_PROVIDER_MODE = 'permanent'` before the first line, and `Remove-Item Env:TICKET_PROVIDER_MODE` before the last.) Jaeger finds the same trace by the order too: Search, service `ticketloop-worker`, tags `ticketloop.order_id=<the order id>`.
-
-`/metrics` is outside `/api/v1` and needs no token, like the health check. Deployed, it belongs behind the network edge, where Prometheus can reach it and the public cannot.
 
 ## Migrations
 
@@ -337,6 +226,14 @@ uv run ruff format .
 uvx bandit==1.9.4 -r app fakepay --severity-level high    # CI's security job, the Python half
 ```
 
+The races, against four API processes and a database of their own:
+
+```bash
+uv run pytest tests/concurrency                                              # every race, 3 rounds
+RACE_ROUNDS=100 uv run pytest tests/concurrency/test_reservation_race.py     # as M12 ran it
+uv run python -m tests.concurrency.report                                    # three locking strategies, compared
+```
+
 The frontend, from `frontend/`:
 
 ```bash
@@ -350,6 +247,13 @@ npm run api:types         # after changing the API: regenerate openapi.json and 
 npm audit --audit-level=high
 ```
 
+The load tests, on their own stack and database; [results](docs/test-results.md#run-it-again) has every command:
+
+```bash
+uv run python -m scripts.load_test seed && uv run python -m scripts.load_test up
+uv run python -m scripts.load_test spike
+```
+
 ## Layout
 
 ```text
@@ -357,7 +261,7 @@ app/
   main.py                  app factory; uvicorn runs app.main:app
   api/                     /api/v1 router and the health check
   core/                    config, logging, request-ID middleware, error format, security (hashing, JWT),
-                           metrics (/metrics) and tracing
+                           metrics (/metrics), tracing, and the admission gate
   models.py                imports every model, so Alembic sees every table
   modules/                 one package per business module: models, schemas, service, router
     identity/              users, tokens, auth routes, get_current_user and require_admin
@@ -376,26 +280,30 @@ app/
   infrastructure/          Postgres engine, sessions, base model, email sender, object storage (S3 and in-memory), the payment gateway's client, the pretend ticket provider, Redis (the cache, the session hooks that invalidate it, the rate limiter)
   workers/                 Celery: the app and its queues, the tasks around the consumers, the scheduled jobs, the relay's loop
 fakepay/                   the pretend payment gateway: its own app, database and checkout page
-observability/             Prometheus's scrape config, Grafana's data sources and the dashboard, mounted by compose
+observability/             Prometheus's scrape configs (everyday and load), Grafana's data sources and the dashboard
 tests/
   unit/                    fast, no external services
   integration/             need Postgres
   concurrency/             real races: four API processes, a real fakepay, 100 buyers; report.py compares strategies;
                            the messaging drills against RabbitMQ and real Celery workers
+  load/                    k6 scripts (spike, load, limits) and results/, every run's recorded summary
 migrations/                Alembic env.py and one file per schema change
 scripts/                   experiments and operator tools: lock_experiment, make_admin, export_openapi,
-                           expire_listings, expire_reservations, reconcile_payments, seed_discovery, explain_discovery, databases (throwaway ones), e2e_api
+                           expire_listings, expire_reservations, reconcile_payments, seed_discovery, explain_discovery,
+                           databases (throwaway ones), e2e_api, load_test (the M12 runner) and check_invariants.sql
 frontend/                  React + TypeScript app (Vite); each module adds its screens
   src/api/                 typed client; schema.d.ts is generated from the backend
   src/auth/                access token in memory, refresh through the HttpOnly cookie
   src/pages/               one file per screen
   e2e/                     Playwright browser tests against the real stack
+  Dockerfile, nginx.conf   the app built and served by nginx for compose, /api forwarded to the API
 .github/workflows/ci.yml   backend tests, frontend checks, browser tests, the image started with production
                            settings, and Bandit, pip-audit and npm audit, on every push
 docs/                      design documents (below)
 documentation/             one HTML page per finished module for revision and interview prep; open index.html
 docker-compose.yml         Postgres, Mailpit, MinIO, fakepay, RabbitMQ, Redis, the migrate job, the API, the worker, beat, the relay,
-                           Prometheus, Grafana, Jaeger
+                           the web app, Prometheus, Grafana, Jaeger
+docker-compose.load.yml    laid over it for the load tests: four API containers on ticketloop_perf, and k6
 Dockerfile                 the API image, which also runs fakepay, the worker, beat and the relay
 ```
 
@@ -413,3 +321,6 @@ Dockerfile                 the API image, which also runs fakepay, the worker, b
 | [`docs/reservation-design.md`](docs/reservation-design.md) | How one of 100 buyers wins, and what three locking strategies cost (measured) |
 | [`docs/discovery-performance.md`](docs/discovery-performance.md) | Search query plans and timings on 100,000 listings (generated) |
 | [`docs/purchase-flow.md`](docs/purchase-flow.md) | The end-to-end purchase and what every table holds at each step |
+| [`docs/test-plan.md`](docs/test-plan.md) | The load and contention tests, written before they ran: what each expects and its pass line |
+| [`docs/test-results.md`](docs/test-results.md) | What they got, on what machine, with every miss explained |
+| [`docs/walkthrough.md`](docs/walkthrough.md) | Every feature by hand, in the browser and from a terminal |

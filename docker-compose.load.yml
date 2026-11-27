@@ -1,0 +1,89 @@
+# The load-test stack (M12), laid over docker-compose.yml: the same images on the seeded
+# ticketloop_perf database, four API containers, and the rate limits raised out of the way,
+# because one k6 container plays 1,000 users from one address. docs/test-plan.md says why
+# each setting is what it is. Run it through the runner, which sets API_PORTS for the four
+# containers and checks the invariants after every run:
+#
+#   docker compose up -d db
+#   uv run python -m scripts.load_test seed      # 2,000 events, 100,000 listings, 1,000 buyers
+#   uv run python -m scripts.load_test up        # this stack
+#   uv run python -m scripts.load_test spike     # or: load --vus 100, limits, drill-broker
+#
+# By hand: API_PORTS=8000-8003 docker compose -f docker-compose.yml -f docker-compose.load.yml ...
+# `docker compose up -d` without this file puts everything back on the development database.
+
+x-perf-database: &perf_database postgresql+psycopg://${POSTGRES_USER:-ticketloop}:${POSTGRES_PASSWORD:-ticketloop}@db:5432/ticketloop_perf
+
+# Tracing stays on, one trace in a hundred: Jaeger keeps traces in memory, and every one of
+# 1,000 requests a second would fill it. The SDK reads these two itself.
+x-sampled: &sampled
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: "0.01"
+
+x-logging: &rotated
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "3"
+
+services:
+  db:
+    # Four API containers hold up to 16 connections each, and the worker 8 more.
+    command: ["postgres", "-c", "max_connections=200"]
+
+  migrate:
+    environment:
+      DATABASE_URL: *perf_database
+
+  api:
+    deploy:
+      replicas: 4 # each its own process and pool, and its own Prometheus target
+    logging: *rotated
+    environment:
+      DATABASE_URL: *perf_database
+      <<: *sampled
+      RATE_LIMIT_LOGIN_PER_MINUTE: ${LOAD_LOGIN_PER_MINUTE:-1000000}
+      RATE_LIMIT_RESERVE_PER_MINUTE: ${LOAD_RESERVE_PER_MINUTE:-1000000}
+      RATE_LIMIT_PAYMENT_PER_MINUTE: ${LOAD_PAYMENT_PER_MINUTE:-1000000}
+      RATE_LIMIT_SEARCH_PER_MINUTE: ${LOAD_SEARCH_PER_MINUTE:-1000000}
+      # k6 logs its buyers in once, in setup; the tokens must outlive the longest run.
+      ACCESS_TOKEN_MINUTES: "120"
+
+  worker:
+    command: ["celery", "-A", "app.workers.celery_app", "worker",
+              "-Q", "transfers,notifications,maintenance", "--concurrency", "8", "--loglevel", "INFO"]
+    logging: *rotated
+    environment:
+      DATABASE_URL: *perf_database
+      <<: *sampled
+
+  beat:
+    environment:
+      DATABASE_URL: *perf_database
+
+  relay:
+    environment:
+      DATABASE_URL: *perf_database
+      <<: *sampled
+
+  fakepay:
+    environment:
+      # By service name, so Docker's DNS spreads the webhooks over the four API containers.
+      FAKEPAY_WEBHOOK_URL: http://api:8000/api/v1/payments/webhooks/fakepay
+
+  prometheus:
+    volumes:
+      # The same jobs, with the API's containers found by DNS instead of the host's port.
+      - ./observability/prometheus-load.yml:/etc/prometheus/prometheus.yml:ro
+
+  # Runs only when asked, against the stack already up:
+  #   docker compose ... run --rm --no-deps k6 run /scripts/spike.js
+  k6:
+    image: grafana/k6:1.4.2
+    profiles: ["load"]
+    volumes:
+      - ./tests/load:/scripts:ro
+      - ./tests/load/results:/results
+    environment:
+      BASE_URL: http://api:8000
+      FAKEPAY_URL: http://fakepay:8090

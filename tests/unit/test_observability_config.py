@@ -117,3 +117,27 @@ def test_no_two_panels_overlap() -> None:
         assert not cells & taken, panel["title"]
         assert grid["x"] + grid["w"] <= 24, panel["title"]
         taken |= cells
+
+
+LOAD_PROMETHEUS = yaml.safe_load((OBSERVABILITY / "prometheus-load.yml").read_text("utf-8"))
+
+
+def test_the_load_config_finds_every_api_container_by_dns() -> None:
+    load = {job["job_name"]: job for job in LOAD_PROMETHEUS["scrape_configs"]}
+    (found,) = load["api"]["dns_sd_configs"]
+    assert found["names"] == ["api"]
+    assert (found["type"], found["port"]) == ("A", 8000)
+    assert "static_configs" not in load["api"]
+
+
+def test_the_load_config_scrapes_everything_else_the_same_way() -> None:
+    load = {job["job_name"]: job for job in LOAD_PROMETHEUS["scrape_configs"]}
+    assert load.keys() == jobs().keys()
+    for name, job in jobs().items():
+        if name != "api":
+            assert load[name] == job, name
+    assert LOAD_PROMETHEUS["global"] == PROMETHEUS["global"]
+
+
+def test_connections_in_use_add_up_across_api_containers() -> None:
+    assert "sum(db_pool_checked_out_connections)" in expressions()

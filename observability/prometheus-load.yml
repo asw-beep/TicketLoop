@@ -1,0 +1,28 @@
+# prometheus.yml for the load-test stack (docker-compose.load.yml): the same jobs, but the API
+# runs as four containers, so each is found by DNS and scraped as a target of its own.
+# Dashboard queries sum over them.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # Every container of the `api` service: Docker's DNS answers with one address each.
+  - job_name: api
+    dns_sd_configs:
+      - names: ["api"]
+        type: A
+        port: 8000
+        refresh_interval: 5s
+
+  - job_name: worker
+    static_configs:
+      - targets: ["worker:9100"]
+
+  - job_name: relay
+    static_configs:
+      - targets: ["relay:9101"]
+
+  - job_name: rabbitmq
+    metrics_path: /metrics/per-object
+    static_configs:
+      - targets: ["rabbitmq:15692"]

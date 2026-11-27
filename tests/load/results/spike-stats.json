@@ -1,0 +1,61 @@
+{
+ "samples": 6,
+ "peaks": {
+  "api": {
+   "cpu_percent": 1196.0,
+   "memory_mib": 839.8
+  },
+  "worker": {
+   "cpu_percent": 26.0,
+   "memory_mib": 518.9
+  },
+  "relay": {
+   "cpu_percent": 1.1,
+   "memory_mib": 85.6
+  },
+  "beat": {
+   "cpu_percent": 3.2,
+   "memory_mib": 90.1
+  },
+  "fakepay": {
+   "cpu_percent": 0.3,
+   "memory_mib": 41.3
+  },
+  "prometheus": {
+   "cpu_percent": 0.8,
+   "memory_mib": 44.3
+  },
+  "db": {
+   "cpu_percent": 106.7,
+   "memory_mib": 296.7
+  },
+  "grafana": {
+   "cpu_percent": 2.9,
+   "memory_mib": 105.3
+  },
+  "jaeger": {
+   "cpu_percent": 0.3,
+   "memory_mib": 12.8
+  },
+  "redis": {
+   "cpu_percent": 5.9,
+   "memory_mib": 9.4
+  },
+  "rabbitmq": {
+   "cpu_percent": 222.5,
+   "memory_mib": 207.7
+  },
+  "minio": {
+   "cpu_percent": 0.1,
+   "memory_mib": 69.0
+  },
+  "mailpit": {
+   "cpu_percent": 0.0,
+   "memory_mib": 22.0
+  },
+  "k6": {
+   "cpu_percent": 20.4,
+   "memory_mib": 532.7
+  }
+ }
+}
