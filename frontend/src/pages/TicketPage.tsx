@@ -53,6 +53,7 @@ function TicketDetails({ ticket }: { ticket: Ticket }) {
   return (
     <>
       <TicketCard
+        art={ticket.event}
         stub={
           <>
             <h1>Ticket</h1>

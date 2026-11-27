@@ -38,6 +38,7 @@ function OrderDetails({ order }: { order: Order }) {
   return (
     <>
       <TicketCard
+        art={listing.event}
         stub={
           <>
             <h1>Your order</h1>

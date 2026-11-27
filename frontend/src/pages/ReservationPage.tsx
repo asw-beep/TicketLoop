@@ -59,6 +59,7 @@ function ReservationDetails({ reservation }: { reservation: Reservation }) {
   return (
     <>
       <TicketCard
+        art={listing.event}
         stub={
           <>
             <h1>Your hold</h1>

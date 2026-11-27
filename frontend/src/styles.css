@@ -156,31 +156,40 @@ a:hover {
 
 .masthead {
   width: 100%;
-  max-width: 62rem;
+  max-width: 64rem;
   margin-inline: auto;
-  padding: 1.25rem 16px;
+  padding: 1.1rem 16px 0.9rem;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.75rem 1.5rem;
+  border-bottom: 2px solid var(--ink);
 }
 
+/* Set in display type, with the second ink printed a little off. */
 .wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.55rem;
   color: var(--ink);
   text-decoration: none;
-  font-size: 1.3rem;
+  font-size: 1.65rem;
+  line-height: 1;
   font-weight: 800;
-  font-stretch: 125%;
-  letter-spacing: -0.01em;
+  font-stretch: 75%;
+  letter-spacing: 0.005em;
+  text-shadow: 2px 2px 0 var(--pink);
 }
 
 .wordmark__mark {
-  width: 1.6rem;
-  height: 1.6rem;
-  color: var(--stub);
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+}
+
+.wordmark__ink {
+  mix-blend-mode: var(--blend);
 }
 
 .masthead nav {
@@ -188,39 +197,50 @@ a:hover {
   flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
-  gap: 0.5rem 1.25rem;
-  font-weight: 600;
+  gap: 0.35rem 1.1rem;
+  font-weight: 650;
 }
 
 .masthead nav a {
   color: var(--ink);
   text-decoration: none;
+  padding: 0.05rem 0.1rem;
+  border-bottom: 2px solid transparent;
 }
 
-.masthead nav a:hover,
+.masthead nav a:hover {
+  border-bottom-color: var(--ink);
+}
+
+/* Where you are: a stroke of highlighter. */
 .masthead nav a.active {
-  color: var(--blue-deep);
+  color: var(--on-yellow);
+  background: var(--yellow);
+  border-bottom-color: var(--on-yellow);
 }
 
 .link-button {
   font: inherit;
-  font-weight: 600;
+  font-weight: 650;
   color: var(--ink-soft);
   background: none;
   border: 0;
   padding: 0;
   cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.2em;
 }
 
 .link-button:hover {
-  color: var(--blue-deep);
+  color: var(--ink);
 }
 
 .page {
   width: 100%;
   max-width: 46rem;
   margin-inline: auto;
-  padding: 2rem 16px 4rem;
+  padding: 2.25rem 16px 4rem;
 }
 
 .devbar {
@@ -229,28 +249,29 @@ a:hover {
   justify-content: center;
   gap: 0.4rem 1rem;
   padding: 1rem 16px 1.5rem;
-  font-size: 0.875rem;
-  color: var(--ink-faint);
-}
-
-.devbar a {
+  font-family: var(--mono);
+  font-size: 0.8rem;
   color: var(--ink-soft);
+  border-top: 2px solid var(--ink);
 }
 
 /* ---------- The ticket ---------- */
 
+/* Paper stock, outlined in ink, with a hard second-ink shadow: the loudest thing on a page. */
 .ticket {
   --notch: 11px;
   position: relative;
   display: grid;
-  grid-template-columns: 6.5rem 1fr;
+  grid-template-columns: auto 1fr;
   background: var(--surface);
+  border: 2px solid var(--ink);
   border-radius: var(--radius);
-  box-shadow: none;
+  box-shadow: 6px 6px 0 var(--blue);
 }
 
 .ticket__stub {
   position: relative;
+  width: 6.75rem;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -259,12 +280,12 @@ a:hover {
   padding: 1.5rem 0.75rem;
   background: var(--stub);
   color: var(--on-stub);
-  border-radius: var(--radius) 0 0 var(--radius);
   border-right: 2px dashed var(--ink);
+  border-radius: 2px 0 0 2px;
 }
 
-/* The two half-circle punches where the stub tears off. They are paper-coloured discs
-   sitting over the seam, so they read as holes. */
+/* The two punches where the stub tears off: paper-coloured half discs over the seam, edged
+   in ink, so they read as holes through the ticket. */
 .ticket__stub::before,
 .ticket__stub::after {
   content: "";
@@ -274,25 +295,28 @@ a:hover {
   height: calc(var(--notch, 11px) * 2);
   border-radius: 50%;
   background: var(--paper);
+  border: 2px solid var(--ink);
 }
 
 .ticket__stub::before {
-  top: calc(var(--notch, 11px) * -1);
+  top: calc(var(--notch, 11px) * -1 - 2px);
+  clip-path: inset(50% 0 0 0);
 }
 
 .ticket__stub::after {
-  bottom: calc(var(--notch, 11px) * -1);
+  bottom: calc(var(--notch, 11px) * -1 - 2px);
+  clip-path: inset(0 0 50% 0);
 }
 
 /* The title runs up the stub, as it would be printed on a real one. */
 .ticket__stub h1 {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
-  font-size: clamp(2rem, 1.4rem + 1.6vw, 2.6rem);
-  line-height: 1;
+  font-size: clamp(2.3rem, 1.7rem + 1.6vw, 3rem);
+  line-height: 0.95;
   font-weight: 800;
-  font-stretch: 118%;
-  letter-spacing: -0.015em;
+  font-stretch: 75%;
+  letter-spacing: 0.005em;
   white-space: nowrap;
 }
 
@@ -300,8 +324,29 @@ a:hover {
   writing-mode: vertical-rl;
   transform: rotate(180deg);
   font-family: var(--mono);
-  font-size: 0.8rem;
-  opacity: 0.85;
+  font-size: 0.75rem;
+}
+
+/* The event's poster as a strip down the stub's edge. The stub's words stay on solid ink. */
+.ticket__stub--art {
+  width: 9rem;
+  padding-left: 2.85rem;
+}
+
+.ticket__art {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2.1rem;
+  display: flex;
+}
+
+.ticket__art .poster {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border: 0;
+  border-right: 2px solid var(--ink);
+  border-radius: 2px 0 0 2px;
 }
 
 .ticket__body {
@@ -315,7 +360,7 @@ a:hover {
 .ticket__footer {
   margin-top: 0.25rem;
   padding-top: 1.25rem;
-  border-top: 1px solid var(--rule);
+  border-top: 2px solid var(--ink);
   color: var(--ink-soft);
 }
 
@@ -323,15 +368,36 @@ a:hover {
 @media (max-width: 34rem) {
   .ticket {
     grid-template-columns: 1fr;
+    box-shadow: 4px 4px 0 var(--blue);
   }
 
-  .ticket__stub {
+  .ticket__stub,
+  .ticket__stub--art {
+    width: auto;
     flex-direction: row;
+    flex-wrap: wrap;
     align-items: baseline;
+    gap: 0.25rem 1rem;
     padding: 1.25rem 1.25rem 1.1rem;
-    border-radius: var(--radius) var(--radius) 0 0;
+    border-radius: 2px 2px 0 0;
     border-right: 0;
     border-bottom: 2px dashed var(--ink);
+  }
+
+  .ticket__stub--art {
+    padding-top: 2.6rem;
+  }
+
+  .ticket__art {
+    inset: 0 0 auto 0;
+    width: auto;
+    height: 1.6rem;
+  }
+
+  .ticket__art .poster {
+    border-right: 0;
+    border-bottom: 2px solid var(--ink);
+    border-radius: 2px 2px 0 0;
   }
 
   .ticket__stub::before,
@@ -342,11 +408,13 @@ a:hover {
   }
 
   .ticket__stub::before {
-    left: calc(var(--notch, 11px) * -1);
+    left: calc(var(--notch, 11px) * -1 - 2px);
+    clip-path: inset(0 0 0 50%);
   }
 
   .ticket__stub::after {
-    right: calc(var(--notch, 11px) * -1);
+    right: calc(var(--notch, 11px) * -1 - 2px);
+    clip-path: inset(0 50% 0 0);
   }
 
   .ticket__stub h1,
@@ -356,7 +424,7 @@ a:hover {
   }
 
   .ticket__stub h1 {
-    font-size: 1.9rem;
+    font-size: 2.2rem;
     white-space: normal;
   }
 }
@@ -364,10 +432,10 @@ a:hover {
 /* ---------- The account pass ---------- */
 
 .pass__name {
-  font-size: clamp(1.6rem, 1.2rem + 1.5vw, 2.2rem);
-  font-weight: 750;
-  font-stretch: 110%;
-  line-height: 1.1;
+  font-size: clamp(1.8rem, 1.3rem + 2vw, 2.6rem);
+  font-weight: 800;
+  font-stretch: 80%;
+  line-height: 1.02;
   overflow-wrap: anywhere;
 }
 
@@ -383,11 +451,12 @@ a:hover {
   grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
   gap: 1rem 1.5rem;
   padding-top: 1.25rem;
-  border-top: 1px solid var(--rule);
+  border-top: 2px solid var(--ink);
 }
 
 .pass__details dt {
-  font-size: 0.875rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
   color: var(--ink-faint);
 }
 
@@ -400,7 +469,7 @@ a:hover {
 .panel {
   margin-top: 3rem;
   padding-top: 1.5rem;
-  border-top: 1px solid var(--rule);
+  border-top: 2px solid var(--ink);
   max-width: 30rem;
 }
 
@@ -408,10 +477,11 @@ a:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem 0.75rem;
-  font-size: 1.2rem;
-  font-weight: 750;
-  font-stretch: 108%;
+  gap: 0.5rem 0.9rem;
+  font-size: 1.45rem;
+  line-height: 1.1;
+  font-weight: 800;
+  font-stretch: 82%;
 }
 
 .panel .lede {
@@ -447,7 +517,7 @@ form {
 
 .field label,
 .field__label {
-  font-weight: 600;
+  font-weight: 650;
   font-size: 0.95rem;
 }
 
@@ -460,8 +530,8 @@ form {
   font: inherit;
   color: var(--ink);
   background: var(--field);
-  border: 1.5px solid var(--rule);
-  border-radius: 8px;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
 }
 
 .field textarea {
@@ -472,15 +542,15 @@ form {
 .field input:hover,
 .field select:hover,
 .field textarea:hover {
-  border-color: var(--ink-faint);
+  border-color: var(--blue-deep);
 }
 
 .field input:focus-visible,
 .field select:focus-visible,
 .field textarea:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--blue-deep) 35%, transparent);
-  outline-offset: 0;
-  border-color: var(--blue-deep);
+  outline: 3px solid var(--blue-deep);
+  outline-offset: 2px;
+  border-color: var(--ink);
 }
 
 .field input[aria-invalid="true"],
@@ -496,7 +566,7 @@ form {
 
 .field__error {
   font-size: 0.875rem;
-  font-weight: 600;
+  font-weight: 650;
   color: var(--danger);
 }
 
@@ -508,37 +578,50 @@ form {
   margin-top: 0.25rem;
 }
 
+/* Ink-filled, with the second ink as a hard shadow that closes when pressed. */
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-height: 2.75rem;
-  padding: 0.6rem 1.35rem;
+  padding: 0.6rem 1.4rem;
   font: inherit;
-  font-weight: 700;
-  font-stretch: 108%;
-  color: var(--on-stub);
-  background: var(--stub);
-  border: 0;
-  border-radius: 8px;
+  font-weight: 750;
+  font-stretch: 90%;
+  color: var(--on-ink);
+  background: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+  box-shadow: 4px 4px 0 var(--pink);
   text-decoration: none;
   cursor: pointer;
+  transition:
+    transform 120ms ease-out,
+    box-shadow 120ms ease-out;
 }
 
 .button:hover {
-  background: var(--ink);
+  transform: translate(-1px, -1px);
+  box-shadow: 5px 5px 0 var(--pink);
   text-decoration: none;
+}
+
+.button:active {
+  transform: translate(4px, 4px);
+  box-shadow: 0 0 0 var(--pink);
 }
 
 .button:disabled {
   opacity: 0.65;
   cursor: progress;
+  transform: none;
+  box-shadow: 4px 4px 0 var(--pink);
 }
 
 .message {
   padding: 0.75rem 1rem;
-  border-radius: 8px;
-  border-left: 4px solid;
+  border-radius: var(--radius);
+  border-left: 6px solid;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -557,9 +640,10 @@ form {
 .command {
   padding: 0.75rem 1rem;
   font-family: var(--mono);
-  font-size: 0.875rem;
+  font-size: 0.85rem;
   background: var(--paper);
-  border-radius: 8px;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
   overflow-x: auto;
 }
 
@@ -574,10 +658,11 @@ form {
 }
 
 .page-head h1 {
-  font-size: clamp(1.6rem, 4vw, 2.1rem);
+  font-size: clamp(2.1rem, 6vw, 3.1rem);
   font-weight: 800;
-  font-stretch: 112%;
-  line-height: 1.1;
+  font-stretch: 75%;
+  line-height: 0.95;
+  letter-spacing: 0.005em;
 }
 
 .list {
@@ -592,8 +677,8 @@ form {
 .card {
   padding: 1rem 1.15rem;
   background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: 10px;
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
@@ -608,8 +693,10 @@ form {
 }
 
 .card__title {
-  font-weight: 750;
-  font-size: 1.05rem;
+  font-weight: 800;
+  font-stretch: 88%;
+  font-size: 1.15rem;
+  line-height: 1.15;
   color: var(--ink);
 }
 
@@ -618,7 +705,8 @@ a.card__title {
 }
 
 a.card__title:hover {
-  color: var(--blue-deep);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
 }
 
 .meta {
@@ -631,26 +719,35 @@ a.card__title:hover {
   margin-top: 0.5rem;
 }
 
+/* Statuses are rubber stamps: inked border, typewriter face, set down slightly askew. */
 .badge {
   display: inline-block;
-  padding: 0.1rem 0.6rem;
-  font-size: 0.8rem;
+  padding: 0.05rem 0.5rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
   font-weight: 700;
-  letter-spacing: 0.02em;
-  border-radius: 999px;
-  border: 1.5px solid currentColor;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
   color: var(--ink-soft);
+  background: var(--surface);
+  border: 2px solid currentColor;
+  border-radius: 3px;
+  transform: rotate(-2deg);
   white-space: nowrap;
+}
+
+.panel h2 .badge {
+  font-size: 0.85rem;
+  padding: 0.1rem 0.6rem;
+  transform: rotate(-3deg);
 }
 
 .badge--ok {
   color: var(--ok);
-  background: var(--ok-soft);
 }
 
 .badge--bad {
   color: var(--danger);
-  background: var(--danger-soft);
 }
 
 .badge--live {
@@ -658,33 +755,42 @@ a.card__title:hover {
 }
 
 .button--quiet {
-  color: var(--blue-deep);
+  color: var(--ink);
   background: transparent;
-  border: 1.5px solid var(--rule);
+  box-shadow: none;
 }
 
 .button--quiet:hover {
-  color: var(--ink);
-  background: var(--paper);
+  background: var(--surface);
+  box-shadow: 3px 3px 0 var(--pink);
+}
+
+.button--quiet:disabled {
+  box-shadow: none;
 }
 
 .button--small {
   min-height: 2.25rem;
-  padding: 0.35rem 0.9rem;
+  padding: 0.3rem 0.9rem;
   font-size: 0.9rem;
+  box-shadow: 3px 3px 0 var(--pink);
+}
+
+.button--small.button--quiet {
+  box-shadow: none;
 }
 
 .check {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .check input {
   width: 1.15rem;
   height: 1.15rem;
-  accent-color: var(--stub);
+  accent-color: var(--ink);
 }
 
 .details {
@@ -695,20 +801,21 @@ a.card__title:hover {
 }
 
 .details dt {
-  font-size: 0.8rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
   color: var(--ink-faint);
 }
 
 .details dd {
   margin: 0;
-  font-weight: 600;
+  font-weight: 650;
   overflow-wrap: anywhere;
 }
 
 .details dd.code {
   font-family: var(--mono);
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: 0.85rem;
+  font-weight: 400;
 }
 
 .field input[type="file"] {
@@ -718,12 +825,16 @@ a.card__title:hover {
 
 /* ---------- Holds (M7) ---------- */
 
+/* Huge numerals, riso blue with the pink printed a hair off. */
 .countdown {
-  font-size: clamp(2.6rem, 9vw, 4rem);
+  font-size: clamp(3.5rem, 14vw, 7rem);
   font-weight: 800;
+  font-stretch: 75%;
   font-variant-numeric: tabular-nums;
-  line-height: 1.1;
-  margin: 0.2rem 0 0.4rem;
+  line-height: 1;
+  color: var(--blue);
+  text-shadow: 0.05em 0.04em 0 var(--pink);
+  margin: 0.3rem 0 0.5rem;
 }
 
 /* ---------- Search (M6) ---------- */
@@ -793,7 +904,7 @@ a.card__title:hover {
   flex-wrap: wrap;
   gap: 0 1.5rem;
   margin-top: 1.5rem;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 2px solid var(--ink);
 }
 
 .tab {
@@ -802,8 +913,8 @@ a.card__title:hover {
   color: var(--ink-soft);
   background: none;
   border: 0;
-  border-bottom: 3px solid transparent;
-  margin-bottom: -1px;
+  border-bottom: 4px solid transparent;
+  margin-bottom: -2px;
   padding: 0.6rem 0.1rem;
   cursor: pointer;
 }
@@ -814,7 +925,7 @@ a.card__title:hover {
 
 .tab[aria-selected="true"] {
   color: var(--ink);
-  border-bottom-color: var(--blue-deep);
+  border-bottom-color: var(--ink);
 }
 
 [role="tabpanel"] {
@@ -896,7 +1007,8 @@ a.card__title:hover {
     scroll-behavior: auto !important;
   }
 
-  .poster__ink--b {
+  .poster__ink--b,
+  .button {
     animation: none;
     transition: none;
   }

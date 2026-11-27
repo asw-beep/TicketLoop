@@ -1,21 +1,33 @@
 import type { ReactNode } from "react";
+import type { PosterInput } from "../lib/poster";
+import { Poster } from "./Poster";
 
 /**
  * The one loud element on a page: a ticket with a perforated stub. On wide screens the
  * stub sits on the left and its text runs up the stub; on phones it becomes a band on top.
+ * With `art`, the event's poster runs as a strip along the stub's edge.
  */
 export function Ticket({
   stub,
   footer,
+  art,
   children,
 }: {
   stub: ReactNode;
   footer?: ReactNode;
+  art?: PosterInput;
   children: ReactNode;
 }) {
   return (
     <section className="ticket">
-      <div className="ticket__stub">{stub}</div>
+      <div className={art ? "ticket__stub ticket__stub--art" : "ticket__stub"}>
+        {art && (
+          <div className="ticket__art">
+            <Poster event={art} size="thumb" />
+          </div>
+        )}
+        {stub}
+      </div>
       <div className="ticket__body">
         {children}
         {footer && <div className="ticket__footer">{footer}</div>}

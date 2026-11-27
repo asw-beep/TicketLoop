@@ -20,8 +20,14 @@ export function Layout({ children }: { children: ReactNode }) {
       </a>
       <header className="masthead">
         <Link to="/" className="wordmark" aria-label="TicketLoop home">
-          <svg viewBox="0 0 32 32" aria-hidden="true" className="wordmark__mark">
-            <path fill="currentColor" d="M4 7h24v6a3 3 0 0 0 0 6v6H4v-6a3 3 0 0 0 0-6z" />
+          {/* The ticket mark in two inks: pink printed first, blue overprinted a little off. */}
+          <svg viewBox="0 0 34 34" aria-hidden="true" className="wordmark__mark">
+            <path fill="var(--pink)" d="M6 9h24v6a3 3 0 0 0 0 6v6H6v-6a3 3 0 0 0 0-6z" />
+            <path
+              className="wordmark__ink"
+              fill="var(--blue)"
+              d="M4 7h24v6a3 3 0 0 0 0 6v6H4v-6a3 3 0 0 0 0-6z"
+            />
             <path
               stroke="var(--paper)"
               strokeWidth="1.5"
