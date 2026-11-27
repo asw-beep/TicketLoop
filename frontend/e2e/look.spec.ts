@@ -75,8 +75,9 @@ test("the buying pages fit a phone and hold still when motion is reduced", async
   page: admin,
   browser,
 }) => {
-  test.setTimeout(90_000);
-  const eventName = `Look ${Date.now()}`;
+  test.setTimeout(120_000);
+  // One long unbroken word: a phone has to wrap it, not scroll sideways for it.
+  const eventName = `Look ${Date.now()} Thiruvananthapuramwinterfestivaloflightsandmusic`;
   await signInAsAdmin(admin);
   await publishEvent(admin, eventName);
   const seller = await newPage(browser);
@@ -134,6 +135,7 @@ test("the buying pages fit a phone and hold still when motion is reduced", async
   await seller.goto("/tickets");
   const myTicket = seller.getByRole("list", { name: "Your tickets" }).getByRole("listitem").first();
   await expect(myTicket.locator(".poster--thumb")).toHaveAttribute("data-motif", "PLAIN");
+  const ticketPath = await myTicket.getByRole("link").first().getAttribute("href");
   await seller.goto("/listings");
   const myListing = seller.getByRole("listitem", { name: eventName });
   await expect(myListing.locator(".poster--thumb")).toHaveAttribute("data-motif", motif!);
@@ -141,10 +143,23 @@ test("the buying pages fit a phone and hold still when motion is reduced", async
   await seller.setViewportSize({ width: 360, height: 800 });
   for (const colorScheme of ["light", "dark"] as const) {
     await seller.emulateMedia({ colorScheme });
-    for (const path of ["/tickets", "/listings"]) {
+    for (const path of ["/tickets", "/listings", ticketPath!]) {
       await seller.goto(path);
       await expect(seller.locator(".poster--thumb").first()).toBeVisible();
       expect(await pageWidth(seller), `${path} (${colorScheme})`).toBeLessThanOrEqual(360);
     }
+  }
+
+  // A buyer's hold: the stub with its poster strip and the big countdown, on a phone.
+  const buyer = await newPage(browser);
+  await register(buyer, newEmail(), "Meera Pillai");
+  await buyer.goto(listingPath!);
+  await buyer.getByRole("button", { name: "Reserve" }).click();
+  await expect(buyer.getByRole("heading", { name: "Your hold" })).toBeVisible();
+  await buyer.setViewportSize({ width: 360, height: 800 });
+  for (const colorScheme of ["light", "dark"] as const) {
+    await buyer.emulateMedia({ colorScheme });
+    await expect(buyer.getByRole("timer", { name: "Time left" })).toBeVisible();
+    expect(await pageWidth(buyer), `hold (${colorScheme})`).toBeLessThanOrEqual(360);
   }
 });

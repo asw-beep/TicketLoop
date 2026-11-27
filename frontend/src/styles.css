@@ -95,7 +95,8 @@ body {
   font-optical-sizing: auto;
 }
 
-/* Grain over the whole sheet. A static image, so it never repaints on scroll. */
+/* Grain over the whole sheet: a static image laid on at low opacity. No blend mode, so the
+   compositor never has to re-blend the page beneath it while scrolling. */
 body::before {
   content: "";
   position: fixed;
@@ -103,7 +104,6 @@ body::before {
   z-index: 1000;
   pointer-events: none;
   opacity: var(--grain);
-  mix-blend-mode: var(--blend);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='.33 .33 .33 0 0 .33 .33 .33 0 0 .33 .33 .33 0 0 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
@@ -734,6 +734,7 @@ form {
   font-size: 1.15rem;
   line-height: 1.15;
   color: var(--ink);
+  overflow-wrap: anywhere; /* a long unbroken name wraps rather than widening the page */
 }
 
 a.card__title {

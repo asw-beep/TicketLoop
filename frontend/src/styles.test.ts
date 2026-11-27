@@ -42,6 +42,12 @@ it("every token the stylesheet uses is defined", () => {
   expect(missing).toEqual([]);
 });
 
+it("the grain is a plain overlay, not a blend layer the page re-composites on every scroll", () => {
+  const grain = /body::before\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+  expect(grain).toContain("background-image");
+  expect(grain).not.toMatch(/mix-blend-mode/);
+});
+
 it.each(Object.keys(THEMES))("text is readable in the %s theme", (theme) => {
   const tokens = THEMES[theme]!;
   const hex = (name: string) => {
