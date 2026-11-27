@@ -1,4 +1,6 @@
-import "@fontsource-variable/archivo/wdth.css"; // Archivo with its width axis, served from here
+import "@fontsource-variable/bricolage-grotesque/standard.css"; // weight, width and optical size
+import "@fontsource/space-mono/400.css";
+import "@fontsource/space-mono/700.css";
 import "./styles.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";

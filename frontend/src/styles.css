@@ -1,73 +1,75 @@
-/* TicketLoop app. The same palette and typeface as documentation/assets/notes.css, so the
-   notes and the app read as one project. One loud element per page, the ticket; the rest
-   stays quiet. */
+/* TicketLoop app, printed like a riso zine: warm paper, two fluorescent inks laid slightly
+   out of register, halftone and grain. Pink and riso blue are for art, fills and display
+   type; text is ink or one of the tokens src/styles.test.ts holds to WCAG AA. */
 
 :root {
-  --paper: #e8ecf1;
-  --surface: #f8fafc;
-  --field: #ffffff;
-  --ink: #17203a;
-  --ink-soft: #4b5571;
-  --ink-faint: #6f7891;
-  --rule: #cdd3dd;
-  --ticket: #2c44c4;
-  --ticket-deep: #22369f;
-  --ticket-ink: #ffffff;
-  --perforation: rgb(255 255 255 / 0.45);
-  --link: #2c44c4;
-  --danger: #b42318;
-  --danger-soft: #fdecea;
-  --ok: #1d6b45;
-  --ok-soft: #e3f2e9;
-  --focus: #2c44c4;
-  --shadow: 0 1px 0 rgb(23 32 58 / 0.06), 0 12px 32px -16px rgb(23 32 58 / 0.35);
-  --font: "Archivo Variable", "Archivo", "Segoe UI", system-ui, sans-serif;
-  --mono: "JetBrains Mono", Consolas, ui-monospace, monospace;
-  --radius: 14px;
+  --paper: #f3eee4;
+  --surface: #faf7f0;
+  --field: #fffdf9;
+  --ink: #1e1b18;
+  --ink-soft: #4d463e;
+  --ink-faint: #685f55;
+  --rule: #d3c9b8;
+  --pink: #ff48b0;
+  --blue: #0078bf;
+  --blue-deep: #3d5588;
+  --yellow: #ffe800;
+  --on-yellow: #1e1b18;
+  --danger: #b0261c;
+  --danger-soft: #fbe3dc;
+  --ok: #23663c;
+  --ok-soft: #dff0e2;
+  --stub: #3d5588;
+  --on-stub: #f3eee4;
+  --on-ink: #f3eee4;
+  --blend: multiply;
+  --grain: 0.07;
+  --font: "Bricolage Grotesque Variable", "Segoe UI", system-ui, sans-serif;
+  --mono: "Space Mono", Consolas, ui-monospace, monospace;
+  --radius: 4px;
   color-scheme: light;
 }
 
+/* Night print: the same inks on black stock, overprinted with screen instead of multiply. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #10141f;
-    --surface: #171c2a;
-    --field: #10141f;
-    --ink: #e5e9f2;
-    --ink-soft: #a9b1c5;
-    --ink-faint: #7f889e;
-    --rule: #2f3850;
-    --ticket: #2b3da8;
-    --ticket-deep: #24338c;
-    --perforation: rgb(255 255 255 / 0.35);
-    --link: #a3b0ff;
-    --danger: #ff9b8f;
-    --danger-soft: #3a1c1d;
-    --ok: #86d9ab;
-    --ok-soft: #15301f;
-    --focus: #a3b0ff;
-    --shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 16px 36px -18px rgb(0 0 0 / 0.8);
+    --paper: #161413;
+    --surface: #1f1c1a;
+    --field: #121110;
+    --ink: #f1ece2;
+    --ink-soft: #c9c0b2;
+    --ink-faint: #a39a8c;
+    --rule: #3a3531;
+    --blue-deep: #8fb0ff;
+    --danger: #ff8f80;
+    --danger-soft: #3b1d1a;
+    --ok: #7ed69c;
+    --ok-soft: #16301f;
+    --on-stub: #f1ece2;
+    --on-ink: #161413;
+    --blend: screen;
+    --grain: 0.05;
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --paper: #10141f;
-  --surface: #171c2a;
-  --field: #10141f;
-  --ink: #e5e9f2;
-  --ink-soft: #a9b1c5;
-  --ink-faint: #7f889e;
-  --rule: #2f3850;
-  --ticket: #2b3da8;
-  --ticket-deep: #24338c;
-  --perforation: rgb(255 255 255 / 0.35);
-  --link: #a3b0ff;
-  --danger: #ff9b8f;
-  --danger-soft: #3a1c1d;
-  --ok: #86d9ab;
-  --ok-soft: #15301f;
-  --focus: #a3b0ff;
-  --shadow: 0 1px 0 rgb(0 0 0 / 0.3), 0 16px 36px -18px rgb(0 0 0 / 0.8);
+  --paper: #161413;
+  --surface: #1f1c1a;
+  --field: #121110;
+  --ink: #f1ece2;
+  --ink-soft: #c9c0b2;
+  --ink-faint: #a39a8c;
+  --rule: #3a3531;
+  --blue-deep: #8fb0ff;
+  --danger: #ff8f80;
+  --danger-soft: #3b1d1a;
+  --ok: #7ed69c;
+  --ok-soft: #16301f;
+  --on-stub: #f1ece2;
+  --on-ink: #161413;
+  --blend: screen;
+  --grain: 0.05;
   color-scheme: dark;
 }
 
@@ -93,6 +95,18 @@ body {
   font-optical-sizing: auto;
 }
 
+/* Grain over the whole sheet. A static image, so it never repaints on scroll. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: var(--grain);
+  mix-blend-mode: var(--blend);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='.33 .33 .33 0 0 .33 .33 .33 0 0 .33 .33 .33 0 0 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
 h1,
 h2,
 p,
@@ -103,19 +117,19 @@ pre {
 }
 
 a {
-  color: var(--link);
-  text-underline-offset: 0.18em;
-  text-decoration-thickness: 1px;
-}
-
-a:hover {
+  color: var(--blue-deep);
+  text-underline-offset: 0.2em;
   text-decoration-thickness: 2px;
 }
 
+a:hover {
+  text-decoration-thickness: 3px;
+}
+
 :focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
-  border-radius: 4px;
+  outline: 3px solid var(--blue-deep);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 
 .skip-link {
@@ -166,7 +180,7 @@ a:hover {
 .wordmark__mark {
   width: 1.6rem;
   height: 1.6rem;
-  color: var(--ticket);
+  color: var(--stub);
 }
 
 .masthead nav {
@@ -185,7 +199,7 @@ a:hover {
 
 .masthead nav a:hover,
 .masthead nav a.active {
-  color: var(--link);
+  color: var(--blue-deep);
 }
 
 .link-button {
@@ -199,7 +213,7 @@ a:hover {
 }
 
 .link-button:hover {
-  color: var(--link);
+  color: var(--blue-deep);
 }
 
 .page {
@@ -232,7 +246,7 @@ a:hover {
   grid-template-columns: 6.5rem 1fr;
   background: var(--surface);
   border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .ticket__stub {
@@ -243,10 +257,10 @@ a:hover {
   align-items: center;
   gap: 1rem;
   padding: 1.5rem 0.75rem;
-  background: var(--ticket);
-  color: var(--ticket-ink);
+  background: var(--stub);
+  color: var(--on-stub);
   border-radius: var(--radius) 0 0 var(--radius);
-  border-right: 2px dashed var(--perforation);
+  border-right: 2px dashed var(--ink);
 }
 
 /* The two half-circle punches where the stub tears off. They are paper-coloured discs
@@ -255,19 +269,19 @@ a:hover {
 .ticket__stub::after {
   content: "";
   position: absolute;
-  right: calc(var(--notch) * -1 - 1px);
-  width: calc(var(--notch) * 2);
-  height: calc(var(--notch) * 2);
+  right: calc(var(--notch, 11px) * -1 - 1px);
+  width: calc(var(--notch, 11px) * 2);
+  height: calc(var(--notch, 11px) * 2);
   border-radius: 50%;
   background: var(--paper);
 }
 
 .ticket__stub::before {
-  top: calc(var(--notch) * -1);
+  top: calc(var(--notch, 11px) * -1);
 }
 
 .ticket__stub::after {
-  bottom: calc(var(--notch) * -1);
+  bottom: calc(var(--notch, 11px) * -1);
 }
 
 /* The title runs up the stub, as it would be printed on a real one. */
@@ -317,22 +331,22 @@ a:hover {
     padding: 1.25rem 1.25rem 1.1rem;
     border-radius: var(--radius) var(--radius) 0 0;
     border-right: 0;
-    border-bottom: 2px dashed var(--perforation);
+    border-bottom: 2px dashed var(--ink);
   }
 
   .ticket__stub::before,
   .ticket__stub::after {
     top: auto;
     right: auto;
-    bottom: calc(var(--notch) * -1 - 1px);
+    bottom: calc(var(--notch, 11px) * -1 - 1px);
   }
 
   .ticket__stub::before {
-    left: calc(var(--notch) * -1);
+    left: calc(var(--notch, 11px) * -1);
   }
 
   .ticket__stub::after {
-    right: calc(var(--notch) * -1);
+    right: calc(var(--notch, 11px) * -1);
   }
 
   .ticket__stub h1,
@@ -464,9 +478,9 @@ form {
 .field input:focus-visible,
 .field select:focus-visible,
 .field textarea:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--focus) 35%, transparent);
+  outline: 3px solid color-mix(in srgb, var(--blue-deep) 35%, transparent);
   outline-offset: 0;
-  border-color: var(--focus);
+  border-color: var(--blue-deep);
 }
 
 .field input[aria-invalid="true"],
@@ -503,8 +517,8 @@ form {
   font: inherit;
   font-weight: 700;
   font-stretch: 108%;
-  color: var(--ticket-ink);
-  background: var(--ticket);
+  color: var(--on-stub);
+  background: var(--stub);
   border: 0;
   border-radius: 8px;
   text-decoration: none;
@@ -512,7 +526,7 @@ form {
 }
 
 .button:hover {
-  background: var(--ticket-deep);
+  background: var(--ink);
   text-decoration: none;
 }
 
@@ -604,7 +618,7 @@ a.card__title {
 }
 
 a.card__title:hover {
-  color: var(--link);
+  color: var(--blue-deep);
 }
 
 .meta {
@@ -640,11 +654,11 @@ a.card__title:hover {
 }
 
 .badge--live {
-  color: var(--link);
+  color: var(--blue-deep);
 }
 
 .button--quiet {
-  color: var(--link);
+  color: var(--blue-deep);
   background: transparent;
   border: 1.5px solid var(--rule);
 }
@@ -670,7 +684,7 @@ a.card__title:hover {
 .check input {
   width: 1.15rem;
   height: 1.15rem;
-  accent-color: var(--ticket);
+  accent-color: var(--stub);
 }
 
 .details {
@@ -748,7 +762,7 @@ a.card__title:hover {
 }
 
 .pass__name a:hover {
-  color: var(--link);
+  color: var(--blue-deep);
 }
 
 .panel--wide {
@@ -800,7 +814,7 @@ a.card__title:hover {
 
 .tab[aria-selected="true"] {
   color: var(--ink);
-  border-bottom-color: var(--link);
+  border-bottom-color: var(--blue-deep);
 }
 
 [role="tabpanel"] {
