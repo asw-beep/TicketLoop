@@ -821,8 +821,83 @@ a.card__title:hover {
   padding-top: 1.25rem;
 }
 
+/* ---------- Posters ---------- */
+
+/* Two inks, the top one printed a few pixels out of register (--dx, --dy, set per poster). */
+.poster {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  border: 2px solid var(--ink);
+  border-radius: var(--radius);
+}
+
+.poster--thumb {
+  --mis: 0.5;
+  flex: none;
+  width: 4rem;
+  aspect-ratio: 1;
+}
+
+.poster--card {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+}
+
+.poster--hero {
+  width: 100%;
+  aspect-ratio: 4 / 5;
+}
+
+.poster__ink {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.poster__ink--pink {
+  color: var(--pink);
+}
+
+.poster__ink--blue {
+  color: var(--blue);
+}
+
+.poster__ink--b {
+  mix-blend-mode: var(--blend);
+  transform: translate(calc(var(--dx, 0px) * var(--mis, 1)), calc(var(--dy, 0px) * var(--mis, 1)));
+  transition: transform 200ms ease-out;
+  /* backwards, not both: a filled animation would pin the transform and stop the hover easing. */
+  animation: ink-settle 400ms ease-out backwards;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+
+/* The second ink lands wide of the first, then settles into its resting offset. */
+@keyframes ink-settle {
+  from {
+    transform: translate(
+      calc(var(--dx, 0px) * var(--mis, 1) * 3),
+      calc(var(--dy, 0px) * var(--mis, 1) * 3)
+    );
+  }
+}
+
+:is(.poster-card, .card--thumb):is(:hover, :focus-within) .poster {
+  --mis: 1.5;
+}
+
+:is(.poster-card, .card--thumb):is(:hover, :focus-within) .poster--thumb {
+  --mis: 0.9;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;
+  }
+
+  .poster__ink--b {
+    animation: none;
+    transition: none;
   }
 }
