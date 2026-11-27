@@ -839,15 +839,108 @@ a.card__title:hover {
 
 /* ---------- Search (M6) ---------- */
 
+/* Pages that hold a .wide block (search, an event, a listing) get the full measure. */
+.page:has(.wide) {
+  max-width: 64rem;
+}
+
+/* The front page's masthead: a poster-scale line beside the house poster. */
+.hero {
+  display: grid;
+  gap: 1.5rem 2.5rem;
+  align-items: end;
+  padding-bottom: 2rem;
+  border-bottom: 2px solid var(--ink);
+}
+
+.hero h1 {
+  display: inline-block;
+  padding: 0.1rem 0.45rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--on-yellow);
+  background: var(--yellow);
+}
+
+.hero__headline {
+  margin-top: 0.9rem;
+  font-size: clamp(3rem, 1.2rem + 7vw, 6.4rem);
+  font-weight: 800;
+  font-stretch: 75%;
+  line-height: 0.88;
+  letter-spacing: -0.005em;
+  text-shadow: 0.035em 0.03em 0 var(--pink);
+}
+
+.hero .lede {
+  margin-top: 1.1rem;
+  font-size: 1.05rem;
+}
+
+.hero .poster {
+  aspect-ratio: 16 / 9;
+}
+
+@media (min-width: 48rem) {
+  .hero {
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  }
+
+  .hero .poster {
+    aspect-ratio: 4 / 5;
+  }
+}
+
 .filters {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
   gap: 1rem 1.25rem;
-  margin-top: 1.5rem;
+  margin-top: 1.75rem;
 }
 
 .filters__wide {
   grid-column: 1 / -1;
+}
+
+/* Results across events: poster cards, one column on a phone, up to three on a laptop. */
+.poster-grid {
+  list-style: none;
+  margin: 2rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
+  gap: 2rem 1.5rem;
+}
+
+.poster-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.poster-card .poster {
+  margin-bottom: 0.5rem;
+}
+
+.poster-card .card__title {
+  font-size: 1.4rem;
+  font-stretch: 78%;
+  line-height: 1.05;
+}
+
+.poster-card .price {
+  margin-top: auto;
+  padding-top: 0.5rem;
+}
+
+.poster-card .price strong {
+  font-size: 1.75rem;
+  font-weight: 800;
+  font-stretch: 78%;
+  line-height: 1;
 }
 
 .price {
@@ -858,13 +951,44 @@ a.card__title:hover {
 }
 
 .price strong {
-  font-weight: 750;
-  font-size: 1.1rem;
+  font-weight: 800;
+  font-size: 1.2rem;
 }
 
 .price__was {
   color: var(--ink-faint);
-  font-size: 0.9rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+
+/* One event, big: poster beside the ticket, held in place while the panels scroll. */
+.feature {
+  display: grid;
+  gap: 1.75rem 2.5rem;
+  align-items: start;
+}
+
+.feature__body {
+  min-width: 0;
+}
+
+.feature__art .poster {
+  aspect-ratio: 16 / 9;
+}
+
+@media (min-width: 48rem) {
+  .feature {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  }
+
+  .feature__art {
+    position: sticky;
+    top: 1.5rem;
+  }
+
+  .feature__art .poster {
+    aspect-ratio: 4 / 5;
+  }
 }
 
 .pass__name a {

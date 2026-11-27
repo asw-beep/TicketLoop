@@ -3,6 +3,7 @@ import type { PublicListing } from "../api/types";
 import { formatPaise, formatWhen } from "../lib/format";
 import { withoutRepeats } from "../lib/search";
 import { FormError } from "./Form";
+import { Poster } from "./Poster";
 
 /** Enough of an infinite query to show its pages. */
 interface Pages {
@@ -14,7 +15,10 @@ interface Pages {
   fetchNextPage: () => unknown;
 }
 
-/** Tickets on sale, with Load more. `showEvent` is off on an event's own page. */
+/**
+ * Tickets on sale, with Load more. Across events they are a grid of poster cards; on an event's
+ * own page (`showEvent` off) they are compact rows, since every row would carry the same poster.
+ */
 export function ListingResults({
   results,
   empty,
@@ -33,10 +37,14 @@ export function ListingResults({
       <p role="status" className={none ? "empty" : "visually-hidden"}>
         {none ? empty : results.isSuccess && `Showing ${items.length} tickets.`}
       </p>
-      <ul className="list" aria-label="Tickets on sale">
-        {items.map((listing) => (
-          <ResultRow key={listing.id} listing={listing} showEvent={showEvent} />
-        ))}
+      <ul className={showEvent ? "poster-grid" : "list"} aria-label="Tickets on sale">
+        {items.map((listing, index) =>
+          showEvent ? (
+            <PosterCard key={listing.id} listing={listing} index={index} />
+          ) : (
+            <ResultRow key={listing.id} listing={listing} />
+          ),
+        )}
       </ul>
       {results.hasNextPage && (
         <div className="actions">
@@ -54,35 +62,54 @@ export function ListingResults({
   );
 }
 
-function ResultRow({ listing, showEvent }: { listing: PublicListing; showEvent: boolean }) {
-  const { event } = listing;
+function Price({ listing }: { listing: PublicListing }) {
   const discounted = listing.asking_price_paise < listing.original_price_paise;
-  const seat = [listing.ticket_category, listing.seat_details].filter(Boolean).join(" · ");
   return (
-    <li className="card" aria-label={showEvent ? event.name : seat}>
+    <span className="price">
+      {discounted && (
+        <s className="price__was">
+          <span className="visually-hidden">Face value </span>
+          {formatPaise(listing.original_price_paise)}
+        </s>
+      )}
+      <strong>{formatPaise(listing.asking_price_paise)}</strong>
+    </span>
+  );
+}
+
+const seatOf = (listing: PublicListing) =>
+  [listing.ticket_category, listing.seat_details].filter(Boolean).join(" · ");
+
+/** A ticket on sale across events: the event's poster, then what and where, then the price. */
+function PosterCard({ listing, index }: { listing: PublicListing; index: number }) {
+  const { event } = listing;
+  return (
+    <li className="poster-card" aria-label={event.name}>
+      <Poster event={event} size="card" index={index} />
+      <Link className="card__title" to={`/listings/${listing.id}`}>
+        {event.name}
+      </Link>
+      <p className="meta">{seatOf(listing)}</p>
+      <p className="meta">
+        {event.venue}, {event.city} · {formatWhen(event.starts_at)} ·{" "}
+        <Link to={`/events/${event.id}`}>All tickets for this event</Link>
+      </p>
+      <Price listing={listing} />
+    </li>
+  );
+}
+
+/** A ticket on sale on its event's own page: the seat and the price. */
+function ResultRow({ listing }: { listing: PublicListing }) {
+  const seat = seatOf(listing);
+  return (
+    <li className="card" aria-label={seat}>
       <div className="card__top">
         <Link className="card__title" to={`/listings/${listing.id}`}>
-          {showEvent ? event.name : seat}
+          {seat}
         </Link>
-        <span className="price">
-          {discounted && (
-            <s className="price__was">
-              <span className="visually-hidden">Face value </span>
-              {formatPaise(listing.original_price_paise)}
-            </s>
-          )}
-          <strong>{formatPaise(listing.asking_price_paise)}</strong>
-        </span>
+        <Price listing={listing} />
       </div>
-      {showEvent && (
-        <>
-          <p className="meta">{seat}</p>
-          <p className="meta">
-            {event.venue}, {event.city} · {formatWhen(event.starts_at)} ·{" "}
-            <Link to={`/events/${event.id}`}>All tickets for this event</Link>
-          </p>
-        </>
-      )}
     </li>
   );
 }

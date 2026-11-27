@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useParams } from "react-router";
 import { api, unwrap } from "../api/client";
 import { ApiError } from "../api/problem";
+import { Feature } from "../components/Feature";
 import { FormError, SelectField } from "../components/Form";
 import { ListingResults } from "../components/ListingResults";
 import { Ticket } from "../components/Ticket";
@@ -30,26 +31,28 @@ export function EventPage() {
   if (!event.data) return null;
 
   return (
-    <>
-      <Ticket stub={<h1>Event</h1>}>
-        <p className="pass__name">{event.data.name}</p>
-        <p className="pass__email">
-          {event.data.venue}, {event.data.city} · {formatWhen(event.data.starts_at)}
-        </p>
-        {event.data.description && <p>{event.data.description}</p>}
-        <dl className="details">
-          <div>
-            <dt>Category</dt>
-            <dd>{CATEGORIES[event.data.category]}</dd>
-          </div>
-          <div>
-            <dt>Organizer</dt>
-            <dd>{event.data.organizer}</dd>
-          </div>
-        </dl>
-      </Ticket>
+    <div className="wide">
+      <Feature poster={event.data}>
+        <Ticket stub={<h1>Event</h1>}>
+          <p className="pass__name">{event.data.name}</p>
+          <p className="pass__email">
+            {event.data.venue}, {event.data.city} · {formatWhen(event.data.starts_at)}
+          </p>
+          {event.data.description && <p>{event.data.description}</p>}
+          <dl className="details">
+            <div>
+              <dt>Category</dt>
+              <dd>{CATEGORIES[event.data.category]}</dd>
+            </div>
+            <div>
+              <dt>Organizer</dt>
+              <dd>{event.data.organizer}</dd>
+            </div>
+          </dl>
+        </Ticket>
+      </Feature>
       <EventListings eventId={eventId} />
-    </>
+    </div>
   );
 }
 

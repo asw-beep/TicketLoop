@@ -4,6 +4,8 @@ import { useLocation, useNavigationType, useSearchParams } from "react-router";
 import { api, unwrap } from "../api/client";
 import { Field, SelectField, formValues } from "../components/Form";
 import { ListingResults } from "../components/ListingResults";
+import { Poster } from "../components/Poster";
+import { HOUSE_POSTER } from "../lib/poster";
 import {
   CATEGORIES,
   DEFAULT_SORT,
@@ -42,13 +44,15 @@ export function SearchPage() {
   }
 
   return (
-    <>
-      <div className="page-head">
-        <h1>Find tickets</h1>
-      </div>
-      <p className="lede">
-        Every ticket here was checked by an admin and costs no more than its face value.
-      </p>
+    <div className="wide">
+      <section className="hero">
+        <div className="hero__text">
+          <h1>Find tickets</h1>
+          <p className="hero__headline">Face value. Never a rupee more.</p>
+          <p className="lede">Every ticket here was checked by an admin before it went on sale.</p>
+        </div>
+        <Poster event={HOUSE_POSTER} size="hero" />
+      </section>
       <Filters
         key={formKey}
         form={form}
@@ -63,7 +67,7 @@ export function SearchPage() {
             : "No tickets are on sale right now."
         }
       />
-    </>
+    </div>
   );
 }
 

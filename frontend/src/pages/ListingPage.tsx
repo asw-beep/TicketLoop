@@ -14,6 +14,7 @@ import {
   errorsByField,
   formValues,
 } from "../components/Form";
+import { Feature } from "../components/Feature";
 import { ReserveTicket } from "../components/ReserveTicket";
 import { Ticket as TicketCard } from "../components/Ticket";
 import {
@@ -60,14 +61,18 @@ export function ListingPage() {
   if (!listing.data) return null;
   if (!isFullListing(listing.data)) {
     return (
-      <>
+      <Feature poster={listing.data.event}>
         <ListingCard listing={listing.data} />
         <ReserveTicket listing={listing.data} />
-      </>
+      </Feature>
     );
   }
   const viewer: Viewer = listing.data.seller_id === user?.id ? "seller" : "admin";
-  return <ManagedListing listing={listing.data} viewer={viewer} />;
+  return (
+    <Feature poster={listing.data.event}>
+      <ManagedListing listing={listing.data} viewer={viewer} />
+    </Feature>
+  );
 }
 
 /** The listing as a ticket: what anyone who can see it sees. */
