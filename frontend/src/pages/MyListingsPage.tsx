@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { api, unwrap } from "../api/client";
 import type { Listing, ListingStatus } from "../api/types";
 import { LISTING_NAMES, ListingBadge } from "../components/Badges";
+import { Poster } from "../components/Poster";
 import { FormError, SelectField } from "../components/Form";
 import { formatPaise, formatWhen } from "../lib/format";
 
@@ -66,7 +67,7 @@ export function MyListingsPage() {
       )}
       <ul className="list" aria-label="Your listings">
         {items.map((listing) => (
-          <ListingRow key={listing.id} listing={listing} />
+          <ListingRow key={listing.id} listing={listing} thumb />
         ))}
       </ul>
       {listings.hasNextPage && (
@@ -85,20 +86,26 @@ export function MyListingsPage() {
   );
 }
 
-/** One listing in a list: the event, its status and price, linking to the listing's page. */
-export function ListingRow({ listing }: { listing: Listing }) {
+/**
+ * One listing in a list: the event, its status and price, linking to the listing's page. With
+ * `thumb` (the seller's own list) it carries the event's poster; admin screens go without.
+ */
+export function ListingRow({ listing, thumb = false }: { listing: Listing; thumb?: boolean }) {
   return (
-    <li className="card" aria-label={listing.event.name}>
-      <div className="card__top">
-        <Link className="card__title" to={`/listings/${listing.id}`}>
-          {listing.event.name}
-        </Link>
-        <ListingBadge status={listing.status} />
+    <li className={thumb ? "card card--thumb" : "card"} aria-label={listing.event.name}>
+      {thumb && <Poster event={listing.event} size="thumb" />}
+      <div className="card__main">
+        <div className="card__top">
+          <Link className="card__title" to={`/listings/${listing.id}`}>
+            {listing.event.name}
+          </Link>
+          <ListingBadge status={listing.status} />
+        </div>
+        <p className="meta">
+          {formatWhen(listing.event.starts_at)} · {formatPaise(listing.asking_price_paise)} ·
+          updated {formatWhen(listing.updated_at)}
+        </p>
       </div>
-      <p className="meta">
-        {formatWhen(listing.event.starts_at)} · {formatPaise(listing.asking_price_paise)} · updated{" "}
-        {formatWhen(listing.updated_at)}
-      </p>
     </li>
   );
 }

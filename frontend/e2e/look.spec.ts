@@ -126,4 +126,25 @@ test("the buying pages fit a phone and hold still when motion is reduced", async
   for (const ink of inks) {
     expect(await motion(ink)).toEqual({ animation: "none", transition: "0s" });
   }
+
+  // The seller's own lists carry thumbnails. A ticket's event summary has no category, so it
+  // draws plain; a listing's has one, so it matches the event's own poster.
+  await guest.goto(eventPath!);
+  const motif = await guest.locator(".feature .poster").getAttribute("data-motif");
+  await seller.goto("/tickets");
+  const myTicket = seller.getByRole("list", { name: "Your tickets" }).getByRole("listitem").first();
+  await expect(myTicket.locator(".poster--thumb")).toHaveAttribute("data-motif", "PLAIN");
+  await seller.goto("/listings");
+  const myListing = seller.getByRole("listitem", { name: eventName });
+  await expect(myListing.locator(".poster--thumb")).toHaveAttribute("data-motif", motif!);
+
+  await seller.setViewportSize({ width: 360, height: 800 });
+  for (const colorScheme of ["light", "dark"] as const) {
+    await seller.emulateMedia({ colorScheme });
+    for (const path of ["/tickets", "/listings"]) {
+      await seller.goto(path);
+      await expect(seller.locator(".poster--thumb").first()).toBeVisible();
+      expect(await pageWidth(seller), `${path} (${colorScheme})`).toBeLessThanOrEqual(360);
+    }
+  }
 });

@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { api, unwrap } from "../api/client";
 import type { Order } from "../api/types";
 import { OrderBadge } from "../components/Badges";
+import { Poster } from "../components/Poster";
 import { FormError } from "../components/Form";
 import { formatPaise, formatWhen } from "../lib/format";
 import { MY_ORDERS_KEY } from "../lib/orders";
@@ -67,17 +68,20 @@ export function MyOrdersPage() {
 function OrderRow({ order }: { order: Order }) {
   const { listing } = order;
   return (
-    <li className="card" aria-label={listing.event.name}>
-      <div className="card__top">
-        <Link className="card__title" to={`/orders/${order.id}`}>
-          {listing.event.name}
-        </Link>
-        <OrderBadge status={order.status} />
+    <li className="card card--thumb" aria-label={listing.event.name}>
+      <Poster event={listing.event} size="thumb" />
+      <div className="card__main">
+        <div className="card__top">
+          <Link className="card__title" to={`/orders/${order.id}`}>
+            {listing.event.name}
+          </Link>
+          <OrderBadge status={order.status} />
+        </div>
+        <p className="meta">
+          {formatWhen(listing.event.starts_at)} · {formatPaise(order.amount_paise)} · ordered{" "}
+          {formatWhen(order.created_at)}
+        </p>
       </div>
-      <p className="meta">
-        {formatWhen(listing.event.starts_at)} · {formatPaise(order.amount_paise)} · ordered{" "}
-        {formatWhen(order.created_at)}
-      </p>
     </li>
   );
 }

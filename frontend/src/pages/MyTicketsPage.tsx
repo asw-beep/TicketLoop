@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router";
 import { api, unwrap } from "../api/client";
 import type { Ticket } from "../api/types";
 import { VerificationBadge } from "../components/Badges";
+import { Poster } from "../components/Poster";
 import {
   Field,
   FormError,
@@ -75,18 +76,21 @@ export function MyTicketsPage() {
 
 function TicketCard({ ticket }: { ticket: Ticket }) {
   return (
-    <li className="card">
-      <div className="card__top">
-        <Link className="card__title" to={`/tickets/${ticket.id}`}>
-          {ticket.event.name}
-        </Link>
-        <VerificationBadge status={ticket.verification_status} />
+    <li className="card card--thumb">
+      <Poster event={ticket.event} size="thumb" />
+      <div className="card__main">
+        <div className="card__top">
+          <Link className="card__title" to={`/tickets/${ticket.id}`}>
+            {ticket.event.name}
+          </Link>
+          <VerificationBadge status={ticket.verification_status} />
+        </div>
+        <p className="meta">
+          {ticket.ticket_category}
+          {ticket.seat_details ? ` · ${ticket.seat_details}` : ""} ·{" "}
+          {formatPaise(ticket.original_price_paise)} · {formatWhen(ticket.event.starts_at)}
+        </p>
       </div>
-      <p className="meta">
-        {ticket.ticket_category}
-        {ticket.seat_details ? ` · ${ticket.seat_details}` : ""} ·{" "}
-        {formatPaise(ticket.original_price_paise)} · {formatWhen(ticket.event.starts_at)}
-      </p>
     </li>
   );
 }

@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { api, unwrap } from "../api/client";
 import type { Reservation } from "../api/types";
 import { ReservationBadge } from "../components/Badges";
+import { Poster } from "../components/Poster";
 import { FormError } from "../components/Form";
 import { formatPaise, formatWhen } from "../lib/format";
 import { holdState } from "../lib/reservations";
@@ -78,19 +79,22 @@ function HoldRow({ reservation, now }: { reservation: Reservation; now: number }
   const { listing } = reservation;
   const held = holdState(reservation, now).kind === "held";
   return (
-    <li className="card" aria-label={listing.event.name}>
-      <div className="card__top">
-        <Link className="card__title" to={`/reservations/${reservation.id}`}>
-          {listing.event.name}
-        </Link>
-        <ReservationBadge reservation={reservation} now={now} />
+    <li className="card card--thumb" aria-label={listing.event.name}>
+      <Poster event={listing.event} size="thumb" />
+      <div className="card__main">
+        <div className="card__top">
+          <Link className="card__title" to={`/reservations/${reservation.id}`}>
+            {listing.event.name}
+          </Link>
+          <ReservationBadge reservation={reservation} now={now} />
+        </div>
+        <p className="meta">
+          {formatWhen(listing.event.starts_at)} · {formatPaise(listing.asking_price_paise)} ·{" "}
+          {held
+            ? `held until ${formatWhen(reservation.expires_at)}`
+            : `reserved ${formatWhen(reservation.created_at)}`}
+        </p>
       </div>
-      <p className="meta">
-        {formatWhen(listing.event.starts_at)} · {formatPaise(listing.asking_price_paise)} ·{" "}
-        {held
-          ? `held until ${formatWhen(reservation.expires_at)}`
-          : `reserved ${formatWhen(reservation.created_at)}`}
-      </p>
     </li>
   );
 }
