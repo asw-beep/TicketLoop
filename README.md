@@ -96,8 +96,8 @@ POSTGRES_DB=ticketloop_perf docker compose up -d
 - Run `docker compose start rabbitmq`. Within seconds of RabbitMQ answering, the relay publishes what waited, and the order turns **Completed** by itself.
 
 <p>
-  <img src="documentation/assets/m12-demo-paid.png" alt="The order, paid, while RabbitMQ is down" width="49%">
-  <img src="documentation/assets/m12-demo-completed.png" alt="The same order, completed, once RabbitMQ is back" width="49%">
+  <img src="documentation/assets/riso-demo-paid.png" alt="The order, paid, while RabbitMQ is down" width="49%">
+  <img src="documentation/assets/riso-demo-completed.png" alt="The same order, completed, once RabbitMQ is back" width="49%">
 </p>
 
 I ran it as written in Chrome against the one-command stack:
