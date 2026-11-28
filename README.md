@@ -4,6 +4,47 @@
 
 A marketplace where people resell tickets at no more than face value: FastAPI and Postgres, with RabbitMQ, Celery, Redis and a React app. It is built to stay correct when 100 buyers hit one ticket at once, when requests are retried, when webhooks arrive twice, and when the message broker goes down.
 
+![Every page of the app in turn: search, an event, a listing, the account pages, a hold with its countdown, fakepay, the completed order, My tickets, holds, orders and listings, the three admin queues, and four phone screens in light and dark](documentation/assets/riso-tour.gif)
+
+Every page, in the order a guest, a buyer, a seller and an admin meet them. It was recorded in Chrome against `docker compose up`, with the demo data entered through the API and a real purchase through fakepay.
+
+The look is a risograph print:
+- warm paper, two fluorescent inks slightly out of register, halftone dots and grain;
+- each event gets its own two-ink poster, generated from its category and id, because events have no images;
+- dark mode follows the system, and every page fits a 360 px phone.
+
+<details>
+<summary>The 24 frames</summary>
+
+| # | Screen | Address | Who |
+| --- | --- | --- | --- |
+| 1 | Search, the front page | `/` | anyone |
+| 2 | Search with filters and a sort | `/?category=CONCERT&sort=price` | anyone |
+| 3 | An event and its tickets on sale | `/events/:id` | anyone |
+| 4 | A listing: asking price against face value | `/listings/:id` | anyone |
+| 5 | Log in | `/login` | signed out |
+| 6 | Create an account | `/register` | signed out |
+| 7 | Forgot password | `/forgot-password` | anyone |
+| 8 | Choose a new password, from the emailed link | `/reset-password#token=…` | anyone |
+| 9 | Not found | any other address | anyone |
+| 10 | A hold, with its 10-minute countdown | `/reservations/:id` | the buyer |
+| 11 | fakepay's checkout page | `localhost:8090/checkout/:id` | the buyer |
+| 12 | The order, paid and completed | `/orders/:id` | the buyer |
+| 13 | My orders | `/orders` | the buyer |
+| 14 | My tickets, with the one just bought | `/tickets` | the buyer |
+| 15 | My holds | `/reservations` | the buyer |
+| 16 | Account: name and password | `/account` | the buyer |
+| 17 | My tickets, and Register a ticket | `/tickets` | a seller |
+| 18 | A verified ticket, ready to list | `/tickets/:id` | a seller |
+| 19 | My listings: draft, in review, active and sold | `/listings` | a seller |
+| 20 | A listing waiting for review | `/listings/:id` | a seller |
+| 21 | Events, from draft to published | `/admin/events` | an admin |
+| 22 | Verify tickets | `/admin/tickets` | an admin |
+| 23 | Review listings | `/admin/listings` | an admin |
+| 24 | Search, an event, a hold and an order on a phone, in light and dark | 360 px wide | |
+
+</details>
+
 The M12 load tests ([results](docs/test-results.md)) checked that:
 - **The spike.** 1,000 buyers pressed **Reserve** on one ticket in the same instant. Exactly one got the hold; the other 999 got a clean "someone was first", and nobody got an error.
 - **100 users** browsed and bought for three and a half minutes:
@@ -148,6 +189,7 @@ The plan was written before the runs ([test plan](docs/test-plan.md)). Every num
 | M10 · Redis: caching and rate limits | Done: search and the event page cached in Redis under versioned keys that a commit to `listings` or `events` makes unreachable, found by the session, so no write in the API or the worker can forget; 30 to 60 second jittered expiry; `X-Cache` on every cached route; token buckets in one Lua script on Redis's clock for login, password reset, reserve, payment and search, with `429` and `Retry-After`; when Redis is down every route still answers, uncached and unlimited, and only the request that finds it gone waits; a countdown on every form that can be refused |
 | M11 · Observability and delivery | Done: Prometheus metrics on `/metrics` (requests, errors and p50/p95/p99 per route, reservation results, payment webhooks, worker task outcomes, the outbox backlog, cache and rate-limit counts), with no id ever in a label; OpenTelemetry traces from the API through the outbox and RabbitMQ into the worker, in Jaeger; the trace id on every log line as `correlation_id`, so one failed purchase is found by its order id, opened as one trace and its failing step is the red span; Prometheus, a provisioned Grafana dashboard and Jaeger in Compose; CI builds the image and starts it with production settings, and fails on a high-severity Bandit finding, a known vulnerability in a runtime package or a high npm advisory |
 | M12 · Load testing and the numbers | Done: k6 spike, load and rate-limit runs and a broker drill under load on a seeded database of 100,000 listings, with an invariants check after every run ([plan](docs/test-plan.md), [results](docs/test-results.md)); a thread and connection-pool deadlock found by the spike and fixed with an admission gate; the throughput ceiling measured and explained; the races at 100 rounds; the browser app in Compose behind nginx, so one command starts everything |
+| Riso redesign · the look | Done: every screen restyled as a risograph print, with no change to what any screen does or says; a two-ink poster generated for each event from its category and id; inks that slide into register as a page appears, and hold still under `prefers-reduced-motion`; dark mode; text contrast checked against WCAG AA by a unit test; browser tests that the signed-out and buying pages fit a 360 px phone ([design](docs/superpowers/specs/2026-11-27-riso-redesign-design.md)) |
 
 The roadmap was slimmed to these seven modules on 23 Nov 2026; see [the design](docs/superpowers/specs/2026-11-23-slim-roadmap-m6-m12-design.md) for what was cut and why.
 
@@ -294,6 +336,7 @@ scripts/                   experiments and operator tools: lock_experiment, make
 frontend/                  React + TypeScript app (Vite); each module adds its screens
   src/api/                 typed client; schema.d.ts is generated from the backend
   src/auth/                access token in memory, refresh through the HttpOnly cookie
+  src/lib/poster.ts        the poster generator: two inks, drawn from an event's category and id
   src/pages/               one file per screen
   e2e/                     Playwright browser tests against the real stack
   Dockerfile, nginx.conf   the app built and served by nginx for compose, /api forwarded to the API
